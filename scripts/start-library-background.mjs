@@ -1,10 +1,24 @@
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import {spawn,execFile,execFileSync} from 'node:child_process';
 import {serverIsCurrent} from '../server/capabilities.mjs';
 import {fileURLToPath} from 'node:url';
 
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
+
+// 让开发模式与编译后的安装包共用同一份「数据与下载目录」。
+// 安装包由 Tauri 把 SFX_DATA_DIR / SFX_DOWNLOAD_DIR 指到
+// %APPDATA%\com.assetvault.desktop\{data,downloads}；这里在没显式设置时补上同样的
+// 位置，避免「开发版看得见、安装版看不见」的资产分叉。
+// 注意：两边不能同时运行（tasks.json 由 manager.lock 互斥，同时起会有一方报锁冲突）。
+if(!process.env.SFX_DATA_DIR||!process.env.SFX_DOWNLOAD_DIR){
+  const appData=process.env.APPDATA||path.join(os.homedir(),'AppData','Roaming');
+  const base=path.join(appData,'com.assetvault.desktop');
+  if(!process.env.SFX_DATA_DIR)process.env.SFX_DATA_DIR=path.join(base,'data');
+  if(!process.env.SFX_DOWNLOAD_DIR)process.env.SFX_DOWNLOAD_DIR=path.join(base,'downloads');
+}
+
 const stateDir=path.join(root,'.assetvault');
 const logPath=path.join(stateDir,'library-server.log');
 const pidPath=path.join(stateDir,'library-server.pid');
