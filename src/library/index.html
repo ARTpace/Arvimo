@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="dark"><title>AssetVault · 3D 模型库</title><link rel="icon" href="/favicon.svg" type="image/svg+xml"><link rel="stylesheet" href="/app.css"></head>
+<body>
+<aside class="sidebar">
+  <div class="brand-row"><a class="brand" href="/" aria-label="AssetVault 首页"><img src="/favicon.svg" alt=""><div>AssetVault</div></a><button id="help" class="icon-button" title="使用说明" aria-label="使用说明"><i data-icon="help"></i></button></div>
+  <div class="side-label">WORKSPACE</div>
+  <nav aria-label="主要导航"><button class="nav active" data-route="discover"><i data-icon="compass"></i>发现资产<span class="online-label">LIVE</span></button><button class="nav" data-route="library"><i data-icon="grid"></i>我的资产库<span id="nav-count">0</span></button><button class="nav" data-route="favorites"><i data-icon="heart"></i>我的收藏<span id="fav-count">0</span></button><button class="nav" data-route="downloads"><i data-icon="download"></i>下载管理<span id="queue-count">0</span></button></nav>
+  <div class="side-filters" id="side-filters" hidden>
+    <div class="side-modes" id="side-modes" role="group" aria-label="内容模式快捷切换">
+      <button type="button" data-content-mode="model" aria-pressed="false" title="两平台的模型一起看：Sketchfab 模型 + ArtStation 可转 3D 资产，不出现纯图片作品"><i data-icon="cube"></i>模型模式</button>
+      <button type="button" data-content-mode="image" aria-pressed="false" title="只看 ArtStation 的作品，并按原图比例排成瀑布流"><i data-icon="image"></i>图片模式</button>
+    </div>
+    <div class="side-label">筛选</div>
+    <div class="filter-rows" id="filter-rows"></div>
+  </div>
+  <div class="side-spacer"></div>
+  <button class="nav settings-nav" id="ai-settings-button" title="AI 接入"><i data-icon="settings"></i>AI 接入<i class="small-icon" data-icon="arrow-right"></i></button>
+  <button class="nav settings-nav" id="settings-button"><i data-icon="settings"></i>导出设置<i class="small-icon" data-icon="arrow-right"></i></button>
+  <div class="side-footer">ASSETVAULT <span>LOCAL 3.6.3</span></div>
+</aside>
+<dialog id="ai-dialog" class="settings-dialog"><div class="dialog-header settings-head"><span><i data-icon="settings"></i>AI 接入</span><button class="icon-button" data-close="ai-dialog" aria-label="关闭 AI 设置"><i data-icon="close"></i></button></div><div class="dialog-body settings-body">
+  <section class="settings-card"><div class="settings-section-title"><span>AI 服务</span><small>为后续翻译、标签与整理提供统一连接</small></div>
+    <label class="ai-toggle"><input type="checkbox" id="ai-enabled">启用 AI 功能</label>
+    <label class="field"><span>接口基础地址</span><input id="ai-base-url" type="url" placeholder="http://127.0.0.1:31415/v1" spellcheck="false"><small>填写到 /v1，不要附加 /chat/completions；远程服务使用 HTTPS。</small></label>
+    <label class="field"><span>API 密钥</span><input id="ai-key" type="password" autocomplete="new-password" placeholder="无密钥服务可留空"></label>
+    <label class="ai-toggle"><input type="checkbox" id="ai-clear-key">清除已保存的密钥</label>
+    <label class="field"><span>模型</span><input id="ai-model" type="text" list="ai-model-options" placeholder="auto" spellcheck="false" autocomplete="off"><datalist id="ai-model-options"></datalist></label>
+    <p class="compact-note">密钥保存在本机应用数据目录的配置文件中，未加密；页面不回显密钥。只有点击测试或使用 AI 功能时，才会向所配置服务发送内容。连接测试会产生一次小额模型请求。</p>
+    <p id="ai-status" role="status" aria-live="polite"></p>
+    <div class="ai-actions"><button class="secondary" id="ai-models" type="button">读取模型</button><button class="secondary" id="ai-test" type="button">保存并测试</button><button class="primary" id="ai-save" type="button">保存设置</button></div>
+  </section>
+</div></dialog>
+<main>
+  <div class="content">
+    <div class="search-sticky">
+    <section class="search-panel" id="search-panel">
+        <form id="asset-search-form">
+          <div class="search-field">
+            <label class="platform-select" title="选择要检索的平台"><i data-icon="globe"></i><select id="search-platform" aria-label="搜索平台"></select></label>
+            <label class="global-search"><i data-icon="search"></i><input id="asset-query" type="search" maxlength="200" placeholder="搜索关键词或粘贴链接，例如 character、robot、props" aria-label="搜索资产" autocomplete="off"><kbd>Enter ↵</kbd></label>
+          </div>
+          <button class="primary" id="search-button" type="submit"><i data-icon="search"></i>搜索 / 解析</button>
+        </form>
+        <div class="panel-filters" id="panel-filters">
+          <div class="online-filters" id="filters-sketchfab">
+            <div class="side-field"><span>分类</span><label class="side-control"><select id="online-category" aria-label="在线搜索分类"></select></label></div>
+            <input type="hidden" id="online-category-group" value="">
+            <div class="side-field"><span>排序</span><label class="side-control"><select id="online-sort" aria-label="在线搜索排序"><option value="relevance">相关度</option><option value="popular">最多点赞</option><option value="newest">最新发布</option><option value="views">最多浏览</option></select></label></div>
+            <div class="side-field"><span>范围</span><div class="side-checks"><label class="online-check"><input id="online-downloadable" type="checkbox">可下载</label><label class="online-check"><input id="online-animated" type="checkbox">有动画</label><label class="online-check"><input id="online-staffpicked" type="checkbox">精选</label></div></div>
+            <button class="text-button side-reset" id="reset-search-filters" type="button">重置筛选</button>
+          </div>
+          <div class="online-filters" id="filters-artstation" hidden>
+            <div class="side-field"><span>分类</span><label class="side-control"><select id="art-category" aria-label="ArtStation 作品分类"><option value="">全部分类</option></select></label></div>
+            <div class="side-field"><span>类型</span><label class="side-control"><select id="art-type" aria-label="ArtStation 资产类型"><option value="marmoset">Marmoset Viewer</option><option value="">全部作品</option></select></label></div>
+            <div class="side-field"><span>艺术家</span><div class="side-artist"><input id="art-artist" type="text" placeholder="ArtStation 用户名" aria-label="ArtStation 艺术家用户名" spellcheck="false" autocomplete="off"><div class="side-artist-actions"><button class="text-button" id="art-artist-projects" type="button">看作品</button><button class="text-button" id="art-artist-likes" type="button">看点赞</button></div></div></div>
+            <div class="side-field"><span>排序</span><label class="side-control"><select id="art-sort" aria-label="ArtStation 搜索排序"><option value="relevance">相关度</option><option value="popular">最多点赞</option><option value="newest">最新发布</option><option value="ranking">热门排行</option></select></label></div>
+            <div class="side-field"><span>范围</span><div class="side-checks"><label class="online-check"><input id="art-picked" type="checkbox">精选</label></div></div>
+            <button class="text-button side-reset" id="art-reset-filters" type="button">重置筛选</button>
+          </div>
+          <div class="online-filters" id="filters-polyhaven" hidden>
+            <div class="side-field"><span>类型</span><label class="side-control"><select id="polyhaven-type" aria-label="Poly Haven 资产类型"><option value="models">模型</option><option value="textures">材质</option><option value="hdris">HDRI</option></select></label></div>
+            <div class="side-field"><span>分类</span><label class="side-control"><select id="polyhaven-category" aria-label="Poly Haven 分类"><option value="">全部分类</option></select></label></div>
+          </div>
+          <div class="online-filters" id="filters-ambientcg" hidden>
+            <div class="side-field"><span>分类</span><label class="side-control"><select id="ambientcg-category" aria-label="ambientCG 材质分类"><option value="">全部分类</option></select></label></div>
+          </div>
+          <div class="online-filters" id="filters-polypizza" hidden>
+            <div class="side-field"><span>许可</span><div class="side-checks"><label class="online-check"><input id="polypizza-cc0" type="checkbox">仅 CC0</label></div></div>
+          </div>
+          <div class="online-filters" id="filters-freestylized" hidden>
+            <div class="side-field"><span>类型</span><label class="side-control"><select id="freestylized-type" aria-label="FreeStylized 类型"><option value="models">3D 模型</option><option value="skybox">天空盒</option><option value="textures">材质</option><option value="packs">资源包</option><option value="alphas">Alpha</option><option value="smart">智能材质</option></select></label></div>
+            <div class="side-field"><span>分类</span><label class="side-control"><select id="freestylized-category" aria-label="FreeStylized 分类"><option value="">全部分类</option></select></label></div>
+          </div>
+          <div class="online-filters" id="filters-kenney" hidden>
+            <div class="side-field"><span>类型</span><label class="side-control"><select id="kenney-category" aria-label="Kenney 资源类型"><option value="">全部类型</option></select></label></div>
+            <div class="side-field"><span>系列</span><label class="side-control"><select id="kenney-series" aria-label="Kenney 系列"><option value="">全部系列</option></select></label></div>
+          </div>
+          <div class="online-filters" id="filters-merged" hidden></div>
+          <p class="filters-note" id="filters-all"></p>
+        </div>
+        <div class="topic-strip" id="topic-strip" hidden></div>
+</section>
+<div id="scan-status" class="scan-status" role="status" aria-live="polite"></div>
+<div id="discovery-translation" class="translation-hint" role="status" aria-live="polite" hidden></div>
+</div>
+<div id="migration-note" class="migration-note" hidden role="status"><span></span><button id="dismiss-migration" aria-label="关闭迁移提示">×</button></div>
+    <section id="library-view">
+      <div class="library-heading"><div><h2 id="library-title">全部模型 <span id="model-count">0</span></h2><p id="library-subtitle">为下一次创作，准备好素材。</p></div><div class="display-tools"><label class="heading-select" id="unified-kind-wrap" hidden><select id="unified-kind" aria-label="资产类型"><option value="">全部类型</option><option value="models">模型</option><option value="textures">材质</option><option value="hdris">HDRI</option><option value="packs">资源包</option></select></label><label class="heading-select" id="unified-sort-wrap" hidden><select id="unified-sort" aria-label="排序"><option value="relevance">相关度</option><option value="newest">最新发布</option><option value="popular">最多点赞</option><option value="views">最多浏览</option><option value="name">名称</option></select></label><button class="icon-button active" id="grid-view" aria-label="网格视图" title="网格视图"><i data-icon="grid"></i></button><button class="icon-button" id="list-view" aria-label="紧凑视图" title="紧凑视图"><i data-icon="list"></i></button><button class="icon-button" id="gallery-view" aria-label="画廊视图" title="画廊视图 · 按原图比例瀑布流" hidden><i data-icon="masonry"></i></button></div></div>
+      <div class="toolbar" id="local-toolbar" role="group" aria-label="资产搜索与筛选">
+        <label class="model-search"><i data-icon="search"></i><input id="model-search" aria-label="搜索本地资产名称、作者或标签" placeholder="搜索名称、作者、标签…"></label>
+        <div id="local-facets" class="local-facets" hidden>
+          <select id="local-kind" aria-label="筛选本地资产类型" title="资产类型"><option value="">全部类型</option><option value="models">3D 模型</option><option value="textures">材质</option><option value="hdris">HDRI / 天空盒</option><option value="images">图片 / Alpha</option><option value="packs">资源包</option></select>
+          <select id="local-status" aria-label="筛选本地文件状态" title="本地文件状态"><option value="">全部文件状态</option><option value="downloaded">已下载（任意规格）</option><option value="missing">文件缺失</option><option value="untracked">无保存记录</option></select>
+          <select id="local-feature" aria-label="筛选资产特性" title="资产特性"><option value="all">全部特性</option><option value="downloadable">支持下载</option><option value="animated">含动画</option></select>
+        </div>
+        <select id="sort" aria-label="资产排序" title="排序"><option value="recent">最近入库</option><option value="popular">最受欢迎</option><option value="name">名称 A–Z</option></select>
+        <span id="local-results" role="status" aria-live="polite"></span>
+        <span id="local-translation" class="translation-hint" role="status" aria-live="polite" hidden></span>
+        <button id="reset-local-filters" class="text-button" type="button">清除筛选</button>
+      </div>
+      <div id="grid" class="model-grid"></div>
+      <div id="empty" class="empty" hidden><div class="empty-cube"><i data-icon="cube"></i></div><h3>输入一个关键词，发现更多好模型</h3><p>无需先去官网找链接。输入关键词，或点击上方推荐词。</p><button class="secondary" id="empty-explore">浏览热门资产 <i data-icon="arrow-right"></i></button></div>
+      <div id="pagination" class="pagination" hidden><span id="page-info"></span><label class="page-size" title="每次滚动到底自动加载多少条卡片"><i data-icon="list"></i><select id="page-size" aria-label="每次加载数量"><option value="24">24 条 / 次</option><option value="48">48 条 / 次</option><option value="96">96 条 / 次</option><option value="192">192 条 / 次</option></select></label><button class="secondary" id="load-more">检索下一页 <i data-icon="arrow-down"></i></button><button class="text-button" id="load-all">继续检索至上限</button></div>
+      <div class="gallery-footer"><span><i data-icon="shield"></i>请遵循模型许可证；公开展示不等于获得使用授权。</span><button id="clear-library" class="text-button" hidden>清空本地模型库</button></div>
+    </section>
+    <section id="downloads-view" hidden>
+      <div class="download-heading"><div><div class="eyebrow"><span></span> YOUR LOCAL DOWNLOAD CENTER</div><h1>下载管理 <span id="task-count">0</span></h1><p>独立后台处理。关掉网页，任务仍在这台电脑上继续。</p></div><span id="download-service" class="download-service">连接后台…</span></div>
+      <div id="download-warning" class="page-error" hidden></div>
+      <div class="download-bar"><div class="download-location"><i data-icon="folder"></i><div><small>保存目录</small><strong id="download-folder">读取目录…</strong></div></div><div class="download-bar-actions"><button class="secondary" id="open-download-folder">打开目录</button><button class="primary" id="change-download-folder">更改路径</button><button class="text-button" id="download-settings">其他设置</button><button class="secondary" id="queue-pause">暂停队列</button><button class="icon-button" id="download-refresh" title="刷新任务" aria-label="刷新任务"><i data-icon="rotate"></i></button></div></div>
+      <div class="download-toolbar"><div class="filter-tabs"><button class="active" data-task-filter="all">全部</button><button data-task-filter="active">进行中</button><button data-task-filter="waiting">等待</button><button data-task-filter="saved">已完成</button><button data-task-filter="failed">失败</button><button data-task-filter="cancelled">已取消</button></div><button class="text-button" id="task-select-visible">选择当前分组</button><button class="text-button" id="clear-tasks">清除已结束记录</button></div>
+      <div id="task-batch" class="task-batch" hidden><span>已选 <b id="task-batch-count">0</b> 项</span><button data-task-batch="hold">暂停排队</button><button data-task-batch="resume">继续排队</button><button data-task-batch="retry">重新下载</button><button data-task-batch="cancel">取消任务</button><button data-task-batch="remove">移除记录</button><button id="task-deselect">取消选择</button></div>
+      <div id="tasks"></div>
+      <details id="legacy-tasks" class="legacy-tasks" hidden><summary>旧版浏览器导出记录 · 不等于已校验的后台文件</summary><div id="legacy-list"></div></details>
+    </section>
+  </div>
+</main>
+<div id="selection-bar" class="selection-bar" hidden><span>已选择 <b id="selected-count">0</b> 个模型</span><button class="text-button" id="select-all">选择当前结果</button><button class="text-button" id="deselect">取消选择</button><button class="secondary" id="collect-selected"><i data-icon="folder"></i>加入模型库</button><button class="secondary" id="download-images-selected"><i data-icon="image"></i>下载高清图</button><button class="primary" id="download-selected"><i data-icon="download"></i>下载选中</button></div>
+<dialog id="preview-dialog" class="preview-dialog"><div class="dialog-header"><span><i data-icon="cube"></i>3D 模型预览</span><button class="icon-button" data-close="preview-dialog" aria-label="关闭预览"><i data-icon="close"></i></button></div><div class="preview-layout"><div class="viewer-wrap"><div class="viewer-hint">正在加载 3D 交互预览…</div><canvas id="viewer-canvas" title="3D 模型交互预览（Poly Haven glTF）" hidden></canvas><iframe id="viewer" title="3D 模型交互预览（Sketchfab / ArtStation Marmoset）" allow="autoplay; fullscreen; xr-spatial-tracking" referrerpolicy="strict-origin-when-cross-origin"></iframe><div class="viewer-channels" id="viewer-channels" hidden><div class="viewer-channel-labels" id="viewer-channel-labels"></div><div class="viewer-stats" id="viewer-stats" hidden></div></div><div class="viewer-tools"><button class="icon-button" id="viewer-channels-btn" type="button" title="通道预览（数字键 1-5）" aria-label="通道预览" hidden><i data-icon="grid"></i></button><button class="icon-button" id="viewer-help-btn" type="button" title="预览操作说明" aria-label="预览操作说明"><i data-icon="help"></i></button></div><div class="viewer-help" id="viewer-help" hidden><div class="viewer-help-head"><span>预览操作</span><button class="icon-button" type="button" data-close aria-label="关闭操作说明"><i data-icon="close"></i></button></div><ul><li><b>左键拖动</b><span>旋转视角</span></li><li><b>右键拖动</b><span>缩放</span></li><li><b>中键拖动</b><span>平移</span></li><li><b>双击</b><span>重置相机</span></li><li><b>Shift+左键拖动</b><span>旋转灯光</span></li><li><b>1 - 5</b><span>单独预览某通道</span></li><li><b>0</b><span>五通道拆分预览</span></li></ul><p class="viewer-help-tip">通道视图下点击某条通道可单独查看，再次点击返回拆分。</p></div><div class="viewer-caption" id="viewer-caption"><i data-icon="rotate"></i>左键旋转 · 右键缩放 · 中键平移 · 双击重置视角 · Shift+左键旋转灯光</div></div><aside class="model-details" id="model-details"></aside></div></dialog>
+<dialog id="settings-dialog" class="settings-dialog"><div class="dialog-header settings-head"><span><i data-icon="settings"></i>导出设置</span><button class="icon-button" data-close="settings-dialog" aria-label="关闭设置"><i data-icon="close"></i></button></div><div class="dialog-body settings-body"><section class="settings-card settings-intro"><div><strong>新任务默认参数</strong><p>这里控制之后加入队列的下载；已在队列中的任务不会被修改。</p></div><button class="secondary" id="open-setup-wizard" type="button"><i data-icon="download"></i>依赖准备</button></section><section class="settings-card"><div class="settings-section-title"><span>导出内容</span><small>模型、格式与贴图处理</small></div><div class="settings-grid"><label class="field"><span>下载内容</span><select id="pack-mode"><option value="model">仅模型与贴图 · 推荐</option><option value="glb">仅 GLB（贴图已内嵌）</option><option value="full">完整包 · 含原始场景与说明</option></select></label><label class="field"><span>贴图尺寸</span><select id="texture-size"><option value="0">保留原尺寸 · 推荐</option><option value="2048">压缩到最高 2K</option><option value="4096">压缩到最高 4K</option></select></label></div><div class="fixed-export-summary"><div><b>文件夹输出</b><span>不再生成 ZIP 压缩包</span></div><div><b>GLB + FBX</b><span>默认同时保存两个格式</span></div><div><b>贴图处理已开启</b><span>下载贴图、转 PNG、快速写入</span></div></div></section><section class="settings-card"><div class="settings-section-title"><span>Blender 连接</span><small>把工作台接到已经打开的 Blender 场景</small></div><div class="bridge-status" id="blender-bridge-status"><span class="bridge-dot idle"></span><div class="bridge-copy"><strong>正在检测…</strong><small>读取桥接脚本与端口状态</small></div></div><div class="bridge-actions"><div class="bridge-versions" id="blender-bridge-versions"></div><button class="secondary" id="install-blender-bridge" type="button"><i data-icon="cube"></i>安装 / 更新</button></div><div class="bridge-progress" id="blender-bridge-progress" hidden></div></section><section class="settings-card"><div class="settings-section-title"><span>运行环境</span><small>Sketchfab 模型转换依赖的后台浏览器</small></div><div class="bridge-status" id="browser-runtime-status"><span class="bridge-dot idle"></span><div class="bridge-copy"><strong>正在检测…</strong><small>读取浏览器运行时状态</small></div></div><div class="bridge-actions"><div class="bridge-versions" id="browser-runtime-meta"></div><button class="secondary" id="install-browser-runtime" type="button"><i data-icon="download"></i>下载浏览器</button></div><div class="bridge-progress" id="browser-runtime-progress" hidden></div></section><section class="settings-card"><div class="settings-section-title"><span>保存与队列</span><small>目录、并发和检索上限</small></div><div class="field"><span>默认保存目录</span><div class="path-control"><input id="backend-folder" type="text" spellcheck="false" aria-label="后台下载保存目录" placeholder="H:\Models"><button class="secondary" id="browse-backend-folder" type="button"><i data-icon="folder"></i>选择文件夹</button></div></div><div class="settings-inline-actions"><button class="text-button" id="reset-folder" type="button">恢复项目默认目录</button><span>目录由本地服务写入；不支持网络共享路径，同名文件会自动编号。</span></div><div class="settings-grid compact"><label class="field"><span>同时处理任务</span><select id="backend-concurrency"><option value="1">1 个 · 推荐</option><option value="2">2 个 · 高内存占用</option></select></label><label class="field"><span>网络错误重试</span><select id="backend-retries"><option value="0">不自动重试</option><option value="1">最多 1 次</option><option value="2">最多 2 次</option></select></label><label class="field"><span>连续检索上限</span><select id="scan-limit"><option value="120">120 个模型</option><option value="300">300 个模型</option><option value="500">500 个模型</option></select></label></div></section><div class="settings-footer"><button class="primary full" id="save-settings">保存设置</button></div></div></dialog><dialog id="close-dialog" class="settings-dialog path-dialog"><div class="dialog-header settings-head"><span><i data-icon="close"></i>关闭 AssetVault</span></div><div class="dialog-body settings-body"><section class="settings-card"><div class="settings-section-title"><span>缩到托盘，还是退出？</span></div><p class="compact-note">缩到托盘：窗口收起来，后台服务与下载继续跑，点任务栏托盘的图标随时叫回来。<br>退出应用：结束程序，正在进行的下载会中断。</p></section></div><div class="settings-footer" style="display:flex;gap:9px"><button class="secondary" id="close-to-tray" type="button" style="flex:1"><i data-icon="arrow-down"></i>缩到托盘</button><button class="primary" id="close-quit" type="button" style="flex:1">退出应用</button></div></dialog>
+<dialog id="setup-dialog" class="setup-dialog"><div class="dialog-header"><span><i data-icon="settings"></i>首次使用 · 准备依赖</span><button class="icon-button" data-close="setup-dialog" aria-label="关闭依赖准备"><i data-icon="close"></i></button></div><div class="dialog-body setup-body"><p class="setup-lead">AssetVault 要下面三样东西才完整可用。缺的现在就能装上；不确定也没关系，之后随时能在「导出设置 → 依赖准备」里回来补。</p><p class="setup-note" id="setup-note">正在检查…</p><ul id="setup-list" class="setup-list"></ul><div class="setup-actions"><button class="text-button" id="setup-recheck" type="button"><i data-icon="rotate"></i>重新检测</button><span class="setup-actions-spacer"></span><button class="text-button" id="setup-skip" type="button">以后再说</button><button class="primary" id="setup-finish" type="button">进入工作台</button></div></div></dialog>
+<dialog id="download-path-dialog" class="path-dialog"><div class="dialog-header"><span><i data-icon="folder"></i>指定默认下载路径</span><button class="icon-button" data-close="download-path-dialog" aria-label="关闭路径设置"><i data-icon="close"></i></button></div><div class="dialog-body"><div class="field"><span>保存到本机目录</span><div class="path-control"><input id="download-path-input" type="text" spellcheck="false" placeholder="例如 H:\Models\Sketchfab"><button class="secondary" id="browse-download-path" type="button"><i data-icon="folder"></i>选择文件夹</button></div></div><p class="muted compact-note">可手动输入，也可以点击“选择文件夹”。不存在的文件夹会自动创建并检查写入权限；只影响新加入的任务。</p><p id="download-path-error" class="path-error" role="alert"></p><button class="primary full" id="save-download-path">保存下载路径</button></div></dialog>
+<dialog id="help-dialog"><div class="dialog-header"><span>开始使用</span><button class="icon-button" data-close="help-dialog" aria-label="关闭帮助"><i data-icon="close"></i></button></div><div class="dialog-body help-content"><p class="help-lead">三步上手：搜索框里<b>输关键词或粘贴链接</b> → 卡片上<b>加入模型库 / 下载</b> → 已下载的资产一键<b>送进 Blender</b>，或用输出的文件夹直接拖进 Unity。</p>
+<details class="help-sec" open><summary><i>01</i>搜索与筛选<small>一个搜索框服务所有平台</small></summary><ul>
+<li><b>选平台</b>：搜索框左侧切换；「全部平台」同时检索 Sketchfab、ArtStation 与 Poly Haven，结果交错排列，状态行逐源报进度。</li>
+<li><b>模型模式 / 图片模式</b>：侧栏顶部的两个快捷键。模型模式只收能转 3D 的资产，并把两平台的筛选合并成一棵统一分类树；图片模式只看 ArtStation 作品、按原图比例排成瀑布流。再点一次当前模式即退出。</li>
+<li><b>筛选树</b>：分类按主题分组，组默认折着、点组头展开；排序与范围平时只显示当前值，点开即改。分类、可下载、动画、精选都会真的发给平台接口，不是只在当前结果里过滤。</li>
+<li><b>最近检索</b>：点一下搜索框弹出，方向键选、回车即回到那一次；记录只保存在这台电脑的浏览器里。</li>
+<li><b>粘贴链接</b>：作品页 / 作者页 / 合集页地址直接粘进搜索框，平台按域名自动判定；解析结果单独占用结果区，点「返回搜索结果」交还。</li>
+<li>中文按原文搜索，不做静默翻译。</li>
+</ul></details>
+<details class="help-sec"><summary><i>02</i>收藏与模型库<small>在线结果不自动入库</small></summary><ul>
+<li>点「加入模型库」或爱心收藏后才保留；单纯下载只留在下载记录中。</li>
+<li>旧版本的模型列表、收藏和记录会原样保留，不会被删除。</li>
+</ul></details>
+<details class="help-sec"><summary><i>03</i>下载与导出<small>后台队列 · 文件夹输出 · GLB + FBX</small></summary><ul>
+<li>点卡片「下载」即入队，不弹确认框；进度、批量取消 / 重试、打开所在文件夹都在「下载管理」。</li>
+<li>关掉网页任务照跑；服务关闭或电脑关机会中断任务，重启后从头重试（不是断点续传）。</li>
+<li>默认输出<b>文件夹</b>（可直接拖进 Unity）并同时保存 GLB + FBX，FBX 需要本机 Blender；ZIP、贴图压缩、下载内容在「导出设置」里改。</li>
+<li>任务过 ZIP / 目录校验后才标完成，并记录 SHA-256；同名不覆盖。遇到权限、站点限制或模型不兼容，任务会保留真实错误，不会假装下载完成。</li>
+<li>Sketchfab 模型由后台 Chrome / Edge 转换；ArtStation 用 mviewer 转内嵌场景，不需要浏览器。两者共用同一条队列与同一套校验。</li>
+</ul></details>
+<details class="help-sec"><summary><i>04</i>3D 预览<small>左键旋转 · 右键缩放 · 中键平移 · 双击重置 · Shift+左键转灯光</small></summary><ul>
+<li>Sketchfab 用官方嵌入播放器，ArtStation 读作品内嵌的 Marmoset 场景，Poly Haven 在本地渲染官方 1K glTF。</li>
+<li>HDRI 与贴图是全景图 / 平铺图，转不了视角，按钮会直接带你去官网。</li>
+<li>没有内嵌场景的纯图片作品不弹空预览窗，直接打开官方作品页。</li>
+</ul></details>
+<details class="help-sec"><summary><i>05</i>边界与许可<small>说清楚做不到什么</small></summary><ul>
+<li>在线搜索只展示接口可访问的公开模型，不含 Fab 商城；不保证与官网数量、排序一致。</li>
+<li>普通网页解析不执行 JavaScript，识别不到登录内容或动态加载的全部链接。</li>
+<li>公开展示不等于获得使用授权，请遵循模型许可证；署名信息会写进输出包的 <code>info.json</code>。</li>
+<li>本地模型库与收藏保存在这台电脑的浏览器里，不是云端备份。</li>
+<li>独立工作台不做浏览器扩展式贴图捕获；出现贴图提示请检查导出外观与包内 MISSING_BLIT.txt，骨骼、动画与材质兼容性取决于原引擎。</li>
+</ul></details>
+</div></dialog>
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+<script type="module" src="/app.js"></script>
+</body></html>

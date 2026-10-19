@@ -1,0 +1,42 @@
+node_modules/
+scripts/.gen/
+*.log
+.DS_Store
+vendor/mviewer/
+# three.js 是 vendored 的第三方库（Poly Haven 3D 预览用，版本锁定在 0.160.0）。
+# 换版本时同步 scripts/build-library.mjs 的解析规则与 test/library-polyhaven-3d-preview.test.js 的存在性断言。
+vendor/three/
+!vendor/three/
+!vendor/three/**
+# 人工草稿与探查脚本：可随时整目录删除，不进版本库
+scratch/
+# 程序运行期产出（任务库/下载结果/临时备份），可重建
+.assetvault/
+.sketchvault/
+downloads/
+dist/
+artifacts/
+示例/
+*.lnk
+*.pem
+*.key
+*.key.pub
+.env
+.env.*
+!.env.example
+vendor/blender/
+vendor/curl-impersonate/
+sketchfab-exporter-tauri/src-tauri/sidecar-server/
+sketchfab-exporter-tauri/src-tauri/binaries/
+sketchfab-exporter-tauri/src-tauri/gen/
+sketchfab-exporter-tauri/licensing/
+scripts/tmp-*.mjs
+sketchfab-exporter-tauri/src/app.js
+sketchfab-exporter-tauri/src/engine.js
+sketchfab-exporter-tauri/src/app.css
+sketchfab-exporter-tauri/src/index.html
+sketchfab-exporter-tauri/src/favicon.svg
+sketchfab-exporter-tauri/src/mascot.png
+sketchfab-exporter-tauri/src/worker.html
+sketchfab-exporter-tauri/src/splash.html
+sketchfab-exporter-tauri/src/splash.js

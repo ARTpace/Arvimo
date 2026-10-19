@@ -1,0 +1,113 @@
+// What pictures one asset owns, per platform.
+//
+// Every image pipeline starts from the same two questions — which pictures does this asset have,
+// and what is the largest copy of each one a visitor is allowed to fetch — and every platform
+// answers them differently. Those answers are the only part of image downloading that changes when
+// a platform joins or an API shifts, so they live in one registry and nowhere else: the bundle
+// writer and the queue ask a name here, and never branch on a platform themselves.
+import {isSketchfabHost,publicJson} from './public-http.mjs';
+import {fetchProjectJson,projectImageAssets} from './artstation-project.mjs';
+import {downloadUrl as artstationDownloadUrl} from './artstation-cdn.mjs';
+import {polyhavenRenders} from './polyhaven.mjs';
+import {ambientcgRenders} from './ambientcg.mjs';
+
+/** How many pictures one asset may contribute. Real uploads sit far below this; anything larger is
+ *  a collected gallery and is truncated rather than silently queued for gigabytes. */
+export const IMAGE_MAX=60;
+
+/** Keep only https URLs on the platform's own CDN — nothing else is allowed to reach the disk. */
+function mediaUrl(value,allowed){
+  try{const u=new URL(value);return u.protocol==='https:'&&allowed(u.hostname)?u.href:null;}
+  catch{return null;}
+}
+const authorName=data=>data?.user?.displayName||data?.user?.username||null;
+const trimmed=value=>typeof value==='string'&&value.trim()?value.trim():null;
+
+/**
+ * Sketchfab publishes one cover in several renditions; they are all the same picture, so the widest
+ * one *is* the original as far as a download is concerned and every smaller one would be a duplicate
+ * file in the bundle. Returning exactly one item keeps that decision here rather than in the writer.
+ */
+export function largestSketchfabPreview(data){
+  const images=(data?.thumbnails?.images||[])
+    .map(i=>({url:mediaUrl(i.url,isSketchfabHost),width:Number(i.width)||0,height:Number(i.height)||0}))
+    .filter(i=>i.url&&i.width>0)
+    .sort((a,b)=>b.width-a.width||b.height-a.height);
+  if(!images.length)return null;
+  const best=images[0];
+  return {url:best.url,width:best.width,height:best.height,title:trimmed(data?.name)};
+}
+
+/**
+ * Which of a project's assets may be fetched: `image` assets whose URL sits on ArtStation's CDN,
+ * repointed at the largest rendition the CDN actually serves (`large` — `original` answers 403 to
+ * everyone but the author). Anything the CDN would refuse is reported as skipped rather than dropped
+ * silently, because a job that downloads fewer pictures than expected has to be able to say so.
+ */
+export function planArtstationImages(assets,{limit=IMAGE_MAX}={}){
+  const items=[],skipped=[];
+  for(const asset of assets||[]){
+    const url=artstationDownloadUrl(asset.url);
+    if(!url){skipped.push({...asset,reason:'not-cdn'});continue;}
+    if(items.length>=limit){skipped.push({...asset,reason:'over-limit'});continue;}
+    items.push({...asset,url});
+  }
+  return {items,skipped};
+}
+
+export const IMAGE_SOURCES=Object.freeze({
+  sketchfab:{
+    id:'sketchfab',
+    label:'Sketchfab 封面原图',
+    client:'sketchfab',
+    async resolve({uid},{json=publicJson,signal}={}){
+      const data=await json(`https://api.sketchfab.com/v3/models/${uid}`,{signal});
+      const preview=largestSketchfabPreview(data);
+      if(!preview)throw Error('这个 Sketchfab 模型没有提供公开图片');
+      return {items:[preview],skipped:[],title:trimmed(data?.name),author:authorName(data),cover:preview.url,source:`https://api.sketchfab.com/v3/models/${uid}`,rendition:'original'};
+    },
+  },
+  artstation:{
+    id:'artstation',
+    label:'ArtStation 作品图片',
+    client:'artstation',
+    async resolve({url},{open,signal}={}){
+      const json=await fetchProjectJson(url,{open,signal});
+      if(!json)throw Error('读取 ArtStation 作品信息失败（站点可能要求验证），请稍后重试');
+      const planned=planArtstationImages(projectImageAssets(json));
+      if(!planned.items.length)throw Error('这个作品没有可下载的图片（可能只包含视频或外链内容）');
+      return {...planned,title:trimmed(json.title),author:trimmed(json.user?.username),cover:planned.items[0]?.url||null,source:typeof url==='string'?url:null,rendition:'large'};
+    },
+  },
+  polyhaven:{
+    id:'polyhaven',
+    label:'Poly Haven 官方渲染图',
+    client:'polyhaven',
+    async resolve({assetId},{open,signal}={}){
+      if(!assetId)throw Error('Poly Haven 资产 ID 缺失');
+      const list=await polyhavenRenders(assetId,{signal,open});
+      if(!list.length)throw Error('这个 Poly Haven 资产暂时没有提供可下载图片');
+      const first=list[0]||{};
+      return {items:list.map(x=>({url:x.url,title:x.title||null,width:null,height:null})),skipped:[],title:String(assetId).slice(0,120),author:'Poly Haven',cover:first?.url||null,source:first?.source||null,rendition:'original'};
+    },
+  },
+  ambientcg:{
+    id:'ambientcg',
+    label:'ambientCG 官方缩略图',
+    client:'ambientcg',
+    async resolve({assetId},{open,signal}={}){
+      if(!assetId)throw Error('ambientCG 资产 ID 缺失');
+      const list=await ambientcgRenders(assetId,{signal,open});
+      if(!list.length)throw Error('这个 ambientCG 材质暂时没有提供可下载图片');
+      const first=list[0]||{};
+      return {items:list.map(x=>({url:x.url,title:x.title||null,width:null,height:null})),skipped:[],title:String(assetId).slice(0,120),author:'ambientCG',cover:first?.url||null,source:first?.source||null,rendition:'original'};
+    },
+  },
+});
+
+/** Ask one platform for the pictures of one asset. The registry is the whole dispatch. */
+export async function collectImageAssets(platform,{uid,url,assetId}={},options={}){
+  const source=IMAGE_SOURCES[platform];
+  if(!source)throw Error('这个来源暂时不支持下载图片');
+  return {...(await source.resolve({uid,url,assetId},options)),platform:source.id,client:source.client,label:source.label};
+}

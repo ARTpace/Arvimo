@@ -1,0 +1,34 @@
+{
+  "name": "assetvault",
+  "version": "0.1.7",
+  "private": true,
+  "type": "module",
+  "description": "Export authorized Sketchfab models (mesh, textures, rig, animation) to glTF/GLB. Tampermonkey userscript first, MV3 extension second.",
+  "license": "GPL-3.0-only",
+  "scripts": {
+    "patches": "node scripts/apply-patches.mjs",
+    "pretest": "npm run patches",
+    "test": "node --test test/*.test.js vendor/upstream-src/test/*.test.js",
+    "test:core": "node --test test/*.test.js",
+    "check:upstream": "node --test vendor/upstream-src/test/*.test.js",
+    "prebuild": "npm run patches",
+    "build": "node scripts/build-userscript.mjs",
+    "verify": "node scripts/verify-build.mjs",
+    "prebuild:library": "npm run patches",
+    "build:library": "node scripts/build-library.mjs",
+    "library": "npm run build:library && node server/library.mjs",
+    "test:library": "node --test test/library*.test.js",
+    "test:downloads": "node --test test/library-downloads.test.js",
+    "test:library:browser": "node scripts/test-library-browser.mjs",
+    "test:downloads:browser": "node scripts/test-download-manager-browser.mjs",
+    "test:downloads:live": "node scripts/test-download-manager-browser.mjs --live",
+    "test:downloads:lifecycle": "node scripts/test-download-worker.mjs",
+    "fetch:mviewer": "node scripts/fetch-mviewer.mjs",
+    "fetch:blender": "node scripts/fetch-blender.mjs",
+    "fetch:curl-impersonate": "node scripts/fetch-curl-impersonate.mjs",
+    "test:artstation": "node --test test/library-artstation*.test.js"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0"
+  }
+}

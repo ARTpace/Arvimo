@@ -1,0 +1,17 @@
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import {fileURLToPath} from 'node:url';
+const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
+const {version}=JSON.parse(await fs.readFile(path.join(root,'src-tauri/tauri.conf.json'),'utf8'));
+const name=`AssetVault_${version}_x64`;
+const engine=path.join(root,`src-tauri/target/release/bundle/nsis/${name}-setup.exe`);
+const signature=(await fs.readFile(`${engine}.sig`,'utf8')).trim();
+if(!signature)throw Error('Missing updater signature');
+const output=path.join(root,'dist','release',version);
+await fs.mkdir(output,{recursive:true});
+await fs.copyFile(engine,path.join(output,`${name}-update.exe`));
+await fs.copyFile(`${engine}.sig`,path.join(output,`${name}-update.exe.sig`));
+await fs.copyFile(path.join(root,`dist/${name}-setup.exe`),path.join(output,`${name}-setup.exe`));
+const notes=process.env.ASSETVAULT_RELEASE_NOTES||'支持应用内检查、签名下载与重启更新；新增安装动效；修复 Blender 导入 ZIP 文件夹条目冲突。';
+await fs.writeFile(path.join(output,'latest.json'),JSON.stringify({version,notes,pub_date:new Date().toISOString(),platforms:{'windows-x86_64':{url:`https://github.com/ARTpace/AssetVault/releases/download/v${version}/${name}-update.exe`,signature}}},null,2)+'\n');
+console.log(`Release assets prepared: ${output}`);

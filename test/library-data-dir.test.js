@@ -1,0 +1,12 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import {resolveDataDir,DATA_DIR_NAME,LEGACY_DATA_DIR_NAME} from '../server/data-dir.mjs';
+const tmp=()=>fs.mkdtempSync(path.join(os.tmpdir(),'assetvault-datadir-'));
+const legacyWith=root=>{const legacy=path.join(root,LEGACY_DATA_DIR_NAME);fs.mkdirSync(legacy);fs.writeFileSync(path.join(legacy,'tasks.json'),'{"version":1,"jobs":[]}');return legacy;};
+test('a fresh install uses the new directory',()=>{const root=tmp();const r=resolveDataDir(root);assert.equal(r.dir,path.join(root,DATA_DIR_NAME));assert.equal(r.migrated,false);});
+test('a legacy directory is renamed once and its task history survives',()=>{const root=tmp();const legacy=legacyWith(root);const r=resolveDataDir(root);assert.equal(r.migrated,true);assert.equal(r.dir,path.join(root,DATA_DIR_NAME));assert.equal(fs.readFileSync(path.join(root,DATA_DIR_NAME,'tasks.json'),'utf8'),'{"version":1,"jobs":[]}');assert.equal(fs.existsSync(legacy),false);});
+test('the new directory always wins when both exist',()=>{const root=tmp();fs.mkdirSync(path.join(root,DATA_DIR_NAME));legacyWith(root);const r=resolveDataDir(root);assert.equal(r.dir,path.join(root,DATA_DIR_NAME));assert.equal(r.migrated,false);});
+test('a legacy directory that cannot be moved keeps being used instead of losing tasks',()=>{const root=tmp();const legacy=legacyWith(root);const held=fs.openSync(path.join(legacy,'tasks.json'),'r');try{const r=resolveDataDir(root);assert.equal(r.migrated,false);assert.equal(r.dir,legacy);assert.equal(fs.readFileSync(path.join(legacy,'tasks.json'),'utf8'),'{"version":1,"jobs":[]}');}finally{fs.closeSync(held);}});

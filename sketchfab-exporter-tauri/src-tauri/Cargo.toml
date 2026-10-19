@@ -1,0 +1,32 @@
+[package]
+name = "assetvault"
+version = "0.1.7"
+description = "AssetVault - Sketchfab 模型导出与本地库桌面版"
+authors = ["AssetVault"]
+edition = "2021"
+default-run = "assetvault"
+
+[features]
+installer-ui = ["dep:wry", "dep:tao"]
+
+[[bin]]
+name = "assetvault-setup"
+path = "src/installer.rs"
+required-features = ["installer-ui"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+url = "2"
+wry = { version = "0.57", optional = true }
+tao = { version = "0.37", optional = true }
+# 授权：Ed25519 验签 + 注册表读硬件指纹
+ed25519-dalek = { version = "2", default-features = false, features = ["std"] }
+base64 = "0.22"
+sha2 = "0.10"
+winreg = "0.55"
+tauri-plugin-updater = "2"

@@ -1,0 +1,15 @@
+# 发行方资产：绝不外泄、绝不进安装包
+licensing/private.pem
+licensing/pubkey.b64
+
+# 离线签发的授权文件（内含客户机器码，属私密数据）
+licensing/issued/
+
+# 授权服务的实际数据（密钥白名单、激活记录）
+license-server/data/*.json
+license-server/data/*.tmp
+
+# 构建产物
+src-tauri/target/
+node_modules/
+dist/

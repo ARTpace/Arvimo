@@ -1,0 +1,153 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import {spawn,execFile,execFileSync} from 'node:child_process';
+import {serverIsCurrent} from '../server/capabilities.mjs';
+import {fileURLToPath} from 'node:url';
+
+const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
+const stateDir=path.join(root,'.assetvault');
+const logPath=path.join(stateDir,'library-server.log');
+const pidPath=path.join(stateDir,'library-server.pid');
+const port=Number(process.env.SFX_PORT||4178);
+const base=`http://127.0.0.1:${port}`;
+fs.mkdirSync(stateDir,{recursive:true});
+
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+function alive(pid){const n=Number(String(pid||'').trim());if(!Number.isInteger(n)||n<=0)return false;try{process.kill(n,0);return true;}catch{return false;}}
+async function capabilities(){
+ try{
+  const controller=new AbortController();const timeout=setTimeout(()=>controller.abort(),1200);
+  const res=await fetch(base+'/api/downloads/capabilities',{headers:{'X-SFX-Local':'1'},cache:'no-store',signal:controller.signal});
+  clearTimeout(timeout);
+  if(!res.ok)return null;
+  return await res.json();
+ }catch{return null;}
+}
+function psJson(command){
+ if(process.platform!=='win32')return null;
+ try{return execFileSync('powershell.exe',['-NoProfile','-ExecutionPolicy','Bypass','-Command',command],{encoding:'utf8',stdio:['ignore','pipe','ignore']}).trim();}catch{return null;}
+}
+function pidsOnPort(){
+ if(process.platform!=='win32')return [];
+ const raw=psJson(`Get-NetTCPConnection -LocalPort ${port} -State Listen -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess | ConvertTo-Json -Compress`);
+ if(!raw)return [];
+ try{const data=JSON.parse(raw);return [...new Set((Array.isArray(data)?data:[data]).map(Number).filter(Boolean))];}catch{return [];}
+}
+function projectServerPids(){
+ if(process.platform!=='win32')return [];
+ const marker=root.replace(/'/g,"''");
+ const raw=psJson(`Get-CimInstance Win32_Process | Where-Object { ($_.CommandLine -like '*server/library.mjs*' -or $_.CommandLine -like '*npm run library*') -and $_.CommandLine -like '*${marker}*' } | Select-Object -ExpandProperty ProcessId | ConvertTo-Json -Compress`);
+ if(!raw)return [];
+ try{const data=JSON.parse(raw);return [...new Set((Array.isArray(data)?data:[data]).map(Number).filter(Boolean))];}catch{return [];}
+}
+function killPids(pids){
+ const unique=[...new Set(pids.map(Number).filter(pid=>pid&&pid!==process.pid))];
+ for(const pid of unique){
+  try{
+   if(process.platform==='win32')execFileSync('taskkill',['/PID',String(pid),'/T','/F'],{stdio:'ignore'});
+   else process.kill(pid,'SIGTERM');
+   console.log(`已停止旧后台服务 PID ${pid}`);
+  }catch{}
+ }
+}
+async function stopOldIfNeeded(){
+ const cap=await capabilities();
+ if(serverIsCurrent(cap))return true;
+ const pid=fs.existsSync(pidPath)?fs.readFileSync(pidPath,'utf8').trim():'';
+ const targets=[...(alive(pid)?[Number(pid)]:[]),...pidsOnPort(),...projectServerPids()];
+ if(targets.length){
+  console.log('检测到旧版 AssetVault 后台服务，正在重启以启用新功能…');
+  killPids(targets);
+  fs.rmSync(pidPath,{force:true});
+  await sleep(1200);
+ }
+ return false;
+}
+
+/** 用默认浏览器打开一个由本机服务提供的地址。
+ *  注意两点，缺一个都会变成「双击了但浏览器不打开」：
+ *   1. 不能用 stdio:'ignore'，保持默认管道 —— 这正是服务端当初能打开浏览器的那套调用；
+ *   2. 必须等 cmd 真的执行完再让启动器退出。一触即退时 cmd 可能还没跑完 start
+ *      就随父进程一起被收掉。
+ *  返回的 Promise 有 5 秒兜底，不会把启动器永久挂住。 */
+function openInBrowser(url){
+ if(process.platform!=='win32')return Promise.resolve();
+ return new Promise(resolve=>{
+  let settled=false;
+  const done=line=>{if(settled)return;settled=true;note(line);resolve();};
+  const timer=setTimeout(()=>done(`打开浏览器超时未确认：${url}`),5000);
+  try{
+   execFile('cmd.exe',['/c','start','',url],{windowsHide:true},e=>{
+    clearTimeout(timer);
+    done(e?`打开浏览器失败：${e.message}`:`已把启动画面交给浏览器：${url}`);
+   });
+  }catch(e){
+   clearTimeout(timer);
+   done(`打开浏览器失败：${e.message}`);
+  }
+ });
+}
+
+// 启动器的窗口是隐藏的，它的输出用户永远看不到，所以关键步骤单独记一份日志，
+// 下次再出问题不用靠猜。
+const launcherLog=path.join(stateDir,'launcher.log');
+function note(line){try{fs.appendFileSync(launcherLog,`${new Date().toLocaleString()}  ${line}\n`);}catch{}}
+note(`--- 启动请求（node ${process.version}） ---`);
+
+if(await stopOldIfNeeded()){
+ console.log(`AssetVault 已在后台运行（${base}）。`);
+ note('已有服务在运行，直接把启动画面交给浏览器。');
+ // 服务本来就在跑，直接把启动画面推给浏览器，双击一样能看到启动动效。
+ await openInBrowser(`${base}/splash.html`);
+ process.exit(0);
+}
+
+fs.appendFileSync(logPath,`\n\n===== AssetVault background start ${new Date().toLocaleString()} =====\n`);
+const out=fs.openSync(logPath,'a');
+
+// 先构建（等价于 npm run library 的 prebuild:library + build:library）。
+// 同步执行，输出直接写进日志文件，全程不经过 cmd.exe / npm.cmd。
+for(const step of ['scripts/apply-patches.mjs','scripts/build-library.mjs']){
+ try{
+  execFileSync(process.execPath,[path.join(root,step)],{cwd:root,stdio:['ignore',out,out],windowsHide:true});
+ }catch(e){
+  console.log(`构建步骤失败：${step}（${e.message}）`);
+ }
+}
+
+// 直接用 node 启动服务，不走 cmd / npm。
+// 这里两个标志缺一不可：
+//   detached     —— Windows 上必须。不带它时子进程跟着父进程的控制台一起销毁，
+//                   启动器一退出（几秒内）服务就被系统带走，浏览器随后只会撞上死端口。
+//                   detached 走 DETACHED_PROCESS：不继承父控制台，服务独立存活。
+//   直接起 node  —— 不能经 cmd.exe。cmd 在没有控制台时会自己 AllocConsole 分配一个
+//                   可见窗口，那正是之前那个关不掉的命令行窗口。
+// 浏览器不在这里打开：服务此时还没有控制台，由它去调 cmd / start 有弹出窗口的风险。
+// 改成启动器自己在下面轮询到端口真的在监听之后再打开，那也顺带保证了跳转不会落空。
+const child=spawn(process.execPath,[path.join(root,'server','library.mjs')],{
+ cwd:root,
+ stdio:['ignore',out,out],
+ detached:true,
+ windowsHide:true,
+});
+fs.writeFileSync(pidPath,String(child.pid));
+note(`已拉起服务进程 PID ${child.pid}`);
+child.unref();
+let opened=false;
+for(let i=0;i<30;i++){
+ const cap=await capabilities();
+ if(serverIsCurrent(cap)){
+  console.log(`AssetVault 已在后台启动（PID ${child.pid}）。`);
+  console.log('浏览器会自动打开；关闭网页不会停止后台下载服务。');
+  console.log(`日志文件：${logPath}`);
+  if(!opened){
+   opened=true;
+   await openInBrowser(`${base}/splash.html`);
+  }
+  process.exit(0);
+ }
+ await sleep(500);
+}
+note(`服务在 15 秒内没有就绪（PID ${child.pid}），未打开浏览器`);
+console.log(`AssetVault 已尝试在后台启动（PID ${child.pid}），但尚未确认服务就绪。`);
+console.log(`如果网页打不开，请查看日志：${logPath}`);

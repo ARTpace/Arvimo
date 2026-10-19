@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>AssetVault · 安装界面设计预览</title>
+<style>
+:root{color-scheme:dark;--bg:#0d1218;--line:#29343e;--text:#e7eee9;--muted:#86968f;--accent:#c9f581;font-family:"Segoe UI","Microsoft YaHei",sans-serif}*{box-sizing:border-box}body{margin:0;background:#080c10;color:var(--text);min-height:100vh;display:grid;place-items:center}button,input{font:inherit}button{cursor:pointer}button:focus-visible,input:focus-visible,summary:focus-visible{outline:2px solid var(--accent);outline-offset:4px}.window{width:min(1040px,100vw);min-height:680px;border:1px solid var(--line);border-radius:16px;background:var(--bg);overflow:hidden;position:relative;box-shadow:0 30px 100px #0005}.top{height:76px;display:flex;align-items:center;padding:0 32px;gap:12px}.logo{width:34px;height:34px}.brand{font-weight:700;font-size:18px;letter-spacing:-.5px}.caption{color:#728077;font-size:12px;border-left:1px solid var(--line);padding-left:14px;margin-left:4px}.preview-label{margin-left:auto;font-size:11px;color:#9fae9f;border:1px solid #344139;border-radius:5px;padding:5px 8px}.layout{display:grid;grid-template-columns:1fr 1.05fr;gap:46px;padding:55px 58px 64px;align-items:center}.eyebrow{font-size:10px;color:var(--accent);letter-spacing:3px;margin:0 0 20px}.hero h1{font-size:45px;font-weight:600;letter-spacing:-2px;line-height:1.25;margin:0 0 17px}.hero h1 span{color:var(--accent)}.lead{font-size:13px;line-height:1.9;color:#91a198;max-width:310px}.art{height:155px;margin:32px 0 23px;position:relative;display:flex;align-items:center;gap:12px;background-image:linear-gradient(#25322b44 1px,transparent 1px),linear-gradient(90deg,#25322b44 1px,transparent 1px);background-size:24px 24px;mask-image:linear-gradient(90deg,#000 65%,transparent)}.tile{height:112px;width:100px;border:1px solid #3b4c3e;background:#18221d;border-radius:9px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:13px;transform:rotate(-7deg)}.tile:nth-child(2){transform:translateY(-9px) rotate(3deg);background:#1d2720}.tile:nth-child(3){transform:rotate(9deg);background:#141f23}.tile small{font:9px Consolas,monospace;letter-spacing:1.5px;color:#8b9f8c}.cube{width:43px;height:43px;stroke:var(--accent);stroke-width:1.2;fill:#c9f58109}.sphere{height:42px;width:42px;border-radius:50%;background:radial-gradient(circle at 28% 23%,#d8d2b1,#8a8b66 35%,#373e2d 73%);box-shadow:inset -6px -5px 10px #0004}.sky{height:43px;width:56px;border-radius:50%;background:linear-gradient(155deg,#778a97,#d9bd95 48%,#576c65 52%,#213d38);border:1px solid #8ba39b55}.feature{font-size:11px;color:#7e9084;letter-spacing:.5px}.card{background:#151d24;border:1px solid #303d43;border-radius:14px;padding:30px;box-shadow:0 14px 36px #0002}.step{font:10px Consolas,monospace;color:#899c8d;letter-spacing:2px}.card h2{font-size:26px;letter-spacing:-.7px;margin:14px 0 9px}.description{font-size:12px;line-height:1.8;color:#92a098;margin:0 0 27px;min-height:43px}.primary{display:flex;align-items:center;justify-content:space-between;width:100%;padding:16px 18px;background:var(--accent);color:#26331e;border:1px solid transparent;border-radius:8px;font-size:14px;font-weight:700}.primary:hover{background:#dafaa6}.primary:disabled{cursor:default;background:#667c4b;color:#d8e6cd}.primary span{font-size:20px;line-height:1}details{margin-top:19px}summary{font-size:12px;color:#9daa9f;cursor:pointer;padding:6px 0;list-style:none}summary::after{content:'⌄';float:right}details[open] summary::after{content:'⌃'}label.path{display:block;color:#91a098;font-size:11px;margin:17px 0 8px}input[type=text]{width:100%;border:1px solid #34423e;border-radius:6px;background:#0f161b;padding:11px 10px;color:#cbd9ce;font-size:11px}label.check{display:flex;align-items:center;gap:8px;color:#9fac9f;font-size:11px;margin-top:14px}input[type=checkbox]{accent-color:var(--accent)}.hint{font-size:10px;color:#74867a;line-height:1.8;border-top:1px solid #2a3734;padding-top:18px;margin:23px 0 0}.progress{margin:5px 0 28px}.track{height:6px;border-radius:9px;background:#29352c;overflow:hidden}.fill{height:100%;background:var(--accent);width:0%;transition:width .35s;border-radius:9px}.progress-meta{display:flex;justify-content:space-between;color:#9eaf9f;font-size:11px;margin-top:13px;font-variant-numeric:tabular-nums}.foot{display:flex;align-items:center;justify-content:space-between;border-top:1px solid #202b2a;padding:18px 32px;color:#657b6b;font-size:10px;letter-spacing:.5px}.demo-tools{display:flex;gap:6px}.demo-tools button{background:none;border:1px solid #34443a;color:#95a98f;border-radius:4px;font-size:10px;padding:5px 9px}.demo-tools button.active{border-color:#a0c26c;color:var(--accent)}[hidden]{display:none!important}@media(max-width:740px){.window{border-radius:0}.layout{grid-template-columns:1fr;padding:24px;gap:24px}.hero h1{font-size:34px}.art,.feature{display:none}.hero .lead{max-width:none}.top,.foot{padding-inline:24px}.caption{display:none}.foot{gap:12px;flex-wrap:wrap}.card{padding:24px}}
+/* Compact installation layout, aligned with the reference's single centered card. */
+.window{min-height:700px;display:flex;flex-direction:column;box-shadow:none}
+.layout{display:flex;justify-content:center;align-items:center;flex:1;padding:72px 32px 90px}
+.card{width:620px;max-width:100%;padding:44px;border-radius:18px;box-shadow:none;background:#141c23}
+.step{display:none}.card h2{font-size:34px;letter-spacing:-1px;margin:0 0 16px}
+.description{font-size:15px;min-height:0;margin:0 0 38px;color:#94a49a}
+.primary{height:58px;justify-content:center;gap:16px;border-radius:10px;font-size:17px}
+summary{text-align:center;font-size:13px}summary::after{float:none;display:inline-block;margin-left:12px}
+details{margin-top:22px}.hint{display:none}.foot{border:0;color:#7a8d80;padding-bottom:24px}
+.caption{border:0;padding:0;margin:0;font-size:14px}.preview-label{border:0;padding:0;color:#64766b;font-size:10px}
+.demo-tools button{border:0;padding:4px 7px}.demo-tools button.active{color:var(--accent)}
+@media(max-width:740px){.window{min-height:100dvh}.layout{padding:40px 24px}.card{padding:30px}.card h2{font-size:29px}}
+.window{isolation:isolate;background:#10171b}
+.backdrop{position:absolute;inset:0;width:100%;height:100%;z-index:-1;pointer-events:none}
+.card{background:#151e25f2;border-color:#35433f;box-shadow:0 16px 65px #0003}
+.top,.foot{position:relative}.foot{color:#8b9c90}
+@media(max-width:740px){.backdrop .mascot{opacity:.32}}
+.card{animation:arrive .5s ease-out}.mascot{transform-box:fill-box}.track.installing .fill{width:32%!important;animation:install-sweep 1.6s ease-in-out infinite}.native body{min-height:100dvh}.native .window{width:100vw;min-height:100dvh;border:0;border-radius:0}.native .demo-tools,.native .preview-label{display:none}.native .foot{min-height:44px}.status-note{font-size:12px;color:#98aa9d;text-align:center;line-height:1.8;margin:18px 0 0}.card[data-state=done] .primary{animation:ready-pulse .7s ease-out}.card[data-state=busy] .progress{animation:arrive .35s ease-out}
+@keyframes install-sweep{0%{transform:translateX(-110%)}100%{transform:translateX(420%)}}@keyframes arrive{from{opacity:0;translate:0 8px}to{opacity:1;translate:0 0}}@keyframes ready-pulse{50%{box-shadow:0 0 0 8px #c9f58118}}@media(prefers-reduced-motion:reduce){.card,.card[data-state=done] .primary,.card[data-state=busy] .progress{animation:none}.track.installing .fill{animation:none;width:100%!important;opacity:.5}}
+</style></head><body>
+<main class="window"><header class="top"><img class="logo" src="../../src/library/favicon.svg" alt=""><span class="brand">AssetVault</span><span class="caption">安装程序</span><span class="preview-label">交互设计预览</span></header>
+<svg class="backdrop" viewBox="0 0 1040 700" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
+ <defs><radialGradient id="glow"><stop stop-color="#88ad61" stop-opacity=".12"/><stop offset="1" stop-color="#88ad61" stop-opacity="0"/></radialGradient><linearGradient id="face" x2=".3" y2="1"><stop stop-color="#a1ca6d"/><stop offset="1" stop-color="#70964d"/></linearGradient></defs>
+ <ellipse cx="120" cy="580" rx="380" ry="330" fill="url(#glow)"/>
+ <g fill="none" stroke="#91aa86" stroke-opacity=".12" stroke-width="1">
+  <path d="m520 0 90 110 150-45 130 93 150-55M610 110l-60 138 163 63 177-153 95 176 55-22M760 65l-47 246 106 105 166-82M890 158l150-55M819 416l-66 136 174 40 113-102M985 334l-58 258 113 108M753 552l-97 148M0 178l130-65 124 92-40 165M130 113 96 0M0 365l111-34 103 39-42 132M0 590l172-88"/>
+  <path d="m897 58 23 13v27l-23 13-23-13V71Zm-23 13 23 14 23-14m-23 14v26M77 239l18 10v21l-18 11-18-11v-21Zm-18 10 18 11 18-11m-18 11v21" stroke-opacity=".35"/>
+ </g>
+ <g fill="#b9d795" opacity=".35"><path d="m946 443 3 9 9 3-9 3-3 9-3-9-9-3 9-3ZM300 105l2 6 6 2-6 2-2 6-2-6-6-2 6-2Z"/><circle cx="838" cy="622" r="2"/><circle cx="178" cy="85" r="2"/></g>
+ <g class="mascot" transform="translate(-122 342) scale(2.35) rotate(-12 100 100)">
+  <ellipse cx="108" cy="203" rx="85" ry="12" fill="#000" opacity=".15"/>
+  <path d="M92 30C70 18 73 3 76 1c18 0 31 12 29 29" fill="#a9cf86"/>
+  <path d="M101 30c1-21 16-29 31-24 1 16-13 26-31 24" fill="#d3e9a9"/>
+  <rect x="21" y="40" width="169" height="151" rx="46" fill="#769660"/>
+  <rect x="15" y="30" width="166" height="151" rx="44" fill="#c4df9d"/>
+  <path d="M38 65q3-16 21-17" fill="none" stroke="#e7f3cf" stroke-width="6" stroke-linecap="round"/>
+  <path d="M145 40q21 5 26 24v72q0 30-29 35H64q-25 0-34-19" fill="none" stroke="#a8cb80" stroke-width="3" stroke-linecap="round"/>
+  <g fill="#344739"><ellipse cx="69" cy="99" rx="6" ry="9"/><ellipse cx="127" cy="99" rx="6" ry="9"/></g>
+  <g fill="#fff9e9"><circle cx="67" cy="96" r="2"/><circle cx="125" cy="96" r="2"/></g>
+  <g fill="#e6a99b" opacity=".8"><ellipse cx="51" cy="115" rx="12" ry="6"/><ellipse cx="145" cy="115" rx="12" ry="6"/></g>
+  <path d="M87 115q5 9 11 1 6 8 11-1" fill="none" stroke="#344739" stroke-width="3" stroke-linecap="round"/>
+  <rect x="68" y="145" width="66" height="53" rx="13" fill="#e8edc9" stroke="#829f6b" stroke-width="2"/>
+  <path d="m89 164 12-7 12 7v14l-12 7-12-7Zm0 0 12 7 12-7m-12 7v14" fill="none" stroke="#7e9867" stroke-width="2" stroke-linejoin="round"/>
+  <path d="M46 151q-7 23 22 23m87-23q7 23-21 23" fill="none" stroke="#accd88" stroke-width="16" stroke-linecap="round"/>
+  <ellipse cx="62" cy="192" rx="18" ry="10" fill="#a9c787"/><ellipse cx="145" cy="192" rx="18" ry="10" fill="#a9c787"/>
+  <g fill="none" stroke="#c6dda6" stroke-width="2" stroke-linecap="round" opacity=".6"><path d="m206 56 3-8m5 19 8-2M2 14l-4-7"/></g>
+ </g>
+</svg>
+<div class="layout">
+<section class="card"><span class="step" id="step">01 / 准备安装</span><h2 id="title">安装 AssetVault</h2><p class="description" id="description">你的创作资产工作台。<br>选择安装位置，即可开始。</p><div class="progress" id="progress" hidden><div class="track"><div class="fill" id="fill"></div></div><div class="progress-meta"><span id="stage">正在解压文件</span><span id="percent">62%</span></div></div><button class="primary" id="primary">开始安装<span>→</span></button><details id="options"><summary>安装选项</summary><label class="path" for="path">安装位置</label><input type="text" id="path" value="C:\Program Files\AssetVault" spellcheck="false"><label class="check"><input type="checkbox" checked>创建桌面快捷方式</label></details><p class="hint" id="hint">Blender 与后台浏览器可在安装后按需配置。</p></section></div>
+<footer class="foot"><span>ASSETVAULT · WINDOWS x64</span><div class="demo-tools" aria-label="预览安装状态"><button data-state="ready" class="active">安装首页</button><button data-state="busy">安装中</button><button data-state="done">完成</button></div></footer></main>
+<script>
+const $=id=>document.getElementById(id);let state='ready';
+function show(next){state=next;const busy=state==='busy',done=state==='done';$('step').textContent=busy?'02 / 正在安装':done?'03 / 准备就绪':'01 / 准备安装';$('title').textContent=busy?'正在安放你的工作台':done?'工作台已准备好':'安装 AssetVault';$('description').innerHTML=busy?'正在安装 AssetVault，请稍候。<br>完成后即可开始收集与管理资产。':done?'从一个模型，到整个灵感库。<br>开始构建属于你的素材收藏。':'你的创作资产工作台。<br>选择安装位置，即可开始。';$('progress').hidden=!busy;$('fill').style.width='62%';$('primary').disabled=busy;$('primary').innerHTML=busy?'正在安装…':done?'启动 AssetVault<span>↗</span>':'开始安装<span>→</span>';$('options').hidden=busy||done;$('hint').textContent=busy?'演示进度 62% · 尚未连接实际安装引擎。':done?'设计预览 · 此页面不会安装或启动软件。':'Blender 与后台浏览器可在安装后按需配置。';document.querySelectorAll('[data-state]').forEach(b=>b.classList.toggle('active',b.dataset.state===state));}
+const renderState=show;show=next=>{renderState(next);$('title').textContent=next==='busy'?'正在安装':next==='done'?'安装完成':'安装 AssetVault';$('description').textContent=next==='busy'?'请稍候，安装完成后即可使用。':next==='done'?'AssetVault 已准备就绪。':'你的本地创作资产库';$('primary').innerHTML=next==='busy'?'正在安装…':next==='done'?'启动 AssetVault <span>↗</span>':'安装 <span>→</span>';};
+document.querySelectorAll('[data-state]').forEach(button=>button.onclick=()=>show(button.dataset.state));$('primary').onclick=()=>{if(state==='ready')show('busy');};show('ready');
+// The same document serves as a browser preview and the embedded native installer.
+const native=window.__INSTALLER_NATIVE__===true;
+document.documentElement.classList.toggle('native',native);
+const card=document.querySelector('.card'),track=document.querySelector('.track');
+const note=document.createElement('p');note.className='status-note';note.hidden=true;card.append(note);
+const render=show;show=next=>{render(next);card.dataset.state=next;track.classList.toggle('installing',next==='busy');document.querySelector('.progress-meta').setAttribute('aria-live','polite');$('percent').textContent=next==='busy'?'请稍候':'';$('stage').textContent='正在安装文件与创建快捷方式';$('description').textContent=next==='busy'?'请完成管理员授权，安装期间请勿关闭此窗口。':next==='done'?'AssetVault 已准备就绪。':'你的本地创作资产库';};
+const send=message=>window.ipc.postMessage(JSON.stringify(message));
+window.installerStatus=result=>{
+ if(result.state==='done'){show('done');note.hidden=!result.restart;note.textContent='安装完成，需要重启电脑后才能完整使用。';}
+ else if(result.state==='error'){show('ready');note.hidden=false;note.textContent=result.message;}
+ else if(result.state==='launch-error'){note.hidden=false;note.textContent=result.message;}
+};
+$('primary').onclick=()=>{
+ if(state==='ready'){
+  note.hidden=true;
+  if(native){send({action:'install',path:$('path').value,shortcut:document.querySelector('input[type=checkbox]').checked});}
+  show('busy');
+ }else if(state==='done'&&native){send({action:'launch'});}
+};
+show('ready');
+</script></body></html>

@@ -1,0 +1,22 @@
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import os from 'node:os';
+import {fileURLToPath} from 'node:url';
+import {spawnSync} from 'node:child_process';
+const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
+const env={...process.env};
+env.PATH=path.join(os.homedir(),'.cargo','bin')+path.delimiter+env.PATH;
+if(!env.TAURI_SIGNING_PRIVATE_KEY){
+ const key=path.join(os.homedir(),'.codex','assetvault-signing','updater.key');
+ try{await fs.access(key);env.TAURI_SIGNING_PRIVATE_KEY=key;env.TAURI_SIGNING_PRIVATE_KEY_PASSWORD??='';}
+ catch{throw Error('Set TAURI_SIGNING_PRIVATE_KEY before building a release; never generate a replacement key for an existing app.');}
+}
+const run=(script,args=[])=>{
+ const result=spawnSync(process.execPath,[script,...args],{cwd:root,env,stdio:'inherit'});
+ if(result.error)throw result.error;
+ if(result.status!==0)process.exit(result.status??1);
+};
+run(path.join(root,'node_modules/@tauri-apps/cli/tauri.js'),['build']);
+run('scripts/build-custom-installer.mjs');
+run('scripts/prepare-release.mjs');
+run('scripts/clean-installers.mjs',['--apply']);

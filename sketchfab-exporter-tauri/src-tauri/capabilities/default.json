@@ -1,0 +1,10 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "AssetVault 桌面版默认权限。两处来源都要覆盖：启动/激活页走应用本地协议（waiting.html），而工作台是本地服务托管的 http://127.0.0.1:<端口> 页面 —— 后者属于「远程来源」，不给它 remote 白名单，界面就收不到「关闭询问」事件、也调不了缩到托盘/退出，关闭按钮会静默退化成直接退出。端口是每次启动动态挑的，所以用 :* 通配（已实测匹配任意端口）。",
+  "windows": ["main"],
+  "permissions": ["core:default"],
+  "remote": {
+    "urls": ["http://127.0.0.1:*", "http://localhost:*"]
+  }
+}

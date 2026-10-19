@@ -1,0 +1,72 @@
+// PNG-only output: when opts.pngOnly or globalThis.__sfxPngOnly is set,
+// fetchTextures transcodes non-PNG bytes to PNG and renames files to .png
+// (re-deduped). Covers descrambled mislabels (.jpg name, PNG bytes) and
+// CDN passthrough (real JPEG/WebP). Conversion failure keeps the original.
+export default {
+  file: "vendor/upstream-src/lib/sf-api.js",
+  replacements: [
+    {
+      id: "png-import",
+      old: ['import { descrambleImageBytes } from "./descramble.js";'].join("\n"),
+      new: [
+        'import { descrambleImageBytes, descrambleImageBytesV2, ensurePngBytes, pngFileName } from "./descramble.js";',
+      ].join("\n"),
+    },
+    {
+      id: "base-let",
+      old: ["      const { tex, best, base, tuid, pk } = entry;"].join("\n"),
+      new: [
+        "      let { tex, best, base, tuid, pk } = entry; // patched(10): base may be renamed",
+      ].join("\n"),
+    },
+    {
+      id: "normalize-block",
+      old: [
+        "        }",
+        "        if ((best.width || 0) >= 512 && bytes.length < 80_000 && isJpg) {",
+        "          scrambledHints++;",
+        "        }",
+      ].join("\n"),
+      new: [
+        "        }",
+        "",
+        "        // patched(10): PNG-only output (__sfxPngOnly or opts.pngOnly).",
+        "        if (",
+        "          (opts && opts.pngOnly === true) ||",
+        "          globalThis.__sfxPngOnly === true",
+        "        ) {",
+        "          const png = await ensurePngBytes(bytes);",
+        "          if (png.converted && png.bytes) {",
+        "            if (onProgress) {",
+        "              onProgress(",
+        "                `  png-only: transcoded ${base} ${bytes.length} B -> ${png.bytes.length} B`",
+        "              );",
+        "            }",
+        "            bytes = png.bytes;",
+        "          } else if (png.error && onProgress) {",
+        "            onProgress(`  png-only: keep ${base} (${png.error})`);",
+        "          }",
+        "          const pngBase = pngFileName(base);",
+        "          if (pngBase !== base) {",
+        "            let renamed = pngBase;",
+        "            if (usedNames.has(renamed.toLowerCase())) {",
+        "              const stem = pngBase.slice(0, pngBase.length - 4);",
+        "              let n = 2;",
+        '              while (usedNames.has(`${stem}_${n}.png`.toLowerCase())) n++;',
+        '              renamed = `${stem}_${n}.png`;',
+        "            }",
+        "            usedNames.add(renamed.toLowerCase());",
+        "            if (onProgress) {",
+        "              onProgress(`  png-only: renamed ${base} -> ${renamed}`);",
+        "            }",
+        "            base = renamed;",
+        "          }",
+        "        }",
+        "",
+        "        if ((best.width || 0) >= 512 && bytes.length < 80_000 && isJpg) {",
+        "          scrambledHints++;",
+        "        }",
+      ].join("\n"),
+    },
+  ],
+};
