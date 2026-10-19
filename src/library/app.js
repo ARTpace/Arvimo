@@ -31,9 +31,10 @@ import {filterLocalAssets} from './local-filters.js';
 import {createAISettings} from './ai-settings.js';
 import {createSettingsPanel} from './settings-panel.js';
 import {createAppUpdates} from './app-updates.js';
-import {createSearchTranslation,bindLocalSearch} from './search-translation.js';
+import {bindLocalSearch,createLocalQueryParser,createThemeBrainstorm} from './search-translation.js';
 const $=selector=>document.querySelector(selector);
-const translateSearch=createSearchTranslation();
+const parseLocal=createLocalQueryParser();
+const brainstorm=createThemeBrainstorm();
 let settingsPanel;
 const fmt=n=>n==null?'—':Number(n)>=1000?`${(Number(n)/1000).toFixed(Number(n)>=10000?0:1)}k`:String(n);
 let storage;try{storage=window.localStorage;}catch{}
@@ -519,6 +520,20 @@ function setup(){
   const chip=event.target.closest('[data-topic]');if(!chip)return;
   $('#asset-query').value=chip.dataset.topic;refreshTopicStrip();startSearch({record:true});
  });
+ // 主题拆包助手（A3）：一句话主题 → AI 拆成一组搜索词，点一下即检索。
+ const themeInput=$('#theme-input'),themeResults=$('#theme-results');
+ $('#theme-breakdown-btn').onclick=async()=>{
+  const theme=themeInput.value.trim();if(!theme){themeInput.focus();return;}
+  themeResults.hidden=false;themeResults.innerHTML='<span class="theme-loading">正在拆解主题…</span>';
+  const data=await brainstorm(theme);
+  if(!data.brainstormed){themeResults.innerHTML=`<span class="theme-empty">${esc(data.reason||'未能拆解，请换个说法')}</span>`;return;}
+  themeResults.innerHTML=data.terms.map(t=>`<button type="button" class="theme-chip" data-term="${esc(t)}">${esc(t)}</button>`).join('');
+ };
+ themeInput.addEventListener('keydown',event=>{if(event.key==='Enter'){event.preventDefault();$('#theme-breakdown-btn').click();}});
+ themeResults.addEventListener('click',event=>{
+  const chip=event.target.closest('[data-term]');if(!chip)return;
+  $('#asset-query').value=chip.dataset.term;refreshTopicStrip();startSearch({record:true});
+ });
   // 两个分类容器都要监听：统一树点叶子写 #online-category、点组头写 #online-category-group，改哪个都重搜。
  for(const id of ['online-category','online-category-group','online-sort','online-downloadable','online-animated','online-staffpicked'])$('#'+id).onchange=()=>restartSearch();
  $('#unified-sort').onchange=()=>{
@@ -531,7 +546,7 @@ function setup(){
 $('#reset-search-filters').onclick=()=>{writeSearch({q:$('#asset-query').value});startSearch();};
 $('#search-platform').onchange=e=>setPlatform(e.target.value);
 $('#empty-explore').onclick=()=>{writeSearch({sort:'popular'});refreshTopicStrip();startSearch();};
- const localSearch=bindLocalSearch({$,state,renderGrid,translate:translateSearch});
+ const localSearch=bindLocalSearch({$,state,renderGrid,parse:parseLocal});
  $('#sort').onchange=e=>{state.sort=e.target.value;renderGrid();};
  for(const id of ['#local-kind','#local-status'])$(id).onchange=()=>{state.selected.clear();renderGrid();};
  $('#local-feature').onchange=e=>{state.filter=e.target.value;state.selected.clear();renderGrid();};

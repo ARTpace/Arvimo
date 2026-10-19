@@ -79,6 +79,14 @@
           <p class="filters-note" id="filters-all"></p>
         </div>
         <div class="topic-strip" id="topic-strip" hidden></div>
+        <div class="theme-breakdown" id="theme-breakdown">
+          <div class="theme-row">
+            <i data-icon="sparkles" class="theme-icon"></i>
+            <input id="theme-input" type="text" maxlength="200" placeholder="描述一个主题，拆解成一组搜索词，例如：中世纪村庄" aria-label="主题拆解" autocomplete="off" spellcheck="false">
+            <button class="secondary" id="theme-breakdown-btn" type="button">拆解</button>
+          </div>
+          <div class="theme-results" id="theme-results" hidden></div>
+        </div>
 </section>
 <div id="scan-status" class="scan-status" role="status" aria-live="polite"></div>
 <div id="discovery-translation" class="translation-hint" role="status" aria-live="polite" hidden></div>

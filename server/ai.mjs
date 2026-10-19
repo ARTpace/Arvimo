@@ -56,6 +56,9 @@ export function createAIService({file,fetchImpl=fetch,timeoutMs=30000}){
  const translator=createSearchTranslator({settings:async()=>publicConfig(await read()),complete});
  return {
   translate:query=>translator.translate(query),
+  expand:query=>translator.expand(query),
+  parseLocal:query=>translator.parseLocal(query),
+  brainstorm:theme=>translator.brainstorm(theme),
   settings:async()=>publicConfig(await read()),configure,complete,
   models:async(input,signal)=>{
    const config=normalize(input,await read());

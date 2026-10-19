@@ -6,10 +6,11 @@
 // on warnings, cancellation or what counts as having results.
 
 import {feedEndpoint,feedLabel,routeLink} from './platforms.js';
-import {createSearchTranslation} from './search-translation.js';
+import {createSearchTranslation,createSearchExpansion} from './search-translation.js';
 
 export function createDiscoveryFeed(ctx){
  const translate=createSearchTranslation();
+ const expand=createSearchExpansion();
  const {$,toast,state,persist,renderGrid,mergeModels,describeArt,activeModes,showsFeed,searchHistoryUI,resolveArtworkLink,routeTo,readRequest,clearSearchTimer,feedError,markQueryActive}=ctx;
  /** 最近检索：同一条记录只留最新一份，写完立刻持久化并刷新浮层。 */
  function remember(entry){
@@ -41,6 +42,16 @@ async function requestFeed(mode,request,{more=false,all=false,record=false}={}){
     controller.signal.throwIfAborted();if(token!==f.token)return;
     f.translation=result.translated?`“${result.query}” → ${result.english}`:result.reason;
     if(result.translated)request={...request,q:result.english};
+    if(result.translated){
+     try{
+      const exp=await expand(result.english||request.q);
+      controller.signal.throwIfAborted();if(token!==f.token)return;
+      if(exp.expanded&&exp.expansions.length){
+       request={...request,q:`${request.q} ${exp.expansions.join(' ')}`.trim()};
+       f.translation+=` ＋ ${exp.expansions.join(' / ')}`;
+      }
+     }catch{}
+    }
    }
   }
   do{
