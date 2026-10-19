@@ -31,7 +31,7 @@ import {filterLocalAssets} from './local-filters.js';
 import {createAISettings} from './ai-settings.js';
 import {createSettingsPanel} from './settings-panel.js';
 import {createAppUpdates} from './app-updates.js';
-import {bindLocalSearch,createLocalQueryParser,createThemeBrainstorm} from './search-translation.js';
+import {bindLocalSearch,createLocalQueryParser,createThemeBrainstorm,createTagSuggester} from './search-translation.js';
 const $=selector=>document.querySelector(selector);
 const parseLocal=createLocalQueryParser();
 const brainstorm=createThemeBrainstorm();
@@ -498,7 +498,7 @@ function setup(){
   if(external&&/^https?:/i.test(external.href||'')){e.preventDefault();openExternal(external.href);return;}
   const routeButton=e.target.closest('[data-route]');if(routeButton)route(routeButton.dataset.route);
   const close=e.target.closest('[data-close]');if(close)$('#'+close.dataset.close).close();
-  const action=e.target.closest('[data-action]');if(action){const {uid}=action.dataset;switch(action.dataset.action){case 'preview':preview(uid);break;case 'download':requestDownload([uid]);break;case 'download-images':imageDownload.requestImages([uid]);break;case 'blender-send':sendBlenderToOpenScene(action.dataset.id);break;case 'favorite':toggleFavorite(uid);break;case 'collect':collect([uid]);break;case 'reveal-download':downloads?.reveal(action.dataset.id).catch(e=>toast(e.message));break;case 'remove':if(confirm('从模型库移除此模型和收藏？不会删除已下载文件。')){state.models=state.models.filter(m=>m.uid!==uid);state.favorites.delete(uid);state.selected.delete(uid);persist();renderGrid();}break;}}
+  const action=e.target.closest('[data-action]');if(action){const {uid}=action.dataset;switch(action.dataset.action){case 'preview':preview(uid);break;case 'download':requestDownload([uid]);break;case 'download-images':imageDownload.requestImages([uid]);break;case 'blender-send':sendBlenderToOpenScene(action.dataset.id);break;case 'favorite':toggleFavorite(uid);break;case 'ai-tags':aiTagThis(uid);break;case 'collect':collect([uid]);break;case 'reveal-download':downloads?.reveal(action.dataset.id).catch(e=>toast(e.message));break;case 'remove':if(confirm('从模型库移除此模型和收藏？不会删除已下载文件。')){state.models=state.models.filter(m=>m.uid!==uid);state.favorites.delete(uid);state.selected.delete(uid);persist();renderGrid();}break;}}
   const filter=e.target.closest('[data-filter]');if(filter){state.filter=filter.dataset.filter;state.selected.clear();document.querySelectorAll('[data-filter]').forEach(b=>b.classList.toggle('active',b===filter));renderGrid();}
   const tag=e.target.closest('[data-tag]');if(tag){$('#preview-dialog').close();writeSearch({q:tag.dataset.tag});startSearch();}
   
@@ -547,6 +547,7 @@ $('#reset-search-filters').onclick=()=>{writeSearch({q:$('#asset-query').value})
 $('#search-platform').onchange=e=>setPlatform(e.target.value);
 $('#empty-explore').onclick=()=>{writeSearch({sort:'popular'});refreshTopicStrip();startSearch();};
  const localSearch=bindLocalSearch({$,state,renderGrid,parse:parseLocal});
+const tagSuggester=createTagSuggester();
  $('#sort').onchange=e=>{state.sort=e.target.value;renderGrid();};
  for(const id of ['#local-kind','#local-status'])$(id).onchange=()=>{state.selected.clear();renderGrid();};
  $('#local-feature').onchange=e=>{state.filter=e.target.value;state.selected.clear();renderGrid();};
@@ -556,6 +557,36 @@ $('#empty-explore').onclick=()=>{writeSearch({sort:'popular'});refreshTopicStrip
   $('#model-search').value='';$('#local-kind').value='';$('#local-status').value='';$('#local-feature').value='all';
   renderGrid();
  };
+ $('#tag-all').onclick=tagAllAssets;
+ let tagBusy=false,tagAbort=false;
+ async function aiTagThis(uid){
+  const model=findModel(uid);if(!model)return;
+  const data=await tagSuggester({name:model.name,author:model.author,kind:model.kind,existing:model.tags||[]});
+  if(!data.tagged||!data.tags.length){toast(data.reason||'未能生成标签');return;}
+  const merged=[...(model.tags||[]),...data.tags].filter((t,idx,arr)=>arr.findIndex(x=>x.toLowerCase()===x.toLowerCase())===idx).slice(0,12);
+  model.tags=merged;persist();renderGrid();preview(uid);
+  toast(`已补充 ${data.tags.length} 个标签`);
+ }
+ async function tagAllAssets(){
+  if(tagBusy){tagAbort=true;toast('已请求停止整理');return;}
+  const candidates=state.models.filter(m=>(m.tags||[]).length<2);
+  if(!candidates.length){toast('没有需要整理标签的资产');return;}
+  if(!confirm(`将为 ${candidates.length} 个标签偏少的本地资产补充 AI 标签，可能较慢，继续？`))return;
+  tagBusy=true;tagAbort=false;let done=0;
+  try{
+   for(const m of candidates){
+    if(tagAbort)break;
+    try{
+     const data=await tagSuggester({name:m.name,author:m.author,kind:m.kind,existing:m.tags||[]});
+     if(data.tagged&&data.tags.length)m.tags=[...(m.tags||[]),...data.tags].filter((t,idx,arr)=>arr.findIndex(x=>x.toLowerCase()===x.toLowerCase())===idx).slice(0,12);
+    }catch{}
+    done++;
+    if(done%5===0){persist();renderGrid();toast(`已整理 ${done}/${candidates.length}`);}
+   }
+  }finally{tagBusy=false;}
+  persist();renderGrid();
+  toast(tagAbort?`已停止，整理 ${done} 个资产`:`完成，共为 ${done} 个资产补充标签`);
+ }
  // 三种展示共用一个切换入口；按钮高亮由 renderGrid 从 state 推出，不在点击处理里各改一遍。
  const setDisplay=view=>{state.compact=view==='compact';state.gallery=view==='gallery';renderGrid();};
  $('#grid-view').onclick=()=>setDisplay('grid');$('#list-view').onclick=()=>setDisplay('compact');$('#gallery-view').onclick=()=>setDisplay('gallery');

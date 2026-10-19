@@ -87,6 +87,18 @@ export function createThemeBrainstorm({fetchImpl=fetch}={}){
    if(!response.ok)throw Error();const data=await response.json();
    if(data.brainstormed===true&&Array.isArray(data.terms))return data;
    return {theme,terms:[],brainstormed:false,reason:data.reason||''};
-  }catch{return {theme,terms:[],brainstormed:false,reason:'AI 主题拆解不可用'};}
+   }catch{return {theme,terms:[],brainstormed:false,reason:'AI 主题拆解不可用'};}
+ };
+}
+
+export function createTagSuggester({fetchImpl=fetch}={}){
+ return async function suggest({name,author='',kind='',existing=[]}){
+  if(!name||!name.trim())return {name,author,kind,existing,tags:[],tagged:false,reason:'缺少资产名称'};
+  try{
+   const response=await fetchImpl('/api/ai/tags',{method:'POST',headers:{'Content-Type':'application/json','X-SFX-Local':'1'},body:JSON.stringify({name,author,kind,existing}),signal:AbortSignal.timeout(35000)});
+   if(!response.ok)throw Error();const data=await response.json();
+   if(data.tagged===true&&Array.isArray(data.tags))return data;
+   return {name,author,kind,existing,tags:[],tagged:false,reason:data.reason||'未能生成标签'};
+  }catch{return {name,author,kind,existing,tags:[],tagged:false,reason:'AI 标签整理不可用'};}
  };
 }

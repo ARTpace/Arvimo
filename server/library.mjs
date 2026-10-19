@@ -135,6 +135,7 @@ export function createLibraryServer({scan=scanPage,search=searchPage,open=openPu
           if(u.pathname==='/api/ai/expand')return json(res,200,await ai.expand(input.query));
           if(u.pathname==='/api/ai/parse-local')return json(res,200,await ai.parseLocal(input.query));
           if(u.pathname==='/api/ai/brainstorm')return json(res,200,await ai.brainstorm(input.query));
+          if(u.pathname==='/api/ai/tags')return json(res,200,await ai.tagAssets(input));
         }
         return json(res,404,{error:'AI 接口不存在'});
       }
