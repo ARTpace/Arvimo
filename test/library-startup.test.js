@@ -24,7 +24,8 @@ const flush=async()=>{for(let i=0;i<8;i++)await Promise.resolve();};
 
 test('桌面启动全程使用本地加载页，服务未就绪不跳转，就绪后直接进入首页',async()=>{
  let ready=false;
- const b=boot(async command=>command==='backend_ready_url'&&ready?'http://127.0.0.1:54321/':null);
+ const commands=[];
+ const b=boot(async command=>{commands.push(command);return command==='backend_ready_url'&&ready?'http://127.0.0.1:54321/':null;});
  await flush();b.frame(6000);
  assert.deepEqual(b.navigations,[]);
  assert.ok(b.timers.length);
@@ -32,7 +33,8 @@ test('桌面启动全程使用本地加载页，服务未就绪不跳转，就�
  for(const timer of b.timers.splice(0))timer();
  await flush();b.frame(6500);b.frame(7000);
  for(const timer of b.timers.splice(0))timer();
- assert.deepEqual(b.navigations,['http://127.0.0.1:54321/']);
+ assert.deepEqual(b.navigations,[]);
+ assert.ok(commands.includes('open_ready_library'));
  assert.equal(b.get('pct').textContent,'100%');
 });
 
@@ -51,5 +53,6 @@ test('本地加载页复用吉祥物布局和脚本，不再显示蓝色圆点�
  assert.match(html,/id="hero"/);assert.match(html,/src="splash.js"/);
  assert.doesNotMatch(html,/class="dots"/);
  const rust=readFileSync(new URL('../sketchfab-exporter-tauri/src-tauri/src/main.rs',import.meta.url),'utf8');
- assert.doesNotMatch(rust,/win\.navigate\(url\)/);
+ assert.match(rust,/fn open_ready_library/);
+ assert.doesNotMatch(source,/location\.replace\(home\)/);
 });

@@ -47,6 +47,16 @@ fn backend_ready_url(app: AppHandle) -> Option<String> {
 }
 
 #[tauri::command]
+fn open_ready_library(app: AppHandle) -> Result<(), String> {
+    let address = app.state::<BackendReady>().0.lock().unwrap().clone()
+        .ok_or("本地服务尚未就绪")?;
+    let window = app.get_webview_window("main").ok_or("主窗口不存在")?;
+    // 由原生宿主导航，避免本地协议页面的 JS 跳转被 WebView2 标记为跨站请求。
+    window.navigate(url::Url::parse(&address).map_err(|e| e.to_string())?)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 fn backend_startup_error(app: AppHandle) -> Option<String> {
     app.state::<BootError>().0.lock().unwrap().clone()
 }
@@ -446,6 +456,7 @@ fn main() {
             close_ui_ready,
             backend_startup_error,
             backend_ready_url,
+            open_ready_library,
             license_info,
             activate_with,
             updates::check_app_update,

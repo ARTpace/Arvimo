@@ -115,7 +115,13 @@
   // 跳转前先确认服务还活着。后台服务万一已经退出，直接跳到死端口会掉进浏览器的
   // 错误页（还会伴随一串 "Unsafe attempt to load URL ..." 报错）；宁可在这里把话说清楚。
   function goHome(attempt = 0) {
-    if (desktop) { location.replace(home); return; }
+    if (desktop) {
+      desktop.invoke('open_ready_library').catch(error => {
+        msg.textContent = '无法打开模型库';
+        tip.textContent = error.message || String(error);
+      });
+      return;
+    }
     fetch('/api/health', { cache: 'no-store' })
       .then(() => location.replace('/'))
       .catch(() => {
