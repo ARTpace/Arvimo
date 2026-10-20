@@ -25,6 +25,34 @@ fn valid_path(value: &str) -> bool {
 
 fn ps_literal(value: &str) -> String { format!("'{}'", value.replace('\'', "''")) }
 
+// 更新入口保留 Tauri 的完整参数（/UPDATE、/P、/R、/ARGS），同一安装包无需打开 WebView。
+fn update_arguments(args: &[String]) -> Option<String> {
+    if !args.iter().any(|arg| arg.eq_ignore_ascii_case("/UPDATE")) { return None; }
+    Some(args.iter().map(|arg| {
+        if !arg.is_empty() && !arg.chars().any(|ch| ch.is_whitespace() || ch == '"') { return arg.clone(); }
+        let mut quoted = String::from("\"");
+        let mut slashes = 0;
+        for ch in arg.chars() {
+            if ch == '\\' { slashes += 1; continue; }
+            if ch == '"' { quoted.push_str(&"\\".repeat(slashes * 2 + 1)); }
+            else { quoted.push_str(&"\\".repeat(slashes)); }
+            quoted.push(ch);slashes = 0;
+        }
+        quoted.push_str(&"\\".repeat(slashes * 2));quoted.push('"');quoted
+    }).collect::<Vec<_>>().join(" "))
+}
+
+fn run_update(arguments: &str) -> Result<i32, String> {
+    let temporary = std::env::temp_dir().join(format!("AssetVault-update-{}", std::process::id()));
+    fs::create_dir(&temporary).map_err(|e| e.to_string())?;
+    let result = (|| {
+        let engine = temporary.join("engine.exe");fs::write(&engine, ENGINE).map_err(|e| e.to_string())?;
+        let script = format!("$ErrorActionPreference='Stop'; try {{ $p=Start-Process -FilePath {} -ArgumentList {} -Verb RunAs -PassThru; $null=$p.Handle; $p.WaitForExit(); exit $p.ExitCode }} catch {{ exit 1 }}", ps_literal(&engine.to_string_lossy()), ps_literal(arguments));
+        Command::new("powershell.exe").args(["-NoProfile", "-NonInteractive", "-Command", &script]).creation_flags(HIDDEN).status().map(|s|s.code().unwrap_or(1)).map_err(|e|e.to_string())
+    })();
+    let _ = fs::remove_dir_all(temporary);result
+}
+
 fn installed_directory(value: &str) -> Option<PathBuf> {
     let value = value.trim().trim_matches('"');
     (valid_path(value) && Path::new(value).join("assetvault.exe").is_file()).then(|| PathBuf::from(value))
@@ -152,6 +180,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn main() {
+    if let Some(arguments) = update_arguments(&std::env::args().skip(1).collect::<Vec<_>>()) {
+        std::process::exit(run_update(&arguments).unwrap_or(1));
+    }
     if run().is_err() {
         // A machine without WebView2 must still be able to reach the NSIS bootstrapper.
         let temporary = std::env::temp_dir().join(format!("AssetVault-fallback-{}", std::process::id()));
@@ -169,6 +200,13 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn update_mode_preserves_arguments() {
+        assert_eq!(update_arguments(&[]), None);
+        assert_eq!(update_arguments(&["/P".into()]), None);
+        assert_eq!(update_arguments(&["/P".into(), "/UPDATE".into(), "/R".into(), "/ARGS".into(), "hello world".into()]).unwrap(), "/P /UPDATE /R /ARGS \"hello world\"");
+        assert_eq!(update_arguments(&["/UPDATE".into(), "a\"b\\".into()]).unwrap(), "/UPDATE \"a\\\"b\\\\\"");
+    }
     #[test]
     fn validate_nsis_directory() {
         assert!(valid_path("C:\\Program Files\\AssetVault"));

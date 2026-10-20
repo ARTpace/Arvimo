@@ -79,13 +79,13 @@ export function createTaskCard({esc,icon}){
   return parts.join('');
  };
  const actions=(t,{busy,done,canCancel})=>[
-  done&&t.fileExists?`<button data-dm-action="reveal" data-id="${t.id}">${icon('folder')}所在文件夹</button>`:'',
-  done&&t.fileExists&&!t.verification?.folder?`<a href="/api/downloads/tasks/${t.id}/file" class="task-link">另存副本</a>`:'',
+  done&&t.fileExists?`<button data-dm-action="reveal" data-id="${t.id}">${icon('folder')}文件夹</button>`:'',
+  done&&t.fileExists&&!t.verification?.folder?`<a href="/api/downloads/tasks/${t.id}/file" class="task-link">另存</a>`:'',
   canCancel?`<button data-dm-action="cancel" data-id="${t.id}">取消</button>`:'',
-  ['queued','retry_wait'].includes(t.state)?`<button data-dm-action="hold" data-id="${t.id}">暂停排队</button>`:'',
-  t.state==='held'?`<button data-dm-action="resume" data-id="${t.id}">继续排队</button>`:'',
-  TERMINAL.has(t.state)&&!done?`<button data-dm-action="retry" data-id="${t.id}">重新下载</button>`:'',
-  !busy&&!WAITING.has(t.state)?`<button data-dm-action="remove" data-id="${t.id}" title="只删除记录，不删除文件">移除记录</button>`:''
+  ['queued','retry_wait'].includes(t.state)?`<button data-dm-action="hold" data-id="${t.id}">暂停</button>`:'',
+  t.state==='held'?`<button data-dm-action="resume" data-id="${t.id}">继续</button>`:'',
+  TERMINAL.has(t.state)&&!done?`<button data-dm-action="retry" data-id="${t.id}">重试</button>`:'',
+  !busy&&!WAITING.has(t.state)?`<button data-dm-action="remove" data-id="${t.id}" title="只删除记录，不删除文件">移除</button>`:''
  ].join('');
  return (t,{selected,openDetails,openLog}={})=>{
   const busy=ACTIVE.has(t.state),done=t.state==='saved';
@@ -98,6 +98,6 @@ export function createTaskCard({esc,icon}){
   const facts=[sizeText(t.bytes||t.totalBytes),...(t.attempts>1?[`尝试 ${t.attempts} 次`]:[]),`${Math.floor(elapsed)}s`].join(' · ');
   // A completed task is already stated by the status line; "已保存到本机…" repeats it word for word.
   const message=done?'':`<p class="task-message">${esc(t.message)}</p>`;
-  return `<article class="task ${busy?'task-running':''}" data-job="${t.id}"><div class="task-main"><label class="task-checkbox"><input type="checkbox" data-job-select="${t.id}" aria-label="选择任务 ${esc(t.name)}" ${selected?'checked':''}></label>${t.thumbnail?`<img class="task-image" src="/api/image?url=${encodeURIComponent(t.thumbnail)}" alt="" loading="lazy">`:`<div class="task-image task-cube">${icon('cube')}</div>`}<div class="task-summary"><h3>${esc(t.name)}<span class="job-format">${esc(formatBadge(t))}</span></h3><div class="task-status ${error?'error':''}">${busy?'<span class="spinner"></span>':''}${esc(status)} <span class="job-facts">${facts}</span></div>${message}${t.warning?`<p class="task-warning">${esc(t.warning)}</p>`:''}${busy?liveSection(t,view,n):''}</div><div class="task-actions">${actions(t,{busy,done,canCancel})}</div></div><details class="task-details" data-kind="details" data-id="${t.id}" ${openDetails?'open':''}><summary>详情<span>${TERMINAL.has(t.state)?'保存位置 · 校验信息':'保存位置 · 进度明细'}</span></summary><div class="task-details-body">${detailBody(t,view,n)}</div></details><details class="task-log" data-kind="log" data-id="${t.id}" ${openLog?'open':''}><summary>任务日志 · ${t.logs.length} 条 · ${esc(t.author)} <span>${new Date(t.createdAt).toLocaleString()}</span></summary><div class="task-log-head"><button data-dm-action="log" data-id="${t.id}">导出日志</button><span>${esc(t.downloadDir)}</span></div><pre>${esc(t.logs.join('\n')||'任务尚未开始')}</pre></details></article>`;
+  return `<article class="task ${busy?'task-running':''}" data-job="${t.id}"><div class="task-main"><label class="task-checkbox"><input type="checkbox" data-job-select="${t.id}" aria-label="选择任务 ${esc(t.name)}" ${selected?'checked':''}></label>${t.thumbnail?`<img class="task-image" src="/api/image?url=${encodeURIComponent(t.thumbnail)}" alt="" loading="lazy">`:`<div class="task-image task-cube">${icon('cube')}</div>`}<div class="task-summary"><h3>${esc(t.name)}<span class="job-format">${esc(formatBadge(t))}</span></h3><div class="task-status ${error?'error':''}">${busy?'<span class="spinner"></span>':''}${esc(status)} <span class="job-facts">${facts}</span></div>${message}${t.warning?`<p class="task-warning">${esc(t.warning)}</p>`:''}${busy?liveSection(t,view,n):''}</div><div class="task-actions">${actions(t,{busy,done,canCancel})}<button data-task-disclosure="details" aria-expanded="${!!openDetails}">详情</button><button data-task-disclosure="log" aria-expanded="${!!openLog}">日志</button></div></div><details class="task-details" data-kind="details" data-id="${t.id}" ${openDetails?'open':''}><summary>详情<span>${TERMINAL.has(t.state)?'保存位置 · 校验信息':'保存位置 · 进度明细'}</span></summary><div class="task-details-body">${detailBody(t,view,n)}</div></details><details class="task-log" data-kind="log" data-id="${t.id}" ${openLog?'open':''}><summary>任务日志 · ${t.logs.length} 条 · ${esc(t.author)} <span>${new Date(t.createdAt).toLocaleString()}</span></summary><div class="task-log-head"><button data-dm-action="log" data-id="${t.id}">导出日志</button><span>${esc(t.downloadDir)}</span></div><pre>${esc(t.logs.join('\n')||'任务尚未开始')}</pre></details></article>`;
  };
 }

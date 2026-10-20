@@ -84,7 +84,8 @@ try:
                     subprocess.run(['taskkill', '/PID', str(proc.pid), '/F'], check=True, capture_output=True)
                     proc.wait(timeout=10)
                 else:
-                    page.evaluate("window.dispatchEvent(new Event('assetvault:open-updates'))")
+                    page.locator('#settings-button').click()
+                    page.locator('[data-settings-page="updates"]').click()
                     exit_button = page.get_by_role('button', name='退出应用', exact=True)
                     assert exit_button.is_visible()
                     exit_button.evaluate('(button)=>{button.click()}')

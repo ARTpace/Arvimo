@@ -31,6 +31,9 @@ import {esc} from './html-esc.js';
 import {filterLocalAssets} from './local-filters.js';
 import {createAISettings} from './ai-settings.js';
 import {tagsFor,addAITags,tagPanel} from './asset-tags.js';
+import {previewActions} from './preview-actions.js';
+import {authorButton} from './asset-author.js';
+import {createSimilarAssets} from './similar-assets.js';
 import {createSettingsPanel} from './settings-panel.js';
 import {createAppUpdates} from './app-updates.js';
 import {bindLocalSearch,createLocalQueryParser,createThemeBrainstorm,createTagSuggester} from './search-translation.js';
@@ -107,16 +110,30 @@ const cardView=createCardView({icon,esc,fmt,state,queuePulse,imageDownload,blend
 const gltfPreview=createGltfPreview();
 const view=createLibraryView({$,icon,esc,fmt,state,queuePulse,cardView,composite,filtered,activeModes,galleryActive,categories:CATEGORIES,describeArt:request=>artstation.describe(request),artstationUI:()=>artstation,downloadsUI:()=>downloads,filterTreesUI:()=>filterTrees,mergedFiltersUI:()=>mergedFilters,findModel,blenderSendButton,imageDownload,gltfPreview});
 const {counts,renderStatus,renderGrid,placeFilters,preview:previewAsset,syncStickyOffset}=view;
+const similarAssets=createSimilarAssets({dialog:$('#preview-dialog'),state,
+ candidates:()=>[...state.models,...Object.values(state.feeds).flatMap(feed=>feed.rows)],
+ imageUrl:model=>cardView.imageUrl(model),onPreview:uid=>preview(uid)});
 function refreshPreviewTags(uid){
  if(!$('#preview-dialog').open)return;
  const details=$('#model-details'),model=findModel(uid);if(!model||details.dataset.tagUid!==uid)return;
+ const author=details.querySelector('.author-name');if(author)author.innerHTML=authorButton(model);
  details.querySelectorAll('.tag-list,[data-action="ai-tags"],.asset-tags').forEach(node=>node.remove());
  details.insertAdjacentHTML('beforeend',tagPanel(state,model,esc));
+ // ponytail: 各平台沿用原有预览内容，仅统一操作区，不复制各平台的详情渲染。
+ details.querySelectorAll('.preview-actions,[data-action="collect"],[data-action="favorite"],[data-action="download"],[data-action="blender-send"]').forEach(node=>node.remove());
+ const blenderButton=blenderSendButton({job:findLocalJob(downloads?.jobs||[],uid),className:'secondary preview-blender'});
+ const license=details.querySelector('.detail-license');
+ const actions=previewActions({model,favorite:state.favorites.has(uid),icon,blenderButton});
+ if(license)license.insertAdjacentHTML('afterend',actions);else details.insertAdjacentHTML('beforeend',actions);
+ const resolution=details.querySelector('.material-resolution');
+ if(resolution)details.querySelector('.preview-actions').insertAdjacentElement('beforebegin',resolution);
+ const source=details.querySelector('.source-link');if(source)details.append(source);
 }
 function preview(uid){
  previewAsset(uid);
  $('#model-details').dataset.tagUid=uid;
  refreshPreviewTags(uid);
+ similarAssets.show(findModel(uid));
 }
 // 发起检索也有自己的模块（discovery-feed.js）：翻页、关键词、粘贴链接三条入口共用同一段取流逻辑。
 const feed=createDiscoveryFeed({$,toast,state,persist,renderGrid,mergeModels,describeArt:request=>artstation.describe(request),activeModes,showsFeed,searchHistoryUI:()=>searchHistory,resolveArtworkLink:url=>resolveArtworkLink(url),routeTo:route,readRequest:mode=>readRequest(mode),clearSearchTimer:()=>clearTimeout(searchTimer),feedError:feedErrorMessage,markQueryActive:()=>{hadQuery=true;}});
@@ -133,7 +150,7 @@ function composite(){
 function showsFeed(mode){return mode==='web'||activeModes().includes(mode);}
 // 每个在线结果流都要查：ArtStation 结果只存在于 feeds.art，漏掉它会让预览与下载
 // 在全平台结果里“点了没反应”（findModel 返回 undefined 后静默 return）。
-function findModel(uid){return FEEDS.reduce((hit,mode)=>hit||state.feeds[mode].rows.find(m=>m.uid===uid),null)||state.models.find(m=>m.uid===uid)||downloads?.jobs.findLast(m=>m.uid===uid)||state.tasks.findLast(m=>m.uid===uid);}
+function findModel(uid){return FEEDS.reduce((hit,mode)=>hit||state.feeds[mode].rows.find(m=>m.uid===uid),null)||state.models.find(m=>m.uid===uid)||similarAssets.find(uid)||downloads?.jobs.findLast(m=>m.uid===uid)||state.tasks.findLast(m=>m.uid===uid);}
 
 function filtered(){
  if(state.route==='discover'){
@@ -141,7 +158,7 @@ function filtered(){
   if(state.platform===ALL&&$('#unified-sort').value==='name')return [...rows].sort((a,b)=>String(a.name||'').localeCompare(String(b.name||''),'zh'));
   return rows;
  }
- let models=state.models.filter(m=>state.route!=='favorites'||state.favorites.has(m.uid));
+ let models=state.models.filter(m=>state.filter!=='favorites'||state.favorites.has(m.uid));
  if(state.filter==='downloadable')models=models.filter(m=>m.downloadable);if(state.filter==='animated')models=models.filter(m=>m.animations>0);
  models=filterLocalAssets(models.map(m=>({...m,tags:tagsFor(state,m)})),{kind:$('#local-kind').value,status:$('#local-status').value,search:state.search,english:state.searchEnglish||''},downloads?.connected?downloads.jobs:null);
  return [...models].sort(state.sort==='popular'?(a,b)=>b.likes-a.likes:state.sort==='name'?(a,b)=>a.name.localeCompare(b.name):(a,b)=>(b.addedAt||0)-(a.addedAt||0));
@@ -167,6 +184,7 @@ function restoreRouteScroll(top){
  requestAnimationFrame(()=>requestAnimationFrame(()=>window.scrollTo(0,Math.max(0,top))));
 }
 function route(name){
+ if(name==='favorites'){name='library';state.filter='favorites';$('#local-feature').value='favorites';}
  // 先读、后动显隐：这一读拿到的还是切走前用户看到的位置。
  const leaving=state.route;
  if(leaving&&leaving!==name)routeScroll.set(leaving,window.scrollY);
@@ -264,7 +282,10 @@ function applyContentMode(id){
  setPlatform(target.platform,{gallery:target.gallery});
 }
 /** R1：统一树的组头一键筛选把整组的 slug 串写进隐藏容器（多值），它非空时优先于单值叶子。 */
-function readCategory(){return $('#online-category-group').value||$('#online-category').value;}
+function readCategory(){
+ if(state.platform===ALL)return feedPlan({group:$('#online-category-group').value,leaf:$('#unified-category').value})?.sketchfab?.category||'';
+ return $('#online-category').value;
+}
 function readSearch(){return searchParams({q:$('#asset-query').value,category:readCategory(),sort:$('#online-sort').value,downloadable:$('#online-downloadable').checked,animated:$('#online-animated').checked,staffpicked:$('#online-staffpicked').checked});}
 /** R4：选中的分类 A 站没有对应映射时，这一路本轮不检索。
  *  旧结果一并丢掉——留着会让人以为「这回搜出来的就是这些 A 站结果」；token 前进一位是为了让
@@ -280,7 +301,7 @@ function skipFeed(mode,reason){
 /** 每个源读自己那套筛选参数；关键词只有一个，由所有平台共用。 */
  const readRequest=mode=>{
   const picked=state.platform===ALL&&mergedFilters?.kinds?mergedFilters.kinds():[];
-  const plan=state.platform===ALL?feedPlan({group:$('#online-category-group').value,leaf:$('#online-category').value}):null;
+  const plan=state.platform===ALL?feedPlan({group:$('#online-category-group').value,leaf:$('#unified-category').value}):null;
   const baseQ=$('#asset-query').value.trim();
   const refuse=(type,reason)=>{if(picked.length&&!kindAllows(picked,mode,type)){skipFeed(mode,reason||'当前范围不包含这个资产类型');return true;}return false;};
   if(plan){
@@ -311,7 +332,7 @@ function skipFeed(mode,reason){
   }
   const request=mode==='art'?artstation.read():readSearch();
   if(mode==='art'&&state.platform===ALL){
-   const categoryIds=artstationCategory({group:$('#online-category-group').value,leaf:$('#online-category').value});
+   const categoryIds=artstationCategory({group:$('#online-category-group').value,leaf:$('#unified-category').value});
    if(categoryIds===null){skipFeed('art','这个题材在 ArtStation 没有对应分类');return null;}
    request.category=categoryIds;
    if($('#online-sort').value==='newest'||$('#online-sort').value==='relevance')request.sort=$('#online-sort').value;
@@ -323,6 +344,7 @@ function skipFeed(mode,reason){
  *  选项，所以它一定属于隐藏容器；单值照旧写 #online-category。这样「整组检索」被记进历史再回放，
  *  还能原样重现，不会退化成某个叶子。 */
 function writeSearch(params){
+ $('#unified-category').value='';
  const p=searchParams(params);
  $('#asset-query').value=p.q;$('#online-sort').value=p.sort;for(const key of ['downloadable','animated','staffpicked'])$('#online-'+key).checked=p[key];
  const grouped=p.category.includes(',');
@@ -535,7 +557,7 @@ function setup(){
   $('#asset-query').value=chip.dataset.term;refreshTopicStrip();startSearch({record:true});
  });
   // 两个分类容器都要监听：统一树点叶子写 #online-category、点组头写 #online-category-group，改哪个都重搜。
- for(const id of ['online-category','online-category-group','online-sort','online-downloadable','online-animated','online-staffpicked'])$('#'+id).onchange=()=>restartSearch();
+ for(const id of ['online-category','unified-category','online-category-group','online-sort','online-downloadable','online-animated','online-staffpicked'])$('#'+id).onchange=()=>restartSearch();
  $('#unified-sort').onchange=()=>{
   const next=$('#unified-sort').value;
   if(next==='name'){renderGrid();return;}
@@ -562,6 +584,21 @@ const tagSuggester=createTagSuggester();
   if(!$('#asset-tags-dialog').open)$('#asset-tags-dialog').showModal();
  }
  document.addEventListener('click',event=>{
+  const author=event.target.closest('[data-author-uid]');
+  if(author){
+   const model=findModel(author.dataset.authorUid);
+   if(model?.username){
+    $('#preview-dialog').close();$('#asset-tags-dialog').close();
+    clearTimeout(searchTimer);$('#asset-query').value='';resetDiscoveryFeeds(state);
+    setPlatform(model.platform==='artstation'?'artstation':'sketchfab',{autostart:false});route('discover');refreshTopicStrip();
+    if(model.platform==='artstation'){
+     $('#art-type').value='';$('#art-category').value='';$('#art-picked').checked=false;
+     $('#art-artist').value=model.username;$('#art-artist-projects').click();
+    }else submitLink(`https://sketchfab.com/${encodeURIComponent(model.username)}/models`);
+   }
+  }
+  const favorite=event.target.closest('#model-details [data-action="favorite"]');
+  if(favorite)refreshPreviewTags(favorite.dataset.uid);
   const button=event.target.closest('[data-action="asset-tags"]');
   if(button)openTags(button.dataset.uid);
   if(event.target.closest('#asset-tags-dialog [data-tag]'))$('#asset-tags-dialog').close();
@@ -667,7 +704,7 @@ $('#preview-dialog').addEventListener('close',()=>{
  const aiSettings=createAISettings({$,toast});
  const appUpdates=createAppUpdates({hasActiveTasks:()=>downloads.activeCount()>0});
  settingsPanel=createSettingsPanel({$,loadAI:()=>aiSettings.load(),updateCard:appUpdates.card});
- window.addEventListener('assetvault:open-updates',()=>settingsPanel.open('updates'));
+ window.addEventListener('assetvault:open-updates',()=>appUpdates.open());
  appUpdates.start();
  $('#open-setup-wizard').onclick=()=>{$('#settings-dialog').close();setupWizard?.open();};
  $('#reset-folder').onclick=()=>{$('#backend-folder').value=downloads.defaultFolder||downloads.settings?.folder||'';};

@@ -18,5 +18,9 @@ const run=(script,args=[])=>{
 };
 run(path.join(root,'node_modules/@tauri-apps/cli/tauri.js'),['build']);
 run('scripts/build-custom-installer.mjs');
+const {version}=JSON.parse(await fs.readFile(path.join(root,'src-tauri/tauri.conf.json'),'utf8'));
+// Sign the final wrapper: first installs and in-app updates now download identical bytes.
+let keyArgs=[];try{await fs.access(env.TAURI_SIGNING_PRIVATE_KEY);keyArgs=['--private-key-path',env.TAURI_SIGNING_PRIVATE_KEY];delete env.TAURI_SIGNING_PRIVATE_KEY;}catch{}
+run(path.join(root,'node_modules/@tauri-apps/cli/tauri.js'),['signer','sign',...keyArgs,'--app-version',version,path.join(root,'dist',`AssetVault_${version}_x64-setup.exe`)]);
 run('scripts/prepare-release.mjs');
 run('scripts/clean-installers.mjs',['--apply']);

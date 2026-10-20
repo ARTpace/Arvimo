@@ -232,9 +232,9 @@ test('thumbnails that must stay whole get the contain marker, crops stay default
  withClass({uid:'1'.repeat(32),name:'Arm Chair 01',platform:'polyhaven',assetType:'models',thumbnail:'',license:'CC0',downloadable:true},'Poly Haven 模型（竖幅）');
  withClass({uid:'2'.repeat(32),name:'Dawn 2',platform:'polyhaven',assetType:'hdris',thumbnail:'',license:'CC0',downloadable:true},'Poly Haven HDRI（横幅）');
  withClass({uid:'3'.repeat(32),name:'Fabric 085',platform:'ambientcg',assetType:'textures',thumbnail:'',license:'CC0',downloadable:true},'ambientCG 贴图');
- // 反证：这两个平台的图本身就是方形，裁切无害，别无谓加 contain 留黑边。
+ withClass({uid:'4'.repeat(32),name:'Robot',platform:'sketchfab',thumbnail:'',license:'CC0',downloadable:true},'Sketchfab 横幅效果图');
+ // 其他平台继续保留原有展示方式。
  for(const m of [
-  {uid:'4'.repeat(32),name:'Robot',platform:'sketchfab',thumbnail:'',license:'CC0',downloadable:true},
   {uid:'5'.repeat(32),name:'Scene',platform:'artstation',thumbnail:'',license:'CC0',downloadable:true},
   {uid:'6'.repeat(32),name:'Chair',platform:'kenney',thumbnail:'',license:'CC0',downloadable:true},
  ])assert.equal(render(m).includes('thumb-contain'),false,`${m.platform} 不该被标成完整显示`);

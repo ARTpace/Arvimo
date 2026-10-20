@@ -136,9 +136,11 @@ function buildPanel({$,icon,host,spec}){
  const views=fields.map(field=>buildField({field,icon,keep}));
  for(const view of views)tree.append(view.section);
  if(reset){
-  const foot=el('div','ftree-foot');
-  reset.classList.add('ftree-reset');
-  foot.append(reset);tree.append(foot);
+  reset.className='filter-reset-icon';reset.innerHTML=icon('rotate');
+  reset.title='重置筛选';reset.setAttribute('aria-label','重置筛选');
+  const category=views.find(view=>view.field.key==='category')||views[0];
+  const head=category.section.querySelector('.ftree-branch');
+  const row=el('div','filter-category-row');category.section.prepend(row);row.append(head,reset);
  }
  host.append(tree,keep);
 

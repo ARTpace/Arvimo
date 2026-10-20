@@ -20,7 +20,7 @@ function counts(){
  const activeUids=new Set(activeJobs.map(j=>j.uid));
  const pulse=[...queuePulse].filter(([uid,t])=>Date.now()-t<6000&&!activeUids.has(uid)).length;
  const queue=activeJobs.length+pulse;
- $('#nav-count').textContent=state.models.length;$('#fav-count').textContent=state.models.filter(m=>state.favorites.has(m.uid)).length;$('#queue-count').textContent=queue;$('#queue-count').classList.toggle('has-queue',queue>0);
+ $('#nav-count').textContent=state.models.length;$('#queue-count').textContent=queue;$('#queue-count').classList.toggle('has-queue',queue>0);
  $('#selected-count').textContent=state.selected.size;$('#selection-bar').hidden=!state.selected.size||state.route==='downloads';
 }
 function renderStatus(){

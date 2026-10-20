@@ -27,9 +27,9 @@ test('只在发现页整理也能持久保存，关闭重开或平台重新返�
  const rows=[{uid,name:'Asset',tags:tagsFor(restored,model)}];
  assert.equal(filterLocalAssets(rows,{search:'机器人'}).length,1);
 });
-test('平台和 AI 标签分组展示并安全转义，重复标签不重复显示',()=>{
+test('原始和 AI 标签紧凑合并并安全转义，重复标签不重复显示',()=>{
  const html=tagPanel({aiTags:{[uid]:['TREE','<script>']}},{uid,tags:['tree','rock']},esc);
- assert.match(html,/平台标签/);assert.match(html,/保存在本机/);
+ assert.doesNotMatch(html,/平台标签|AI 标签 ·|<small>/);assert.match(html,/✦ AI标签/);
  assert.match(html,/&lt;script&gt;/);assert.doesNotMatch(html,/>TREE</);
  assert.match(html,/data-action="ai-tags"/);
 });

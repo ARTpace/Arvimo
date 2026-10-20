@@ -7,6 +7,14 @@
  * 任何一边加了新分类、这里没跟上，测试会直接点出来。
  */
 import test from 'node:test';
+test('统一分类使用独立值容器，不把内部编号写入 Sketchfab 原生分类下拉框',()=>{
+ const ui=readFileSync(new URL('../src/library/merged-filters.js',import.meta.url),'utf8');
+ const app=readFileSync(new URL('../src/library/app.js',import.meta.url),'utf8');
+ const html=readFileSync(new URL('../src/library/index.html',import.meta.url),'utf8');
+ assert.match(ui,/const categorySelect=\$\('#unified-category'\)/);
+ assert.match(html,/<input type="hidden" id="unified-category"/);
+ assert.match(app,/feedPlan\(\{group:.*leaf:\$\('#unified-category'\).value/);
+});
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {CATEGORIES,searchParams} from '../src/library/search-options.js';

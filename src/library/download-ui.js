@@ -65,6 +65,11 @@ export function createDownloadUI({$,icon,esc,toast,legacy,requestLegacy,onUpdate
  async function pickFolder(initial){const data=await api('/pick-folder',{folder:initial||ui.settings?.folder||ui.defaultFolder||''});return data?.cancelled?null:data.folder;}
  async function chooseFolder(input,error){const button=$('#browse-download-path');if(button)button.disabled=true;if(error)error.textContent='';try{const folder=await pickFolder(input.value.trim());if(folder)input.value=folder;}catch(e){if(error)error.textContent=e.message;toast(e.message);}finally{if(button)button.disabled=false;}}
  function setup(){
+  $('#tasks').addEventListener('click',e=>{
+   const button=e.target.closest('[data-task-disclosure]');if(!button)return;
+   const detail=button.closest('.task').querySelector(`details[data-kind="${button.dataset.taskDisclosure}"]`);
+   detail.open=!detail.open;button.setAttribute('aria-expanded',String(detail.open));
+  });
   document.addEventListener('click',e=>{const filter=e.target.closest('[data-task-filter]');if(filter){ui.filter=filter.dataset.taskFilter;render();}const button=e.target.closest('[data-dm-action]');if(button)action(button.dataset.dmAction,button.dataset.id);const batchButton=e.target.closest('[data-task-batch]');if(batchButton)batch(batchButton.dataset.taskBatch);const old=e.target.closest('[data-legacy-download]');if(old)requestLegacy(old.dataset.legacyDownload);});
   $('#tasks').addEventListener('change',e=>{const id=e.target.dataset.jobSelect;if(id){e.target.checked?ui.selected.add(id):ui.selected.delete(id);render();}});
   $('#task-select-visible').onclick=()=>{for(const t of visible())ui.selected.add(t.id);render();};$('#task-deselect').onclick=()=>{ui.selected.clear();render();};

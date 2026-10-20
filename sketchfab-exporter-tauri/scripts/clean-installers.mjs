@@ -27,7 +27,7 @@ for(const dir of [bundle,dist]){
   if(path.dirname(candidate)!==dir)throw Error('Installer path escaped its output folder.');
   // 当前版本的 setup / update / sig 是发布资产，不清；引擎副本正常情况下已被
   // prepare-release 删掉，这里兜底跳过，避免误删本次构建的中间产物。
-  const current=[`${name}-setup.exe`,`${name}-update.exe`,`${name}-update.exe.sig`];
+  const current=[`${name}-setup.exe`,`${name}-setup.exe.sig`];
   if(candidate===keep||candidate===engine||current.includes(entry.name))continue;
   const old=await fs.stat(candidate);
   if(process.argv.includes('--apply'))await fs.unlink(candidate);

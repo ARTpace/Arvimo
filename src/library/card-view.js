@@ -6,6 +6,7 @@
 // Two collaborators are passed as getters because they are wired up later than this module exists.
 import {coverRendition} from './gallery-view.js';
 import {classifyBlenderJob} from './blender-send.js';
+import {authorButton} from './asset-author.js';
 
 export function createCardView({icon,esc,fmt,state,queuePulse,imageDownload,blenderSendButton,platformLabel,artstationUI=()=>null,downloadsUI=()=>null}){
 /** 封面一律走本地代理，代理负责按需降级到能取到的档位；
@@ -20,9 +21,9 @@ function imageUrl(model,{gallery=false}={}){
 function isMaterial(m){return m.platform==='ambientcg'||m.platform==='polyhaven'&&m.assetType==='textures'||m.platform==='freestylized'&&m.assetType==='textures';}
 /** Poly Haven 的缩略图是官方按资产形状竖/横排的（models 竖幅 148×256~193×255、hdris 横幅 256×192、
  *  textures 近方 255×256），而卡片是 1:1 容器 + object-fit:cover —— 直接 cover 会把模型切掉上半、把全景切掉两端。
- *  ambientCG / FreeStylized 的贴图同理。所以这两个平台的缩略图一律完整显示（contain），不做裁切。
+ *  Sketchfab 横幅效果图、ambientCG / FreeStylized 的贴图同理，复用 contain 并关闭悬停放大。
  *  归到独立标记而不是复用 isMaterial：那只是「是不是贴图」，与「要不要裁切」无关。 */
-function needsFullThumb(m){return m.platform==='polyhaven'||m.platform==='ambientcg'||m.platform==='freestylized';}
+function needsFullThumb(m){return m.platform==='sketchfab'||m.platform==='polyhaven'||m.platform==='ambientcg'||m.platform==='freestylized';}
 function isHdri(m){return m.platform==='polyhaven'&&m.assetType==='hdris';}
 /** 许可标识只留缩写：「CC0 1.0 通用公共领域贡献」→ CC0，完整许可说明留在 title 里。
  *  卡片标题行要放标题、作者、许可三样，全称会把标题挤没（2026-10-16 用户要求简化）。 */
@@ -71,7 +72,7 @@ function card(m,{gallery=false}={}){
  // 重渲染后原样回填；下载时队列从模型上读，整批取第一张的选择（服务端会再校验一次）。
  const materialResolution=`<button class="text-button" data-action="asset-tags" data-uid="${esc(m.uid)}" title="查看平台标签与管理 AI 标签">✦ 标签</button>`+materialResolutionSelect(m,downloadedRes);
  // meta 一行化：作者与平台标签重复时（如 ambientCG）不再显示，只留「标题 · 作者 · 许可」。
- const byline=m.author&&m.author.trim()!==platformLabel(m.platform)?`<span class="card-byline" title="${esc(m.author)}">${esc(m.author)}</span>`:'';
+ const byline=m.author&&m.author.trim()!==platformLabel(m.platform)?authorButton(m,'card-byline'):'';
  // 控件拆成可复用的片段：紧凑视图缩略图只有 96px，角标与按键全叠在上面等于糊成一团，
  // 所以紧凑视图把它们整体搬进右侧信息栏（图片本身不再叠层，标题与预览键仍可打开预览）。
  // 左上角只放资源类型标志（模型/材质/HDRI/天空盒…）。下载与导出状态由左下角「已加入模型库」、

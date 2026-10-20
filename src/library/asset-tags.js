@@ -18,8 +18,6 @@ export function addAITags(state,model,incoming){
  return next.filter(tag=>!previous.has(tag.toLocaleLowerCase())).length;
 }
 export function tagPanel(state,model,esc){
- const platform=mergeTags(model.tags||[]),originalKeys=new Set(platform.map(t=>t.toLocaleLowerCase()));
- const ai=mergeTags(state.aiTags?.[model.uid]||[]).filter(t=>!originalKeys.has(t.toLocaleLowerCase()));
- const group=(title,tags,empty)=>`<div class="asset-tag-group"><small>${title}</small><div class="tag-list">${tags.length?tags.map(t=>`<button type="button" data-tag="${esc(t)}">${esc(t)}</button>`).join(''):`<span class="muted">${empty}</span>`}</div></div>`;
- return `<section class="asset-tags" data-asset-tags="${esc(model.uid)}">${group('平台标签',platform,'平台暂无标签')}${group('AI 标签 · 保存在本机',ai,'尚未生成 AI 标签')}<button type="button" class="secondary" data-action="ai-tags" data-uid="${esc(model.uid)}">${ai.length?'继续补充 AI 标签':'AI 整理标签'}</button></section>`;
+ const tags=tagsFor(state,model);
+ return `<section class="asset-tags" data-asset-tags="${esc(model.uid)}"><div class="tag-list">${tags.map(t=>`<button type="button" data-tag="${esc(t)}">${esc(t)}</button>`).join('')}<button type="button" class="secondary ai-tag-button" data-action="ai-tags" data-uid="${esc(model.uid)}" title="补充 AI 标签并自动保存，保留原有标签">✦ AI标签</button></div></section>`;
 }

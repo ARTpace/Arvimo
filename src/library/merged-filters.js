@@ -44,11 +44,8 @@ export function createMergedFilters({$,icon,state,onReset,onSearch}){
  host.textContent='';
  const tree=el('div','ftree');
  tree.setAttribute('aria-label','统一筛选');
- const plate=el('div','ftree-plate');plate.style.setProperty('--tone','#c9f581');
- plate.append(el('span','ftree-plate-emoji','✨'),el('span','ftree-plate-name','统一筛选'));
- tree.append(plate);
 
- const categorySelect=$('#online-category');
+ const categorySelect=$('#unified-category');
  const sortSelect=$('#online-sort');
  const artSort=$('#art-sort');
 
@@ -100,8 +97,9 @@ export function createMergedFilters({$,icon,state,onReset,onSearch}){
  const groupSelect=$('#online-category-group');       // R1：整组多值只写这个容器
  const pickCategory=value=>{
   // R1 的语义互斥：选了叶子，整组串就得清掉，否则 readCategory 还是先读组容器。
-  if(groupSelect&&groupSelect.value)groupSelect.value='';
-  if(categorySelect.value!==value){
+  const hadGroup=!!groupSelect?.value;
+  if(hadGroup)groupSelect.value='';
+  if(categorySelect.value!==value||hadGroup){
    categorySelect.value=value;                        // 写入即触发上面拦下的 setter → sync
    categorySelect.dispatchEvent(new Event('change',{bubbles:true}));   // 走 app.js 的 onchange → 重搜两个源
   }else sync();
@@ -145,10 +143,10 @@ export function createMergedFilters({$,icon,state,onReset,onSearch}){
  const clearKinds=()=>{const node=$('#unified-kind');if(node)node.value='';};
 
  for(const box of [catBox])tree.append(box.section);
- const foot=el('div','ftree-foot');
- const reset=el('button','text-button side-reset ftree-reset');reset.type='button';reset.textContent='↻ 重置筛选';
+ const reset=el('button','filter-reset-icon');reset.type='button';reset.innerHTML=icon('rotate');
+ reset.title='重置筛选';reset.setAttribute('aria-label','重置筛选');
  reset.addEventListener('click',()=>onReset&&onReset());
- foot.append(reset);tree.append(foot);
+ const categoryRow=el('div','filter-category-row');catBox.section.prepend(categoryRow);categoryRow.append(catBox.head,reset);
 
  host.append(tree);
 
