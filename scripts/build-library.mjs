@@ -43,6 +43,13 @@ const desktopSrc=path.join(desktopRoot,'src');
 try{
   await fs.access(path.join(desktopRoot,'src-tauri','tauri.conf.json'));
   for(const f of ['index.html','app.css','app.js','engine.js','favicon.svg','worker.html','splash.html','splash.js','mascot.png'])await fs.copyFile(path.join(output,f),path.join(desktopSrc,f));
+  // 共用同一份吉祥物、布局与动画，等待服务阶段不再另起一套启动界面。
+  const splash=await fs.readFile(path.join(output,'splash.html'),'utf8');
+  await fs.writeFile(path.join(desktopSrc,'splash.css'),splash.match(/<style>([\s\S]*?)<\/style>/)[1]);
+  const waitingPath=path.join(desktopSrc,'waiting.html');
+  const waiting=await fs.readFile(waitingPath,'utf8');
+  const stage=splash.match(/<main[\s\S]*?<\/main>/)[0].replace('id="msg"','id="msg" role="status" aria-live="polite"');
+  await fs.writeFile(waitingPath,waiting.replace(/<!-- startup:start -->[\s\S]*?<!-- startup:end -->/,`<!-- startup:start -->\n<div id="boot">${stage}</div>\n<!-- startup:end -->`));
   console.log('桌面版前端已同步 -> sketchfab-exporter-tauri/src');
 }catch{/* 没有桌面工程（单独用库工程时）就跳过 */ }
 console.log('Local library built. Start: node server/library.mjs');

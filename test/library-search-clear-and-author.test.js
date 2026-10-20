@@ -34,8 +34,8 @@ test('搜索词被清空后要重新检索，不能停在旧结果上',()=>{
  assert.ok(app.includes('function searchStillActive'),'要用「结果区是否仍是检索态」判定');
  assert.ok(/\$\('#asset-query'\)\.value\.trim\(\)\)return;\s*\/\/[^\n]*\n\s*if\(!searchStillActive\(\)&&!hadQuery\)return/.test(app),
   '框已空 + 结果区已回浏览态时才什么都不做');
- assert.ok(/return activeModes\(\)\.some\(mode=>\{const request=state\.feeds\[mode\]\?\.request/.test(app),
-  '浏览态判据要按当前平台的每个结果流自己的 request 读');
+ assert.ok(app.includes('return Object.values(state.feeds).some('),
+  '清空判据必须覆盖隐藏平台和在途请求');
  assert.ok(app.includes('let hadQuery=false')&&app.includes('hadQuery=true'),
   'hadQuery 保留为补充判据（首次打开页面框本来就是空的，不能当成一次删除）');
  assert.ok(feed.includes('markQueryActive'),'发起检索时要记下「框里有内容」');

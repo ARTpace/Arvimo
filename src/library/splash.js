@@ -1,15 +1,8 @@
-/* AssetVault 启动画面。
- *
- * 这个页面由服务端自己提供 —— 浏览器能把它打开，就说明后台服务已经在 4178 上监听了。
- * 所以这里不做「等服务起来」的轮询，只做三件事：把动效完整走一遍、顺手预热工作台
- * 接下来要用的接口、然后把浏览器交给工作台首页。首页是同一个服务同一个端口，
- * 跳转不可能落空。
- *
- * 进度条有两段：先自然爬到 92%（预热请求没回来就不会进入下一段），
- * 预热完成且动效至少播够 MIN_MS 之后，再从小方块脚下冲满。
- */
+/* 共用启动界面：桌面端等 Rust 确认服务就绪，浏览器端预热接口后进入首页。
+ * 桌面端在应用本地协议下运行，不跨源请求后端，也不再导航到第二张加载页。 */
 (() => {
-  const MIN_MS = 1900;    // 动效至少播这么久，否则一闪而过根本看不清
+  const desktop = location.pathname.endsWith('/waiting.html') && window.__TAURI__?.core;
+  const MIN_MS = desktop ? 650 : 1900;
   const RAMP_MS = 1400;   // 第一段自然爬升的时间常数
   const BURST_MS = 420;   // 最后冲满的时长
   const HOLD_MS = 620;    // 冲满之后停留多久再跳转
@@ -30,6 +23,7 @@
 
   const t0 = Date.now();
   let shown = 0, line = -1, phase = 'loading', burstAt = 0, burstFrom = 0, warm = false, last = t0;
+  let home = '/';
 
   function paint(v) {
     fill.style.width = v + '%';
@@ -41,7 +35,11 @@
       line = next;
       const text = LINES[next][1];
       msg.classList.add('swap');
-      setTimeout(() => { msg.textContent = text; msg.classList.remove('swap'); }, 220);
+      setTimeout(() => {
+        if (phase !== 'loading') return;
+        msg.textContent = desktop && !warm ? '正在启动本地模型库服务…' : text;
+        msg.classList.remove('swap');
+      }, 220);
     }
   }
 
@@ -58,6 +56,31 @@
       Promise.all([health, tasks]),
       new Promise(resolve => setTimeout(resolve, 4000)),
     ]).then(() => { warm = true; });
+  }
+
+  async function waitForBackend() {
+    try {
+      const [error, url] = await Promise.all([
+        desktop.invoke('backend_startup_error'), desktop.invoke('backend_ready_url'),
+      ]);
+      if (error) throw new Error(error);
+      if (url) {
+        const target = new URL(url);
+        if (target.protocol !== 'http:' || target.hostname !== '127.0.0.1' || target.pathname !== '/') {
+          throw new Error('本地服务地址无效，请重新启动 AssetVault。');
+        }
+        home = target.href;warm = true;
+        msg.textContent = '本地服务已就绪，正在准备界面…';
+        tip.textContent = '马上就好…';
+        return;
+      }
+      setTimeout(waitForBackend, 200);
+    } catch (error) {
+      phase = 'done';
+      card.classList.remove('done');msg.classList.remove('swap');
+      msg.textContent = '启动未完成';pct.textContent = '未就绪';
+      tip.textContent = error.message || String(error);
+    }
   }
 
   function frame() {
@@ -92,6 +115,7 @@
   // 跳转前先确认服务还活着。后台服务万一已经退出，直接跳到死端口会掉进浏览器的
   // 错误页（还会伴随一串 "Unsafe attempt to load URL ..." 报错）；宁可在这里把话说清楚。
   function goHome(attempt = 0) {
+    if (desktop) { location.replace(home); return; }
     fetch('/api/health', { cache: 'no-store' })
       .then(() => location.replace('/'))
       .catch(() => {
@@ -102,7 +126,11 @@
       });
   }
 
-  warmup();
+  if (desktop) {
+    msg.textContent = '正在启动本地模型库服务…';
+    tip.textContent = '正在唤醒本地服务，模型库准备好后会自动打开…';
+    waitForBackend();
+  } else warmup();
   requestAnimationFrame(frame);
 
   // 点一下吉祥物，它会开心地蹦一个大的

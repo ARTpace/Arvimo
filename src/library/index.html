@@ -22,10 +22,10 @@
   <section class="settings-card"><div class="settings-section-title"><span>AI 服务</span><small>为后续翻译、标签与整理提供统一连接</small></div>
     <label class="ai-toggle"><input type="checkbox" id="ai-enabled">启用 AI 功能</label>
     <label class="field"><span>接口基础地址</span><input id="ai-base-url" type="url" placeholder="http://127.0.0.1:31415/v1" spellcheck="false"><small>填写到 /v1，不要附加 /chat/completions；远程服务使用 HTTPS。</small></label>
-    <label class="field"><span>API 密钥</span><input id="ai-key" type="password" autocomplete="new-password" placeholder="无密钥服务可留空"></label>
+    <div class="field"><span id="ai-key-label">API 密钥</span><div class="ai-secret-control"><input id="ai-key" type="password" aria-labelledby="ai-key-label" autocomplete="new-password" spellcheck="false" placeholder="无密钥服务可留空"><button id="ai-key-toggle" class="icon-button" type="button" aria-label="显示密钥" aria-pressed="false" title="显示密钥"><i data-icon="eye"></i></button></div><small>已保存的密钥默认隐藏；留空保存会保留原密钥。</small></div>
     <label class="ai-toggle"><input type="checkbox" id="ai-clear-key">清除已保存的密钥</label>
     <label class="field"><span>模型</span><input id="ai-model" type="text" list="ai-model-options" placeholder="auto" spellcheck="false" autocomplete="off"><datalist id="ai-model-options"></datalist></label>
-    <p class="compact-note">密钥保存在本机应用数据目录的配置文件中，未加密；页面不回显密钥。只有点击测试或使用 AI 功能时，才会向所配置服务发送内容。连接测试会产生一次小额模型请求。</p>
+    <p class="compact-note">密钥保存在本机应用数据目录的配置文件中，未加密；点击眼睛可查看，关闭设置后自动隐藏。只有点击测试或使用 AI 功能时，才会向所配置服务发送内容。连接测试会产生一次小额模型请求。</p>
     <p id="ai-status" role="status" aria-live="polite"></p>
     <div class="ai-actions"><button class="secondary" id="ai-models" type="button">读取模型</button><button class="secondary" id="ai-test" type="button">保存并测试</button><button class="primary" id="ai-save" type="button">保存设置</button></div>
   </section>
@@ -157,6 +157,7 @@
 <li>独立工作台不做浏览器扩展式贴图捕获；出现贴图提示请检查导出外观与包内 MISSING_BLIT.txt，骨骼、动画与材质兼容性取决于原引擎。</li>
 </ul></details>
 </div></dialog>
+<dialog id="asset-tags-dialog" class="asset-tags-dialog"><header><h2 id="asset-tags-title">资产标签</h2><button type="button" class="icon-button" data-close="asset-tags-dialog" aria-label="关闭标签面板">×</button></header><p>保留平台原始标签，AI 仅补充标签并自动保存到本机。</p><div id="asset-tags-content"></div><p id="asset-tags-status" role="status" aria-live="polite"></p></dialog>
 <div id="toast" class="toast" role="status" aria-live="polite"></div>
 <script type="module" src="/app.js"></script>
 </body></html>

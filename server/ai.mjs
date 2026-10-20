@@ -61,7 +61,7 @@ export function createAIService({file,fetchImpl=fetch,timeoutMs=30000}){
   parseLocal:query=>translator.parseLocal(query),
   brainstorm:theme=>translator.brainstorm(theme),
   tagAssets:arg=>translator.tagAssets(arg),
-  settings:async()=>publicConfig(await read()),configure,complete,
+  settings:async()=>publicConfig(await read()),key:async()=>({apiKey:(await read()).apiKey}),configure,complete,
   models:async(input,signal)=>{
    const config=normalize(input,await read());
    const data=await request(config,'models',null,signal);

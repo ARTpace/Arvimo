@@ -21,7 +21,7 @@
   function showBoot(msg) {
     $('activation').hidden = true;
     $('boot').hidden = false;
-    if (msg) $('boot-msg').textContent = msg;
+    if (msg) ($('boot-msg') || $('tip')).textContent = msg;
   }
 
   function copyText(text, okMsg) {
@@ -135,7 +135,7 @@
     state.fingerprint = status.fingerprint || '';
     state.factors = status.factors || [];
     // 免激活发布（闸门关着）时不再摆激活面板：Rust 那边已经把本地服务拉起来了，
-    // 就绪后会自己跳到启动画面，这里只负责显示「正在启动」。
+    // 共用加载页会等待服务就绪后直接进入工作台，这里只负责更新启动提示。
     if (status.gate === false || status.licensed) {
       showBoot('正在启动本地模型库服务…');
       return;
@@ -147,12 +147,6 @@
   }
 
   document.addEventListener('DOMContentLoaded', () => {
-    const bootTimer = setInterval(async () => {
-      try {
-        const error = await api.core.invoke('backend_startup_error');
-        if (error) { showBoot(error);clearInterval(bootTimer); }
-      } catch { /* Older shells do not expose startup diagnostics. */ }
-    }, 1000);
     $('act-copy').addEventListener('click', () => {
       const text = state.fingerprint || state.machineCode;
       if (text) copyText(text, '机器指纹已复制，发给发行方即可');

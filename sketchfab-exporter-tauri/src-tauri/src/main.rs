@@ -38,6 +38,14 @@ impl NodeGuard {
 #[derive(Default)]
 struct BootError(Mutex<Option<String>>);
 
+#[derive(Default)]
+struct BackendReady(Mutex<Option<String>>);
+
+#[tauri::command]
+fn backend_ready_url(app: AppHandle) -> Option<String> {
+    app.state::<BackendReady>().0.lock().unwrap().clone()
+}
+
 #[tauri::command]
 fn backend_startup_error(app: AppHandle) -> Option<String> {
     app.state::<BootError>().0.lock().unwrap().clone()
@@ -234,13 +242,14 @@ fn activate_with(app: AppHandle, license: String) -> Result<String, String> {
 // sidecar 启动
 // ---------------------------------------------------------------------------
 
-/// 拉起 node sidecar，并在服务就绪后把窗口导航到 splash（由它预热并跳转工作台）。
+/// 拉起 node sidecar，并把就绪地址交给本地加载页，由它直接进入工作台。
 fn start_backend(app: &AppHandle) -> Result<(), String> {
     if app.state::<NodeGuard>().0.lock().unwrap().is_some() {
         return Ok(());
     }
     let backend = app.state::<Backend>();
     *app.state::<BootError>().0.lock().unwrap() = None;
+    *app.state::<BackendReady>().0.lock().unwrap() = None;
     // 每次启动挑一个空闲端口，避免与残留的旧进程抢同一个端口（详见 free_port 注释）。
     let port = free_port();
     let mut cmd = Command::new(&backend.node_exe);
@@ -308,10 +317,8 @@ fn start_backend(app: &AppHandle) -> Result<(), String> {
     let handle = app.clone();
     std::thread::spawn(move || {
         if server_ready(port) {
-            if let Some(win) = handle.get_webview_window("main") {
-                let url = url::Url::parse(&format!("http://127.0.0.1:{port}/splash.html")).unwrap();
-                let _ = win.navigate(url);
-            }
+            // ponytail: 本地加载页持续显示，只发布就绪地址，不再跳到第二张启动页。
+            *handle.state::<BackendReady>().0.lock().unwrap() = Some(format!("http://127.0.0.1:{port}/"));
         } else {
             eprintln!("[node] 本地服务在端口 {port} 上未就绪，界面会停在等待页。");
             let state = handle.state::<BootError>();
@@ -330,6 +337,7 @@ fn main() {
         .manage(updates::UpdateState::default())
         .manage(NodeGuard(Mutex::new(None), Mutex::new(None)))
         .manage(BootError::default())
+        .manage(BackendReady::default())
         .setup(|app| {
             // 资源随安装包解压：node.exe 运行时 + sidecar-server 目录。
             let resource_dir = app.path().resource_dir()?;
@@ -437,6 +445,7 @@ fn main() {
             open_external,
             close_ui_ready,
             backend_startup_error,
+            backend_ready_url,
             license_info,
             activate_with,
             updates::check_app_update,

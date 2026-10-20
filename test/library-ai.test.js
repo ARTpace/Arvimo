@@ -5,6 +5,7 @@ import path from 'node:path';
 import os from 'node:os';
 import http from 'node:http';
 import {createAIService} from '../server/ai.mjs';
+import {createLibraryServer} from '../server/library.mjs';
 
 async function fixture(t,options={}){
  const dir=await fs.mkdtemp(path.join(os.tmpdir(),'assetvault-ai-'));
@@ -19,10 +20,32 @@ test('configuration persists, masks and preserves keys, with explicit clearing',
  const saved=await ai.configure(input);
  assert.equal(saved.baseUrl,'http://127.0.0.1:31415/v1');
  assert.equal(saved.hasKey,true);
+ assert.deepEqual(await ai.key(),{apiKey:'test-secret'});
  assert.ok(!JSON.stringify(saved).includes('test-secret'));
  assert.equal((await ai.configure({apiKey:'',model:'other'})).hasKey,true);
  assert.equal((await ai.settings()).model,'other');
  assert.equal((await ai.configure({clearKey:true})).hasKey,false);
+ assert.deepEqual(await ai.key(),{apiKey:''});
+});
+
+test('saved key requires an explicit local POST and must not be cached or exposed in settings',async t=>{
+ const dir=await fs.mkdtemp(path.join(os.tmpdir(),'assetvault-key-'));
+ const ai=createAIService({file:path.join(dir,'ai-settings.json')});
+ await ai.configure({apiKey:'fixture-reveal-key'});
+ const previous=process.env.SFX_DATA_DIR;let server;
+ try{process.env.SFX_DATA_DIR=dir;server=createLibraryServer();}
+ finally{if(previous===undefined)delete process.env.SFX_DATA_DIR;else process.env.SFX_DATA_DIR=previous;}
+ t.after(async()=>{server.closeAllConnections();await new Promise(r=>server.close(r));await fs.rm(dir,{recursive:true,force:true});});
+ await new Promise(r=>server.listen(0,'127.0.0.1',r));
+ const base=`http://127.0.0.1:${server.address().port}/api/ai/`;
+ const headers={'X-SFX-Local':'1','Content-Type':'application/json'};
+ assert.equal((await fetch(base+'key',{method:'POST',body:'{}'})).status,403);
+ assert.equal((await fetch(base+'key',{method:'POST',headers:{...headers,Origin:'https://example.com'},body:'{}'})).status,403);
+ const settings=await(await fetch(base+'settings',{headers})).json();
+ assert.equal(settings.hasKey,true);assert.equal(settings.apiKey,undefined);
+ const response=await fetch(base+'key',{method:'POST',headers,body:'{}'});
+ assert.equal(response.status,200);assert.equal(response.headers.get('cache-control'),'no-store');
+ assert.deepEqual(await response.json(),{apiKey:'fixture-reveal-key'});
 });
 
 test('rejects unsafe configuration and does not call disabled services',async t=>{

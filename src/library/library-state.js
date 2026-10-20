@@ -4,6 +4,7 @@ export const UI_KEY='sfx-library-ui';
 /** 界面开关（折叠状态等）单独存一份：不与模型库 schema 混在一起，加开关不用迁移数据。 */
 export const UI_DEFAULTS={linkPanelOpen:false};
 export const UID=/^[a-f0-9]{32}$/i;
+import {mergeTags} from './asset-tags.js';
 const active=new Set(['queued','running','saving','cancelling']);
 export function mergeModels(current,incoming){
  const map=new Map(current.filter(m=>UID.test(m?.uid)).map(m=>[m.uid,m]));
@@ -48,10 +49,11 @@ export function loadLibrary(storage){ let data={},migrated=false,warning='';
  const favorites=new Set((Array.isArray(data.favorites)?data.favorites:[]).filter(id=>UID.test(id)));
  const tasks=(Array.isArray(data.tasks)?data.tasks:[]).filter(t=>UID.test(t?.uid)).slice(-80).map(t=>({...t,state:active.has(t.state)?'interrupted':t.state,logs:Array.isArray(t.logs)?t.logs.slice(-80):[]}));
  const history=(Array.isArray(data.history)?data.history:[]).filter(h=>h&&typeof h==='object').map(h=>h.kind==='search'?h:{...h,kind:'web'}).filter(h=>h.kind==='search'?(h.params&&typeof h.params.q==='string'&&h.params.q.trim()!==''):typeof h.url==='string'&&/^https?:\/\//.test(h.url)).slice(0,12);
- return {models,favorites,tasks,history,options:normalizeOptions(data.options),migrated,warning};
+ const aiTags=Object.fromEntries(Object.entries(data.aiTags&&typeof data.aiTags==='object'?data.aiTags:{}).filter(([uid,tags])=>UID.test(uid)&&Array.isArray(tags)).map(([uid,tags])=>[uid,mergeTags(tags)]));
+ return {models,favorites,tasks,history,aiTags,options:normalizeOptions(data.options),migrated,warning};
 }
 export function saveLibrary(storage,state){
- storage.setItem(STORAGE_KEY,JSON.stringify({version:2,models:state.models,favorites:[...state.favorites],history:state.history,tasks:state.tasks.slice(-80).map(t=>({...t,logs:t.logs.slice(-80)})),options:state.options}));
+ storage.setItem(STORAGE_KEY,JSON.stringify({version:2,models:state.models,aiTags:state.aiTags||{},favorites:[...state.favorites],history:state.history,tasks:state.tasks.slice(-80).map(t=>({...t,logs:t.logs.slice(-80)})),options:state.options}));
 }
 /** 读取界面开关。存读取不了（隐私模式 / 存储满）时静默回落到默认值，不能因此挡住启动。 */
 export function loadUi(storage){

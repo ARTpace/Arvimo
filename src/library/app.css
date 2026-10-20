@@ -680,6 +680,7 @@
 #local-translation{max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ai-toggle{display:flex;align-items:center;gap:8px;margin-block:12px;font-size:12px;color:#b9c8d6}
 .ai-actions{display:flex;flex-wrap:wrap;gap:10px;margin-top:16px}
+.ai-secret-control{position:relative;display:flex;align-items:center}.ai-secret-control input{padding-right:48px!important}.ai-secret-control .icon-button{position:absolute;right:8px;width:32px;height:32px;color:var(--muted)}.ai-secret-control .icon-button:hover,.ai-secret-control .icon-button[aria-pressed=true]{color:var(--accent)}
 #ai-status{font-size:12px;line-height:1.7;min-height:22px;overflow-wrap:anywhere;color:var(--accent)}
 .local-facets{display:flex;align-items:center;gap:8px;color:#a1adbc;font-size:12px;min-width:0}
 .local-facets[hidden]{display:none}
@@ -711,3 +712,4 @@ body:is([data-route="library"],[data-route="favorites"]) .remove-model::after{co
  body:is([data-route="library"],[data-route="favorites"]) .model-grid:not(.compact){grid-template-columns:repeat(auto-fill,minmax(185px,1fr));gap:12px}
 }
 .app-update-banner{position:fixed;right:24px;bottom:24px;z-index:10000;display:flex;align-items:center;gap:16px;padding:16px 20px;border:1px solid #536747;border-radius:14px;background:#17231c;color:#e5eddf;box-shadow:0 12px 35px #0005}.app-update-banner button{padding:7px 12px;border:1px solid #6b8159;border-radius:8px;background:#c9f581;color:#25331d;cursor:pointer}.app-update-banner button:last-child{background:transparent;color:#b6c5af}@media(max-width:600px){.app-update-banner{left:12px;right:12px;bottom:12px;gap:8px;flex-wrap:wrap}}
+.asset-tags-dialog{width:min(520px,90vw);padding:24px;border:1px solid #34404e;border-radius:16px;background:#151d27;color:#dce5ee}.asset-tags-dialog::backdrop{background:#080d16b3}.asset-tags-dialog header{display:flex;align-items:center;justify-content:space-between;gap:16px}.asset-tags-dialog h2{margin:0;font-size:18px}.asset-tags-dialog p{font-size:12px;line-height:1.7;color:#92a1b3}.asset-tags{display:grid;gap:16px}.asset-tag-group small{display:block;margin-bottom:8px;color:#92a1b3}.asset-tags .tag-list{display:flex;flex-wrap:wrap;gap:6px}.asset-tags .muted{font-size:12px;color:#7f8e9f}.asset-tags .secondary{justify-self:start}.asset-tags button:disabled{opacity:.55;cursor:wait}

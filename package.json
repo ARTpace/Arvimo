@@ -1,6 +1,6 @@
 {
   "name": "assetvault",
-  "version": "0.1.9",
+  "version": "0.1.10",
   "private": true,
   "type": "module",
   "description": "Export authorized Sketchfab models (mesh, textures, rig, animation) to glTF/GLB. Tampermonkey userscript first, MV3 extension second.",

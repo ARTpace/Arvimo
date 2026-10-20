@@ -19,7 +19,7 @@ import {createCardView} from './card-view.js';
 import {openExternal} from './open-url.js';
 import {createLibraryView} from './library-view.js';
 import {createGltfPreview} from './gltf-preview.js';
-import {createDiscoveryFeed} from './discovery-feed.js';
+import {createDiscoveryFeed,resetDiscoveryFeeds} from './discovery-feed.js';
 import {createImageDownloader} from './image-download.js';
 import {createBlenderBridgePanel} from './blender-bridge.js';
 import {createBrowserRuntimePanel} from './browser-runtime.js';
@@ -30,6 +30,7 @@ import {createFilterTrees} from './filter-tree.js';
 import {esc} from './html-esc.js';
 import {filterLocalAssets} from './local-filters.js';
 import {createAISettings} from './ai-settings.js';
+import {tagsFor,addAITags,tagPanel} from './asset-tags.js';
 import {createSettingsPanel} from './settings-panel.js';
 import {createAppUpdates} from './app-updates.js';
 import {bindLocalSearch,createLocalQueryParser,createThemeBrainstorm,createTagSuggester} from './search-translation.js';
@@ -53,10 +54,6 @@ const savedDiscovery=loadDiscovery(storage);
 state.pageSize=[24,48,96,192].includes(Number(savedDiscovery?.pageSize))?Number(savedDiscovery.pageSize):48;
 if(savedDiscovery){
  state.platform=platformById(savedDiscovery.platform).id;
- state.source=savedDiscovery.source;
- for(const [mode,feed] of Object.entries(savedDiscovery.feeds)){
-  if(state.feeds[mode])Object.assign(state.feeds[mode],feed);
- }
 }
 const queuePulse=new Map();
 let downloads,artstation,ambientcgUI,polyhavenUI,kenneyUI,freestylizedUI,blenderBridge,browserRuntime,setupWizard,contentModes,searchHistory,filterTrees,mergedFilters,filterTimer,persistTimer,toastTimer,searchTimer;
@@ -68,7 +65,7 @@ let hadQuery=false;
 let resolveArtworkLink=async()=>{throw Error('ArtStation 识别器尚未就绪，请稍后重试。');};
 // Blender 按钮由「本地有没有文件」决定，卡片和预览面板共用这一个生成器。
 const blenderSendButton=createBlenderButton({icon});
-const persistNow=()=>{clearTimeout(persistTimer);try{saveLibrary(storage,state);saveDiscovery(storage,{platform:state.platform,source:state.source,pageSize:state.pageSize,filters:discoveryFilters(),feeds:Object.fromEntries(Object.entries(state.feeds).map(([mode,feed])=>[mode,{rows:(feed.rows||[]).slice(0,48),request:feed.request,next:feed.next,pages:feed.pages,status:feed.status,warnings:(feed.warnings||[]).slice(0,4)}]))});}catch{toast('浏览器存储空间不足，列表未保存；请先释放空间。');}};
+const persistNow=()=>{clearTimeout(persistTimer);try{saveLibrary(storage,state);saveDiscovery(storage,{platform:state.platform,pageSize:state.pageSize,filters:discoveryFilters()});}catch{toast('浏览器存储空间不足，列表未保存；请先释放空间。');}};
 const persist=()=>{clearTimeout(persistTimer);persistTimer=setTimeout(persistNow,200);};
 function discoveryFilters(){
  const value=id=>{const node=document.querySelector(id);return node?node.value:'';};
@@ -78,7 +75,8 @@ function discoveryFilters(){
 function restoreDiscoveryFilters(){
  const filters=savedDiscovery?.filters;if(!filters)return;
  const set=(id,next)=>{const node=document.querySelector(id);if(node&&next!=null)node.value=next;};
- set('#asset-query',filters.query);
+ // 搜索词和结果只在本次会话中保留，不恢复历史搜索现场。
+ set('#asset-query','');
  set('#polyhaven-type',filters.polyhavenType);
  set('#polyhaven-category',filters.polyhavenCategory);
  if(filters.polyhavenCategory&&$('#polyhaven-category'))$('#polyhaven-category').dataset.keep=filters.polyhavenCategory;
@@ -108,7 +106,18 @@ const cardView=createCardView({icon,esc,fmt,state,queuePulse,imageDownload,blend
 // 所以其余代码读起来还是只有 renderGrid() / counts() 这层语义。
 const gltfPreview=createGltfPreview();
 const view=createLibraryView({$,icon,esc,fmt,state,queuePulse,cardView,composite,filtered,activeModes,galleryActive,categories:CATEGORIES,describeArt:request=>artstation.describe(request),artstationUI:()=>artstation,downloadsUI:()=>downloads,filterTreesUI:()=>filterTrees,mergedFiltersUI:()=>mergedFilters,findModel,blenderSendButton,imageDownload,gltfPreview});
-const {counts,renderStatus,renderGrid,placeFilters,preview,syncStickyOffset}=view;
+const {counts,renderStatus,renderGrid,placeFilters,preview:previewAsset,syncStickyOffset}=view;
+function refreshPreviewTags(uid){
+ if(!$('#preview-dialog').open)return;
+ const details=$('#model-details'),model=findModel(uid);if(!model||details.dataset.tagUid!==uid)return;
+ details.querySelectorAll('.tag-list,[data-action="ai-tags"],.asset-tags').forEach(node=>node.remove());
+ details.insertAdjacentHTML('beforeend',tagPanel(state,model,esc));
+}
+function preview(uid){
+ previewAsset(uid);
+ $('#model-details').dataset.tagUid=uid;
+ refreshPreviewTags(uid);
+}
 // 发起检索也有自己的模块（discovery-feed.js）：翻页、关键词、粘贴链接三条入口共用同一段取流逻辑。
 const feed=createDiscoveryFeed({$,toast,state,persist,renderGrid,mergeModels,describeArt:request=>artstation.describe(request),activeModes,showsFeed,searchHistoryUI:()=>searchHistory,resolveArtworkLink:url=>resolveArtworkLink(url),routeTo:route,readRequest:mode=>readRequest(mode),clearSearchTimer:()=>clearTimeout(searchTimer),feedError:feedErrorMessage,markQueryActive:()=>{hadQuery=true;}});
 const {requestFeed,startSearch,submitLink}=feed;
@@ -134,7 +143,7 @@ function filtered(){
  }
  let models=state.models.filter(m=>state.route!=='favorites'||state.favorites.has(m.uid));
  if(state.filter==='downloadable')models=models.filter(m=>m.downloadable);if(state.filter==='animated')models=models.filter(m=>m.animations>0);
- models=filterLocalAssets(models,{kind:$('#local-kind').value,status:$('#local-status').value,search:state.search,english:state.searchEnglish||''},downloads?.connected?downloads.jobs:null);
+ models=filterLocalAssets(models.map(m=>({...m,tags:tagsFor(state,m)})),{kind:$('#local-kind').value,status:$('#local-status').value,search:state.search,english:state.searchEnglish||''},downloads?.connected?downloads.jobs:null);
  return [...models].sort(state.sort==='popular'?(a,b)=>b.likes-a.likes:state.sort==='name'?(a,b)=>a.name.localeCompare(b.name):(a,b)=>(b.addedAt||0)-(a.addedAt||0));
 }
 
@@ -341,14 +350,12 @@ function restartSearch(delay=180){clearTimeout(searchTimer);searchTimer=setTimeo
  *  回到空关键词 = 回到浏览热门（见 startSearch 的 q 为空分支），这也正是用户删字时
  *  预期看到的状态。
  *
- *  判据是「结果区现在还挂着一次有内容的检索吗」（searchStillActive），不是「框里刚从有变空」：
- *  刷新页面后 feeds 会从本地存储恢复，搜索框也回填了上次的关键词，那时 hadQuery 仍是 false，
- *  按旧判据删空搜索框什么都不会发生 —— 界面一直停在旧结果上（2026-10-16 用户反馈）。
+ *  所有平台一起失效，包括隐藏平台和还在翻译或解析的请求，避免切换后重新出现旧结果。
  */
 /** 上一次真正发出去的检索里还带着关键词（或解析链接）吗？ */
 function searchStillActive(){
  if(state.source==='link')return !!state.feeds.web?.request?.url;
- return activeModes().some(mode=>{const request=state.feeds[mode]?.request;return !!request&&!!(request.q||request.url);});
+ return Object.values(state.feeds).some(feed=>feed.busy||!!(feed.request?.q||feed.request?.url));
 }
 /** 每日主题推荐带：只在「搜索框空着」的时候露脸 —— 那正是用户在逛、在等推荐的时候。
  *  点一个词等于他自己在搜索框里敲了一遍（所以会记进最近检索）；其他时候整条藏起来，不占版面。
@@ -368,7 +375,8 @@ function clearSearchIfEmptied(){
  if($('#asset-query').value.trim())return;      // 还有字：正在打字或只删了几个字，不打断检索
  if(!searchStillActive()&&!hadQuery)return;     // 结果区本来就是浏览态，没什么可清
  hadQuery=false;
- state.source='search';
+ resetDiscoveryFeeds(state);
+ persist();renderGrid();
  searchHistory?.close();   // 这里写 searchHistoryUI() 会抛 ReferenceError：那个名字只是传给 discovery-feed 的属性键，app.js 里并不存在（旧代码正是这样，一整条清空链路从第二步就断了）
  restartSearch(0);
 }
@@ -540,6 +548,24 @@ $('#search-platform').onchange=e=>setPlatform(e.target.value);
 $('#empty-explore').onclick=()=>{writeSearch({sort:'popular'});refreshTopicStrip();startSearch();};
  const localSearch=bindLocalSearch({$,state,renderGrid,parse:parseLocal});
 const tagSuggester=createTagSuggester();
+ let activeTagUid='';
+ const tagging=new Set();
+ function renderTagDialog(uid){
+  const model=findModel(uid);if(!model)return;
+  $('#asset-tags-title').textContent=model.name||'资产标签';
+  $('#asset-tags-content').innerHTML=tagPanel(state,model,esc);
+  $('#asset-tags-content').querySelector('[data-action="ai-tags"]').disabled=tagging.has(uid);
+ }
+ function openTags(uid){
+  activeTagUid=uid;renderTagDialog(uid);
+  $('#asset-tags-status').textContent=tagging.has(uid)?'正在整理标签…':'标签自动保存，无需另外点击保存。';
+  if(!$('#asset-tags-dialog').open)$('#asset-tags-dialog').showModal();
+ }
+ document.addEventListener('click',event=>{
+  const button=event.target.closest('[data-action="asset-tags"]');
+  if(button)openTags(button.dataset.uid);
+  if(event.target.closest('#asset-tags-dialog [data-tag]'))$('#asset-tags-dialog').close();
+ });
  $('#sort').onchange=e=>{state.sort=e.target.value;renderGrid();};
  for(const id of ['#local-kind','#local-status'])$(id).onchange=()=>{state.selected.clear();renderGrid();};
  $('#local-feature').onchange=e=>{state.filter=e.target.value;state.selected.clear();renderGrid();};
@@ -553,30 +579,42 @@ const tagSuggester=createTagSuggester();
  let tagBusy=false,tagAbort=false;
  async function aiTagThis(uid){
   const model=findModel(uid);if(!model)return;
-  const data=await tagSuggester({name:model.name,author:model.author,kind:model.kind,existing:model.tags||[]});
-  if(!data.tagged||!data.tags.length){toast(data.reason||'未能生成标签');return;}
-  const merged=[...(model.tags||[]),...data.tags].filter((t,idx,arr)=>arr.findIndex(x=>x.toLowerCase()===x.toLowerCase())===idx).slice(0,12);
-  model.tags=merged;persist();renderGrid();preview(uid);
-  toast(`已补充 ${data.tags.length} 个标签`);
+  if(tagging.has(uid))return;
+  tagging.add(uid);openTags(uid);
+  try{
+   const data=await tagSuggester({name:model.name,author:model.author,kind:model.assetType||model.kind,existing:tagsFor(state,model)});
+   if(!data.tagged||!data.tags.length){toast(data.reason||'未能生成标签');if(activeTagUid===uid)$('#asset-tags-status').textContent=data.reason||'未能生成标签，可重试。';return;}
+   const added=addAITags(state,model,data.tags);
+   persistNow();renderGrid();refreshPreviewTags(uid);
+   const message=added?`已补充 ${added} 个 AI 标签，已自动保存到本机。`:'没有新增标签，原有标签已保留。';
+   if(activeTagUid===uid)$('#asset-tags-status').textContent=message;
+   toast(message);
+  }finally{
+   tagging.delete(uid);
+   if(activeTagUid===uid)renderTagDialog(uid);
+  }
  }
  async function tagAllAssets(){
   if(tagBusy){tagAbort=true;toast('已请求停止整理');return;}
-  const candidates=state.models.filter(m=>(m.tags||[]).length<2);
+  const candidates=state.models.filter(m=>tagsFor(state,m).length<2);
   if(!candidates.length){toast('没有需要整理标签的资产');return;}
   if(!confirm(`将为 ${candidates.length} 个标签偏少的本地资产补充 AI 标签，可能较慢，继续？`))return;
   tagBusy=true;tagAbort=false;let done=0;
   try{
    for(const m of candidates){
     if(tagAbort)break;
+    if(tagging.has(m.uid))continue;
+    tagging.add(m.uid);
     try{
-     const data=await tagSuggester({name:m.name,author:m.author,kind:m.kind,existing:m.tags||[]});
-     if(data.tagged&&data.tags.length)m.tags=[...(m.tags||[]),...data.tags].filter((t,idx,arr)=>arr.findIndex(x=>x.toLowerCase()===x.toLowerCase())===idx).slice(0,12);
-    }catch{}
+     const data=await tagSuggester({name:m.name,author:m.author,kind:m.assetType||m.kind,existing:tagsFor(state,m)});
+     if(data.tagged&&data.tags.length){addAITags(state,m,data.tags);persistNow();}
+    }catch{}finally{tagging.delete(m.uid);}
     done++;
     if(done%5===0){persist();renderGrid();toast(`已整理 ${done}/${candidates.length}`);}
    }
   }finally{tagBusy=false;}
-  persist();renderGrid();
+  persistNow();renderGrid();
+  if(activeTagUid){renderTagDialog(activeTagUid);refreshPreviewTags(activeTagUid);}
   toast(tagAbort?`已停止，整理 ${done} 个资产`:`完成，共为 ${done} 个资产补充标签`);
  }
  // 三种展示共用一个切换入口；按钮高亮由 renderGrid 从 state 推出，不在点击处理里各改一遍。

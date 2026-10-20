@@ -69,7 +69,7 @@ function card(m,{gallery=false}={}){
  // 封面图下载功能已移除：卡片不再提供单独的「下载封面图」入口。
  // ambientCG 卡片在下载键左边带一个精度选择：选择写回模型对象（materialResolution），
  // 重渲染后原样回填；下载时队列从模型上读，整批取第一张的选择（服务端会再校验一次）。
- const materialResolution=materialResolutionSelect(m,downloadedRes);
+ const materialResolution=`<button class="text-button" data-action="asset-tags" data-uid="${esc(m.uid)}" title="查看平台标签与管理 AI 标签">✦ 标签</button>`+materialResolutionSelect(m,downloadedRes);
  // meta 一行化：作者与平台标签重复时（如 ambientCG）不再显示，只留「标题 · 作者 · 许可」。
  const byline=m.author&&m.author.trim()!==platformLabel(m.platform)?`<span class="card-byline" title="${esc(m.author)}">${esc(m.author)}</span>`:'';
  // 控件拆成可复用的片段：紧凑视图缩略图只有 96px，角标与按键全叠在上面等于糊成一团，

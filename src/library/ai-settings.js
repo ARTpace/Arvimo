@@ -1,4 +1,22 @@
+import {icon} from './icon-set.js';
 export function createAISettings({$,toast}){
+ const key=$('#ai-key'),toggle=$('#ai-key-toggle');
+ let hasKey=false,savedRevealed=false,revision=0;
+ function visibility(visible){key.type=visible?'text':'password';toggle.innerHTML=icon(visible?'eye-off':'eye');toggle.setAttribute('aria-pressed',String(visible));toggle.setAttribute('aria-label',visible?'隐藏密钥':'显示密钥');toggle.title=visible?'隐藏密钥':'显示密钥';}
+ function hide(){revision++;if(savedRevealed){key.value='';savedRevealed=false;}visibility(false);toggle.disabled=$('#ai-clear-key').checked;}
+ key.addEventListener('input',()=>{revision++;savedRevealed=false;toggle.disabled=$('#ai-clear-key').checked;});
+ $('#ai-clear-key').addEventListener('change',()=>{hide();key.disabled=$('#ai-clear-key').checked;});
+ $('#settings-dialog')?.addEventListener('close',hide);
+ toggle.onclick=async()=>{
+  if(key.type==='text'){hide();return;}
+  if(key.value){visibility(true);return;}
+  if(!hasKey){status('尚未保存密钥，可以先输入 API Key。');return;}
+  const request=++revision;toggle.disabled=true;
+  try{const result=await api('key',{});if(request!==revision)return;key.value=result.apiKey;savedRevealed=true;visibility(true);}
+  catch(error){if(request===revision)status(error.message);}
+  finally{if(request===revision)toggle.disabled=$('#ai-clear-key').checked;}
+ };
+ visibility(false);
  const status=message=>{$('#ai-status').textContent=message;};
  const input=()=>({enabled:$('#ai-enabled').checked,baseUrl:$('#ai-base-url').value.trim(),model:$('#ai-model').value.trim(),apiKey:$('#ai-key').value,clearKey:$('#ai-clear-key').checked});
  async function api(route,payload){
@@ -7,8 +25,9 @@ export function createAISettings({$,toast}){
   if(!response.ok)throw Error(data.error||'AI 请求失败');return data;
  }
  function apply(config){
+  hide();hasKey=config.hasKey;key.disabled=false;toggle.disabled=false;
   $('#ai-enabled').checked=config.enabled;$('#ai-base-url').value=config.baseUrl;$('#ai-model').value=config.model;
-  $('#ai-key').value='';$('#ai-key').placeholder=config.hasKey?'已保存密钥，留空保持不变':'无密钥服务可留空';$('#ai-clear-key').checked=false;
+  key.value='';key.placeholder=hasKey?'••••••••••••（已保存）':'无密钥服务可留空';$('#ai-clear-key').checked=false;
  }
  async function run(action){
   const buttons=['#ai-save','#ai-test','#ai-models'];buttons.forEach(id=>{$(id).disabled=true;});

@@ -138,6 +138,7 @@ export function createLibraryServer({scan=scanPage,search=searchPage,open=openPu
         if(req.method==='GET'&&u.pathname==='/api/ai/settings')return json(res,200,await ai.settings());
         if(req.method==='POST'){
           const input=await body(req);
+          if(u.pathname==='/api/ai/key'){res.setHeader('Cache-Control','no-store');return json(res,200,await ai.key());}
           if(u.pathname==='/api/ai/settings')return json(res,200,await ai.configure(input));
           if(u.pathname==='/api/ai/models')return json(res,200,await ai.models(input,controller.signal));
           if(u.pathname==='/api/ai/test')return json(res,200,await ai.test(controller.signal));

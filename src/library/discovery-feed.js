@@ -9,6 +9,17 @@ import {feedEndpoint,feedLabel,routeLink} from './platforms.js';
 import {createSearchTranslation} from './search-translation.js';
 import {fetchSearchPage,splitSearchTerms} from './multi-search.js';
 
+// 搜索条件属于整个发现页；清除时也必须让隐藏平台及在途响应失效。
+export function resetDiscoveryFeeds(state){
+ for(const f of Object.values(state.feeds)){
+  f.controller?.abort();f.token++;f.controller=null;f.busy=false;
+  f.rows=[];f.request=null;f.next=null;f.pending=[];f.pages=0;
+  f.status='';f.error=false;f.aborted=false;f.warnings=[];f.translation='';f.origin='';
+  f.visited.clear();
+ }
+ state.source='search';state.selected.clear();
+}
+
 export function createDiscoveryFeed(ctx){
  const translate=createSearchTranslation();
  const {$,toast,state,persist,renderGrid,mergeModels,describeArt,activeModes,showsFeed,searchHistoryUI,resolveArtworkLink,routeTo,readRequest,clearSearchTimer,feedError,markQueryActive}=ctx;
@@ -82,6 +93,7 @@ function startSearch({record=false}={}){
  clearSearchTimer();
  ctx.markQueryActive();        // 记住「框里现在是有内容的」，删字时才认得出这是一次清空
  const raw=$('#asset-query').value.trim();
+ resetDiscoveryFeeds(state);
  if(/^https?:\/\//i.test(raw))return submitLink(raw);
  state.source='search';
  return Promise.all(activeModes().map(mode=>requestFeed(mode,readRequest(mode),{record})));
