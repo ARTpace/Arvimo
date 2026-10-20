@@ -1,0 +1,8 @@
+[[permission]]
+identifier = "desktop-controls"
+description = "Allow the main local-library window to use AssetVault desktop commands."
+commands.allow = [
+  "hide_to_tray", "quit_app", "open_external", "close_ui_ready",
+  "backend_startup_error", "license_info", "activate_with",
+  "check_app_update", "download_app_update", "install_app_update"
+]

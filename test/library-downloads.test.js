@@ -5,6 +5,23 @@ const wait=async fn=>{const end=Date.now()+10000;while(!fn()){if(Date.now()>end)
 async function temp(){return fs.mkdtemp(path.join(os.tmpdir(),'sfx-dm-test-'));}
 async function writeFixture(job){if(job.options.output==='folder')await writeFixtureFolder(job.output,{uid:job.uid});else await fs.writeFile(job.output,fixtureZip(job.uid));return {zipName:job.options.output==='folder'?'fixture':'fixture.zip'};}
 const fakeFbxConverter=async({glb,outDir})=>{const file=path.join(outDir,path.basename(glb).replace(/\.glb$/i,'.fbx'));await fs.writeFile(file,'FBX');return {file,name:path.basename(file),bytes:3};};
+test('deduplication ignores option ordering and finds saved files behind failed history',async()=>{
+ const d=await temp();let m;
+ try{
+  m=await manager(d);m.start('http://127.0.0.1:1');
+  await m.enqueue({authorized:true,models:[model]});
+  await wait(()=>m.jobs[0].state==='saved'&&m.workers.size===0);
+  const saved=m.jobs[0];
+  saved.options=Object.fromEntries(Object.entries(saved.options).reverse());
+  assert.equal((await m.enqueue({authorized:true,models:[model]})).duplicates.length,1);
+  m.jobs.push({...saved,id:'failed-history',state:'failed',filePath:undefined});
+  assert.equal((await m.enqueue({authorized:true,models:[model]})).added.length,0);
+  assert.throws(()=>m.action('failed-history','retry'),/已下载/);
+  await fs.rm(saved.filePath,{recursive:true,force:true});
+  await m.configure({paused:true});
+  assert.equal((await m.enqueue({authorized:true,models:[model]})).added.length,1);
+ }finally{await m?.close();await fs.rm(d,{recursive:true,force:true});}
+});
 async function manager(base,runner){return new DownloadManager({dataDir:path.join(base,'state'),defaultFolder:path.join(base,'downloads'),runner:runner||(async(job,{signal})=>{signal.throwIfAborted();return writeFixture(job);}),browser:()=>'/fixture/browser',fbxConverter:fakeFbxConverter}).init();}
 test('snapshot reports an undetectable configured folder until it is set again',async()=>{const d=await temp();let m;try{m=await manager(d);const missing=m.snapshot().folderStatus;assert.equal(missing.ok,false);assert.equal(missing.code,'missing');assert.match(missing.message,/保存目录|下载路径/);await m.configure({folder:path.join(d,'chosen-downloads')});const ok=m.snapshot().folderStatus;assert.equal(ok.ok,true);assert.equal(ok.code,'ok');}finally{await m?.close();await fs.rm(d,{recursive:true,force:true});}});
 test('native folder picker result is validated and can create the selected directory',async()=>{const d=await temp();let m;try{const picked=path.join(d,'picked-downloads');m=await new DownloadManager({dataDir:path.join(d,'state'),defaultFolder:path.join(d,'downloads'),folderPicker:async initial=>{assert.equal(path.resolve(initial),path.resolve(m.settings.folder));return picked;},browser:()=>'/fixture/browser'}).init();const result=await m.pickFolder({});assert.equal(result.cancelled,false);assert.equal(result.folder,path.resolve(picked));assert.equal((await fs.stat(picked)).isDirectory(),true);}finally{await m?.close();await fs.rm(d,{recursive:true,force:true});}});

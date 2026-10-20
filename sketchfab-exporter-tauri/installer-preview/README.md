@@ -10,4 +10,6 @@
 
 安装中使用不确定进度动画；完成状态取决于 NSIS 退出码和主程序文件存在性。界面不可在安装中关闭，失败后可重试。主程序以普通用户权限启动。缺少 WebView2 或窗口初始化失败时回退至标准 NSIS 向导。
 
+安装器启动时从注册表检测已有安装（`Software\Microsoft\Windows\CurrentVersion\Uninstall\AssetVault` 的 DisplayVersion / InstallLocation，或旧版 `Software\assetvault\AssetVault` 默认值）：命中且该目录下存在 `assetvault.exe` 时，预填原安装路径，就绪态标题变为「更新 AssetVault」、主按钮变为「覆盖安装」，描述提示将沿用原路径；未命中则按全新安装流程展示。
+
 没有自动执行全程安装测试，以免覆盖本机现有安装和卸载注册信息；分发前建议在干净的 Windows 虚拟机验证全新安装、覆盖升级与卸载。未经代码签名，Windows 可能显示未知发布者。

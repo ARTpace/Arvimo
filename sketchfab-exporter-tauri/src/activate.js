@@ -147,6 +147,12 @@
   }
 
   document.addEventListener('DOMContentLoaded', () => {
+    const bootTimer = setInterval(async () => {
+      try {
+        const error = await api.core.invoke('backend_startup_error');
+        if (error) { showBoot(error);clearInterval(bootTimer); }
+      } catch { /* Older shells do not expose startup diagnostics. */ }
+    }, 1000);
     $('act-copy').addEventListener('click', () => {
       const text = state.fingerprint || state.machineCode;
       if (text) copyText(text, '机器指纹已复制，发给发行方即可');

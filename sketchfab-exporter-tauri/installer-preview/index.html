@@ -21,8 +21,9 @@ details{margin-top:22px}.hint{display:none}.foot{border:0;color:#7a8d80;padding-
 @media(max-width:740px){.backdrop .mascot{opacity:.32}}
 .card{animation:arrive .5s ease-out}.mascot{transform-box:fill-box}.track.installing .fill{width:32%!important;animation:install-sweep 1.6s ease-in-out infinite}.native body{min-height:100dvh}.native .window{width:100vw;min-height:100dvh;border:0;border-radius:0}.native .demo-tools,.native .preview-label{display:none}.native .foot{min-height:44px}.status-note{font-size:12px;color:#98aa9d;text-align:center;line-height:1.8;margin:18px 0 0}.card[data-state=done] .primary{animation:ready-pulse .7s ease-out}.card[data-state=busy] .progress{animation:arrive .35s ease-out}
 @keyframes install-sweep{0%{transform:translateX(-110%)}100%{transform:translateX(420%)}}@keyframes arrive{from{opacity:0;translate:0 8px}to{opacity:1;translate:0 0}}@keyframes ready-pulse{50%{box-shadow:0 0 0 8px #c9f58118}}@media(prefers-reduced-motion:reduce){.card,.card[data-state=done] .primary,.card[data-state=busy] .progress{animation:none}.track.installing .fill{animation:none;width:100%!important;opacity:.5}}
+.top{position:relative;z-index:2;user-select:none}.native .top{cursor:move}#exit-installer{margin-left:auto;display:grid;place-items:center;width:34px;height:34px;border:1px solid transparent;border-radius:8px;background:transparent;color:#91a198;font-size:18px}#exit-installer:hover{background:#ffffff0c;color:#e7eee9;border-color:#35433b}#exit-installer:disabled{opacity:.3;cursor:not-allowed}.preview-label{margin-left:auto}html{background:#0d1218}.track{position:relative;height:7px}.track::after{content:'';position:absolute;inset:0;background:linear-gradient(90deg,transparent calc(25% - 2px),#151d24 calc(25% - 2px),#151d24 calc(25% + 2px),transparent calc(25% + 2px),transparent calc(50% - 2px),#151d24 calc(50% - 2px),#151d24 calc(50% + 2px),transparent calc(50% + 2px),transparent calc(75% - 2px),#151d24 calc(75% - 2px),#151d24 calc(75% + 2px),transparent calc(75% + 2px))}
 </style></head><body>
-<main class="window"><header class="top"><img class="logo" src="../../src/library/favicon.svg" alt=""><span class="brand">AssetVault</span><span class="caption">安装程序</span><span class="preview-label">交互设计预览</span></header>
+<main class="window"><header class="top"><img class="logo" src="../../src/library/favicon.svg" alt=""><span class="brand">AssetVault</span><span class="caption">安装程序</span><span class="preview-label">交互设计预览</span><button id="exit-installer" type="button" aria-label="退出安装" title="退出安装">✕</button></header>
 <svg class="backdrop" viewBox="0 0 1040 700" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
  <defs><radialGradient id="glow"><stop stop-color="#88ad61" stop-opacity=".12"/><stop offset="1" stop-color="#88ad61" stop-opacity="0"/></radialGradient><linearGradient id="face" x2=".3" y2="1"><stop stop-color="#a1ca6d"/><stop offset="1" stop-color="#70964d"/></linearGradient></defs>
  <ellipse cx="120" cy="580" rx="380" ry="330" fill="url(#glow)"/>
@@ -54,22 +55,44 @@ details{margin-top:22px}.hint{display:none}.foot{border:0;color:#7a8d80;padding-
 <section class="card"><span class="step" id="step">01 / 准备安装</span><h2 id="title">安装 AssetVault</h2><p class="description" id="description">你的创作资产工作台。<br>选择安装位置，即可开始。</p><div class="progress" id="progress" hidden><div class="track"><div class="fill" id="fill"></div></div><div class="progress-meta"><span id="stage">正在解压文件</span><span id="percent">62%</span></div></div><button class="primary" id="primary">开始安装<span>→</span></button><details id="options"><summary>安装选项</summary><label class="path" for="path">安装位置</label><input type="text" id="path" value="C:\Program Files\AssetVault" spellcheck="false"><label class="check"><input type="checkbox" checked>创建桌面快捷方式</label></details><p class="hint" id="hint">Blender 与后台浏览器可在安装后按需配置。</p></section></div>
 <footer class="foot"><span>ASSETVAULT · WINDOWS x64</span><div class="demo-tools" aria-label="预览安装状态"><button data-state="ready" class="active">安装首页</button><button data-state="busy">安装中</button><button data-state="done">完成</button></div></footer></main>
 <script>
-const $=id=>document.getElementById(id);let state='ready';
-function show(next){state=next;const busy=state==='busy',done=state==='done';$('step').textContent=busy?'02 / 正在安装':done?'03 / 准备就绪':'01 / 准备安装';$('title').textContent=busy?'正在安放你的工作台':done?'工作台已准备好':'安装 AssetVault';$('description').innerHTML=busy?'正在安装 AssetVault，请稍候。<br>完成后即可开始收集与管理资产。':done?'从一个模型，到整个灵感库。<br>开始构建属于你的素材收藏。':'你的创作资产工作台。<br>选择安装位置，即可开始。';$('progress').hidden=!busy;$('fill').style.width='62%';$('primary').disabled=busy;$('primary').innerHTML=busy?'正在安装…':done?'启动 AssetVault<span>↗</span>':'开始安装<span>→</span>';$('options').hidden=busy||done;$('hint').textContent=busy?'演示进度 62% · 尚未连接实际安装引擎。':done?'设计预览 · 此页面不会安装或启动软件。':'Blender 与后台浏览器可在安装后按需配置。';document.querySelectorAll('[data-state]').forEach(b=>b.classList.toggle('active',b.dataset.state===state));}
-const renderState=show;show=next=>{renderState(next);$('title').textContent=next==='busy'?'正在安装':next==='done'?'安装完成':'安装 AssetVault';$('description').textContent=next==='busy'?'请稍候，安装完成后即可使用。':next==='done'?'AssetVault 已准备就绪。':'你的本地创作资产库';$('primary').innerHTML=next==='busy'?'正在安装…':next==='done'?'启动 AssetVault <span>↗</span>':'安装 <span>→</span>';};
-document.querySelectorAll('[data-state]').forEach(button=>button.onclick=()=>show(button.dataset.state));$('primary').onclick=()=>{if(state==='ready')show('busy');};show('ready');
-// The same document serves as a browser preview and the embedded native installer.
+const $=id=>document.getElementById(id);let state='ready',timer,started=0;
 const native=window.__INSTALLER_NATIVE__===true;
+const existing=native?window.__INSTALLER_EXISTING__:null;
+if(existing?.path)$('path').value=existing.path;
 document.documentElement.classList.toggle('native',native);
 const card=document.querySelector('.card'),track=document.querySelector('.track');
 const note=document.createElement('p');note.className='status-note';note.hidden=true;card.append(note);
-const render=show;show=next=>{render(next);card.dataset.state=next;track.classList.toggle('installing',next==='busy');document.querySelector('.progress-meta').setAttribute('aria-live','polite');$('percent').textContent=next==='busy'?'请稍候':'';$('stage').textContent='正在安装文件与创建快捷方式';$('description').textContent=next==='busy'?'请完成管理员授权，安装期间请勿关闭此窗口。':next==='done'?'AssetVault 已准备就绪。':'你的本地创作资产库';};
 const send=message=>window.ipc.postMessage(JSON.stringify(message));
+const stages={preparing:[1,'准备安装文件'],authorizing:[2,'等待管理员授权'],installing:[3,'正在安装文件与创建快捷方式'],verifying:[4,'正在校验安装结果']};
+function progress(stage){
+ const [index,label]=stages[stage]||stages.preparing;
+ $('stage').textContent=`${index}/4 · ${label}`;
+ $('fill').style.width=`${index*25}%`;
+ track.setAttribute('aria-label',`安装阶段 ${index}/4：${label}`);
+}
+function show(next){
+ clearInterval(timer);state=next;const busy=next==='busy',done=next==='done';
+ card.dataset.state=next;track.classList.remove('installing');
+ $('step').textContent=busy?'02 / 正在安装':done?'03 / 准备就绪':'01 / 准备安装';
+ $('title').textContent=busy?'正在安装':done?'安装完成':existing?'更新 AssetVault':'安装 AssetVault';
+ $('description').textContent=busy?'安装期间请保持窗口打开，后台将实时报告当前阶段。':done?'AssetVault 已准备就绪。':existing?`已安装 AssetVault${existing.version?' '+existing.version:''}，将沿用原路径安装。`:'你的本地创作资产库';
+ $('progress').hidden=!busy;$('primary').disabled=busy;$('exit-installer').disabled=busy;
+ $('exit-installer').title=busy?'安装进行中，请等待安装完成后退出':'退出安装';
+ $('primary').innerHTML=busy?'正在安装…':done?'启动 AssetVault <span>↗</span>':existing?'覆盖安装 <span>→</span>':'安装 <span>→</span>';
+ $('options').hidden=busy||done;
+ $('hint').textContent=busy?'显示实际安装阶段；文件安装耗时取决于磁盘性能，不预估剩余时间。':'Blender 与后台浏览器可在安装后按需配置。';
+ if(busy){started=Date.now();progress('preparing');const tick=()=>{$('percent').textContent=`已用时 ${Math.floor((Date.now()-started)/1000)} 秒`;};tick();timer=setInterval(tick,1000);}
+ document.querySelectorAll('button[data-state]').forEach(button=>button.classList.toggle('active',button.dataset.state===next));
+}
 window.installerStatus=result=>{
- if(result.state==='done'){show('done');note.hidden=!result.restart;note.textContent='安装完成，需要重启电脑后才能完整使用。';}
+ if(result.state==='progress'&&state==='busy'){progress(result.stage);}
+ else if(result.state==='done'){show('done');note.hidden=!result.restart;note.textContent='安装完成，需要重启电脑后才能完整使用。';}
  else if(result.state==='error'){show('ready');note.hidden=false;note.textContent=result.message;}
  else if(result.state==='launch-error'){note.hidden=false;note.textContent=result.message;}
 };
+$('exit-installer').onclick=()=>{if(state!=='busy'&&native)send({action:'close'});};
+document.querySelector('.top').addEventListener('mousedown',event=>{if(native&&event.button===0&&!event.target.closest('button'))send({action:'drag'});});
+document.querySelectorAll('button[data-state]').forEach(button=>button.onclick=()=>show(button.dataset.state));
 $('primary').onclick=()=>{
  if(state==='ready'){
   note.hidden=true;
@@ -78,4 +101,6 @@ $('primary').onclick=()=>{
  }else if(state==='done'&&native){send({action:'launch'});}
 };
 show('ready');
+// 隐藏窗口中 requestAnimationFrame 可能暂停；样式与事件就绪后直接通知原生显示。
+if(native)send({action:'ready'});
 </script></body></html>

@@ -25,6 +25,24 @@ test('disabled, failing and malformed AI responses preserve the original search'
  await assert.rejects(disabled.translate('x'.repeat(201)));
 });
 
+test('translateSearch answers English and expansions from a single completion',async()=>{
+ let calls=0;
+ const translator=createSearchTranslator({settings:async()=>({enabled:true}),complete:async()=>{calls++;return {text:'ENGLISH: wooden chair\nALSO: stool, bench seat, NONE'};}});
+ const result=await translator.translateSearch('木椅');
+ assert.equal(result.english,'wooden chair');assert.equal(result.translated,true);
+ assert.deepEqual(result.expansions,['stool','bench seat']);
+ assert.equal(calls,1,'翻译与扩词只允许一次 LLM 调用');
+ await translator.translateSearch('木椅');assert.equal(calls,1,'命中缓存不再调用');
+});
+
+test('translateSearch falls back to plain text when the model ignores the format',async()=>{
+ const translator=createSearchTranslator({settings:async()=>({enabled:true}),complete:async()=>({text:'wooden chair\nsome explanation'})});
+ const result=await translator.translateSearch('木椅');
+ assert.equal(result.english,'wooden chair');assert.deepEqual(result.expansions,[]);
+ const broken=createSearchTranslator({settings:async()=>({enabled:true}),complete:async()=>({text:'{"q":"chair"}'})});
+ assert.equal((await broken.translateSearch('木椅')).translated,false);
+});
+
 test('client merges simultaneous requests and falls back when server is unavailable',async()=>{
  let calls=0;
  const translate=createSearchTranslation({fetchImpl:async()=>{calls++;return Response.json({translated:true,english:'wooden chair'});}});
@@ -80,12 +98,12 @@ test('a superseded translation cannot launch a stale platform search',async t=>{
  assert.deepEqual(queries,['new']);
 });
 
-test('clearing local search prevents a late translation from changing results',async()=>{
+test('clearing local search prevents a late parse from changing results',async()=>{
  const nodes={'#model-search':{},'#local-translation':{}};
  const state={selected:new Set(),search:''};let release;
- const local=bindLocalSearch({$:id=>nodes[id],state,renderGrid:()=>{},delay:0,translate:()=>new Promise(resolve=>{release=resolve;})});
+ const local=bindLocalSearch({$:id=>nodes[id],state,renderGrid:()=>{},delay:0,parse:()=>new Promise(resolve=>{release=resolve;})});
  nodes['#model-search'].oninput({target:{value:'木椅'}});
  await new Promise(resolve=>setTimeout(resolve,5));local.reset();state.search='';
- release({translated:true,english:'wooden chair'});await new Promise(resolve=>setTimeout(resolve,0));
+ release({search:'wooden chair',english:['wooden chair'],kind:'',parsed:true});await new Promise(resolve=>setTimeout(resolve,0));
  assert.equal(state.searchEnglish,'');assert.equal(nodes['#local-translation'].hidden,true);
 });

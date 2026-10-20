@@ -6,11 +6,11 @@
 // on warnings, cancellation or what counts as having results.
 
 import {feedEndpoint,feedLabel,routeLink} from './platforms.js';
-import {createSearchTranslation,createSearchExpansion} from './search-translation.js';
+import {createSearchTranslation} from './search-translation.js';
+import {fetchSearchPage,splitSearchTerms} from './multi-search.js';
 
 export function createDiscoveryFeed(ctx){
  const translate=createSearchTranslation();
- const expand=createSearchExpansion();
  const {$,toast,state,persist,renderGrid,mergeModels,describeArt,activeModes,showsFeed,searchHistoryUI,resolveArtworkLink,routeTo,readRequest,clearSearchTimer,feedError,markQueryActive}=ctx;
  /** 最近检索：同一条记录只留最新一份，写完立刻持久化并刷新浮层。 */
  function remember(entry){
@@ -36,21 +36,16 @@ async function requestFeed(mode,request,{more=false,all=false,record=false}={}){
  try{
   if(!more){
    f.translation='';
-   if(/\p{Script=Han}/u.test(request.q||'')){
+   if(splitSearchTerms(request.q).length<=1&&/\p{Script=Han}/u.test(request.q||'')){
+    // 中文关键词：翻译与扩词合并成一次 AI 调用（expand:true），不再串行等两次推理。
     f.translation='正在翻译中文关键词…';if(showsFeed(mode))renderGrid();
-    const result=await translate(request.q);
+    const result=await translate(request.q,{expand:true});
     controller.signal.throwIfAborted();if(token!==f.token)return;
     f.translation=result.translated?`“${result.query}” → ${result.english}`:result.reason;
     if(result.translated)request={...request,q:result.english};
-    if(result.translated){
-     try{
-      const exp=await expand(result.english||request.q);
-      controller.signal.throwIfAborted();if(token!==f.token)return;
-      if(exp.expanded&&exp.expansions.length){
-       request={...request,q:`${request.q} ${exp.expansions.join(' ')}`.trim()};
-       f.translation+=` ＋ ${exp.expansions.join(' / ')}`;
-      }
-     }catch{}
+    if(result.translated&&result.expansions?.length){
+     request={...request,q:`${request.q} ${result.expansions.join(' ')}`.trim()};
+     f.translation+=` ＋ ${result.expansions.join(' / ')}`;
     }
    }
   }
@@ -58,8 +53,8 @@ async function requestFeed(mode,request,{more=false,all=false,record=false}={}){
    controller.signal.throwIfAborted();f.status=mode==='search'?`正在搜索${request.q?` “${request.q}”`: '公开资产'}…`:mode==='art'?`正在检索${describeArt(request)}…`:mode==='web'?'正在解析网页中的模型…':`正在检索${feedLabel(mode)}${request.q?` “${request.q}”`:''}…`;if(showsFeed(mode))renderGrid();
    const payload=more?(f.pending.length?{ids:f.pending}:{cursor:f.next}):request;
    const marker=JSON.stringify(payload);if(more&&f.visited.has(marker)){f.next=null;f.pending=[];throw Error('平台返回重复分页地址，已停止重复检索。');}
-   const response=await fetch(feedEndpoint(mode),{method:'POST',headers:{'Content-Type':'application/json','X-SFX-Local':'1'},body:JSON.stringify(payload),signal:controller.signal});
-   const data=await response.json();if(!response.ok)throw Error(feedError({mode,status:response.status,error:data.error}));controller.signal.throwIfAborted();if(token!==f.token)return;
+   const response=await fetchSearchPage(feedEndpoint(mode),payload,{signal:controller.signal,translate});
+   const data=response.data;if(!response.ok)throw Error(feedError({mode,status:response.status,error:data.error}));controller.signal.throwIfAborted();if(token!==f.token)return;
    if(!more){f.rows=[];f.pages=0;f.warnings=[];f.visited.clear();f.request={...originalRequest};if(mode==='web')state.source='link';f.origin='';}
    f.visited.add(marker);f.rows=mergeModels(f.rows,data.models).slice(0,1000);f.pages++;pagesThisRun++;f.next=data.next||null;f.pending=data.pending||[];
    f.warnings=[...new Set([...f.warnings,...(data.warnings||[])])].slice(0,24);

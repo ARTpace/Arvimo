@@ -11,6 +11,9 @@ import {openExternal} from './open-url.js';
 
 export function createLibraryView(ctx){
  const {$,icon,esc,fmt,state,queuePulse,cardView,composite,filtered,activeModes,galleryActive,categories,describeArt,artstationUI,downloadsUI,filterTreesUI,mergedFiltersUI,findModel,blenderSendButton,imageDownload,gltfPreview}=ctx;
+// 缩略图确认加载失败的在线条目（Sketchfab 图床 404，基本等于模型已下架）：记住 uid，
+// 翻页、换视图、收藏重渲染都不会再把空卡片画回来。会话级即可，下次搜索换一批结果。
+const brokenCovers=new Set();
 function counts(){
  const activeStates=new Set(['queued','held','retry_wait','running','transferring','validating','saving','cancelling']);
  const activeJobs=(downloadsUI()?.jobs||[]).filter(j=>activeStates.has(j.state));
@@ -35,10 +38,36 @@ function renderStatus(){
  if(state.source==='link'){const back=document.createElement('button');back.className='text-button';back.id='back-to-search';back.textContent='返回搜索结果';back.onclick=()=>{state.source='search';renderGrid();};el.append(back);}
  if(warnings.length&&(f.error||f.aborted)){const warning=document.createElement('span');warning.className='warning';warning.textContent=warnings.slice(0,2).join('；');el.append(warning);}
 }
+/** 网格绘制。数据集签名 = uid 序列 + 视图标志（瀑布流/紧凑）：签名不变说明这一轮只是
+ *  状态变化（收藏、勾选、下载态、精度选择），逐卡比对 HTML 字符串，只替换有变化的卡片，
+ *  消失的卡片移除 —— 高频重渲染不再整块重建 innerHTML，1000 张卡的模型库切状态也不卡。
+ *  签名变了（搜索、翻页、筛选、切视图、顺序变化）才全量重建。 */
+let cardHtml=new Map(),gridSignature='';
+function paintGrid(models,gallery,online,busy){
+ const grid=$('#grid');
+ const signature=models.map(m=>m.uid).join('|')+(gallery?'#g':'')+(state.compact?'#c':'');
+ const htmls=models.map(m=>cardView.card(m,{gallery}));
+ if(gridSignature===signature&&cardHtml.size&&grid.firstElementChild){
+  const existing=new Map();grid.querySelectorAll('.model-card').forEach(c=>existing.set(c.dataset.uid,c));
+  const keep=new Set(models.map(m=>m.uid));
+  models.forEach((m,i)=>{
+   const uid=m.uid,html=htmls[i];
+   if(cardHtml.get(uid)===html)return;
+   const el=existing.get(uid);
+   if(el)el.outerHTML=html;else grid.insertAdjacentHTML('beforeend',html);
+   cardHtml.set(uid,html);
+  });
+  for(const [uid,el] of existing)if(!keep.has(uid)){el.remove();cardHtml.delete(uid);}
+ }else{
+  grid.innerHTML=htmls.join('')||(busy?'<div class="skeleton"></div>'.repeat(4):'');
+  cardHtml=new Map(models.map((m,i)=>[m.uid,htmls[i]]));
+ }
+ gridSignature=signature;
+}
 function renderGrid(){
  // 两个平台的卡片共用同一张模型网格（卡片按 platform 走各自的下载通道）。
  // 网格内容由 composite() 决定：搜索时是当前平台各流交错的结果，链接解析时是解析结果。
- const online=state.route==='discover',f=composite(),models=filtered(),gallery=galleryActive(state);
+ const online=state.route==='discover',f=composite(),models=filtered().filter(m=>!online||!brokenCovers.has(m.uid)),gallery=galleryActive(state);
  const translation=$('#discovery-translation');
  translation.textContent=online&&state.source!=='link'?[...new Set(f.sources.map(mode=>state.feeds[mode].translation).filter(Boolean))].join(' · '):'';
  translation.hidden=!translation.textContent;
@@ -71,7 +100,7 @@ function renderGrid(){
  $('#grid').classList.toggle('compact',state.compact&&!gallery);$('#grid').classList.toggle('gallery',gallery);$('#grid').classList.toggle('loading',online&&f.busy);$('#grid').setAttribute('aria-busy',online&&f.busy?'true':'false');
  $('#grid-view').classList.toggle('active',!state.compact&&!gallery);$('#list-view').classList.toggle('active',state.compact&&!gallery);
  $('#gallery-view').classList.toggle('active',gallery);$('#gallery-view').hidden=!galleryAvailable(state);
- $('#grid').innerHTML=models.map(m=>cardView.card(m,{gallery})).join('')||(online&&f.busy?'<div class="skeleton"></div>'.repeat(4):'');
+ paintGrid(models,gallery,online,f.busy);
  $('#empty').hidden=models.length>0||(online&&f.busy);
  const searched=state.source==='link'?!!state.feeds.web.request:activeModes().every(mode=>!!state.feeds[mode].request);
  $('#empty h3').textContent=online?(f.error?'暂时无法获取资产':searched?'没有找到匹配的资产':'从一个关键词开始'):state.route==='favorites'?'还没有匹配的收藏':'模型库，留给真正想用的资产';
@@ -83,7 +112,13 @@ function renderGrid(){
   $('#empty p').textContent=narrowed?'试试其他关键词或类型，或点击“清除筛选”恢复全部资产。':'前往“发现资产”，将需要的资源加入资产库。入库记录与本地下载文件分别管理。';
   $('#empty-explore').hidden=!!narrowed;
  }
- document.querySelectorAll('.thumbnail').forEach(img=>img.addEventListener('error',()=>{img.replaceWith(Object.assign(document.createElement('div'),{className:'image-placeholder',innerHTML:`${icon('cube')}<span>缩略图加载失败</span>`}));},{once:true}));
+ document.querySelectorAll('.thumbnail').forEach(img=>img.addEventListener('error',()=>{
+  // 在线搜索里缩略图 404 基本等于模型已下架（点开原页面也是空的）：整张卡片移出网格，
+  // 并记住 uid 让后续重渲染跳过它。本地库/收藏里保留占位提示，不隐藏已有资产。
+  const card=img.closest('.model-card'),uid=card?.dataset.uid;
+  if(online&&uid){brokenCovers.add(uid);card.remove();return;}
+  img.replaceWith(Object.assign(document.createElement('div'),{className:'image-placeholder',innerHTML:`${icon('cube')}<span>缩略图加载失败</span>`}));
+ },{once:true}));
  // 搜索结果里没有宽高，瀑布流只能先按方形占位；图片解码后再把真实比例写回，列高一次纠正到位。
  if(gallery)document.querySelectorAll('#grid .thumbnail').forEach(img=>{
   const apply=()=>{const ratio=aspectRatioStyle(img.naturalWidth,img.naturalHeight);if(ratio)img.style.aspectRatio=ratio;};
@@ -168,7 +203,12 @@ function preview(uid){
  document.querySelector('.viewer-hint').textContent='正在加载 Sketchfab 交互预览…';
  const licenseUrl=typeof m.licenseUrl==='string'&&/^https:\/\/creativecommons\.org\//.test(m.licenseUrl)?m.licenseUrl:null;
  $('#model-details').innerHTML=`<div class="eyebrow">MODEL DETAILS</div><h2>${esc(m.name)}</h2><p class="author-name">by ${esc(m.author)}</p><div class="details-stats"><div><strong>${fmt(m.faces)}</strong><span>面数</span></div><div><strong>${fmt(m.vertices)}</strong><span>顶点</span></div><div><strong>${m.animations||0}</strong><span>动画</span></div><div><strong>${fmt(m.views)}</strong><span>浏览</span></div></div><div class="detail-license"><strong>${esc(m.license)}</strong>${licenseUrl?`<a href="${esc(licenseUrl)}" target="_blank" rel="noopener noreferrer">阅读许可条款 ${icon('external')}</a>`:''}<p>${m.downloadable?'平台标记为可下载，不代表可商用；请遵循许可证的署名、非商业等要求。':'未标记为可下载，仅在拥有明确授权时导出。'}</p></div><div class="tag-list">${(m.tags||[]).slice(0,8).map(t=>`<button data-tag="${esc(t)}">${esc(t)}</button>`).join('')}</div><button class="secondary" data-action="ai-tags" data-uid="${uid}">AI 整理标签</button><button class="secondary" data-action="collect" data-uid="${uid}">${icon('folder')}加入我的模型库</button><button class="primary" data-action="download" data-uid="${uid}">${icon('download')}导出到本地</button>${blenderSendButton({job:findLocalJob(downloadsUI()?.jobs||[],uid),className:'secondary',label:'发送到 Blender'})}<a class="source-link" href="https://sketchfab.com/models/${uid}" target="_blank" rel="noopener noreferrer">打开原始模型页面 ${icon('external')}</a>`;
- $('#viewer').src=`https://sketchfab.com/models/${uid}/embed?autostart=1&ui_infos=0&ui_watermark_link=0`;$('#preview-dialog').showModal();
+ // 同一个模型的 embed 地址没变就不重设 src：iframe 内容保持热态，关闭弹窗再开同一个
+ // 模型是秒开（Sketchfab viewer 那几 MB JS 不用重新拉）。ArtStation / 本地 three.js
+ // 预览会清掉 #viewer 的 src，那时地址不同，自然会重新加载，不会串画面。
+ const embed=`https://sketchfab.com/models/${uid}/embed?autostart=1&ui_infos=0&ui_watermark_link=0`;
+ if($('#viewer').getAttribute('src')!==embed)$('#viewer').src=embed;
+ $('#preview-dialog').showModal();
 }
  /** 预览面板的精度选择：与卡片共用同一份 select，并把已下载档位打勾（判据同卡片：
  *  saved + 文件还在；没记精度的老任务算默认 2K）。 */

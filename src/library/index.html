@@ -40,6 +40,7 @@
             <label class="global-search"><i data-icon="search"></i><input id="asset-query" type="search" maxlength="200" placeholder="搜索关键词或粘贴链接，例如 character、robot、props" aria-label="搜索资产" autocomplete="off"><kbd>Enter ↵</kbd></label>
           </div>
           <button class="primary" id="search-button" type="submit"><i data-icon="search"></i>搜索 / 解析</button>
+          <button class="secondary" id="theme-breakdown-btn" type="button" title="将搜索栏中的主题拆解为多个搜索词" aria-label="AI 拆解搜索主题">✦ AI 拆解</button>
         </form>
         <div class="panel-filters" id="panel-filters">
           <div class="online-filters" id="filters-sketchfab">
@@ -80,11 +81,6 @@
         </div>
         <div class="topic-strip" id="topic-strip" hidden></div>
         <div class="theme-breakdown" id="theme-breakdown">
-          <div class="theme-row">
-            <i data-icon="sparkles" class="theme-icon"></i>
-            <input id="theme-input" type="text" maxlength="200" placeholder="描述一个主题，拆解成一组搜索词，例如：中世纪村庄" aria-label="主题拆解" autocomplete="off" spellcheck="false">
-            <button class="secondary" id="theme-breakdown-btn" type="button">拆解</button>
-          </div>
           <div class="theme-results" id="theme-results" hidden></div>
         </div>
 </section>

@@ -774,6 +774,65 @@ window.addEventListener('resize',onResize);
   return created;
  }
 
+ /** 贴图槽位按文件名关键词认：与服务端 pickPreviewEntries 的 MAP_SLOTS 同一套命名规则
+ *  （FreeStylized 的命名是 <Asset>_<Map>_<res>.png，与 ambientCG / Poly Haven 不通用）。
+ *  左边是 three 材质上的槽位名，右边是匹配模式。 */
+const PACK_TEXTURE_SLOTS=[
+ ['map',/basecolor|basecolour|_color|albedo|diffuse/i],
+ ['normalMap',/normal/i],
+ ['roughnessMap',/roughness|_rough|rough/i],
+ ['metalnessMap',/metallic|metalness|_metal/i],
+ ['aoMap',/ambientocclusion|mixed_ao|_ao|occlusion/i],
+];
+function packSlotOf(name){
+ return PACK_TEXTURE_SLOTS.find(([,pattern])=>pattern.test(String(name||'')))?.[0];
+}
+/** 从清单里按槽位挑贴图（每个槽位取第一个匹配项，manifest 里贴图按体积升序，即最小档）。
+ *  返回 slot → 本机 blob URL；预览只需要小档，4K 全取前端等不起。 */
+function packTextureSlots(manifest,byBase){
+ const slots=new Map();
+ for(const entry of manifest.entries||[]){
+  if(entry.role!=='texture')continue;
+  const slot=packSlotOf(entry.name);
+  if(!slot||slots.has(slot))continue;
+  const url=byBase.get(String(entry.name||'').toLowerCase());
+  if(url)slots.set(slot,url);
+ }
+ return slots;
+}
+/** FreeStylized 的模型 FBX 是**不带贴图引用**的纯网格（实测 lod0 FBX 里没有 Video 节点），
+ *  FBXLoader 只能给默认白材质——「预览只有白膜」就是这么来的。解析成功后把包里的
+ *  base/normal/rough/metal/ao 按槽位补挂到材质上；glTF 包自带贴图（槽位已有值）的
+ *  不动，只补缺的，所以两条路都安全。贴图加载是异步的，但 Texture 对象同步返回，
+ *  图片解码完成后自然显示，不需要等。 */
+function applyPackTextures(object,bySlot){
+ if(!bySlot.size)return;
+ const loader=new THREE.TextureLoader();
+ const textures={};
+ for(const [slot,url] of bySlot){
+  const t=loader.load(url);
+  t.wrapS=t.wrapT=THREE.RepeatWrapping;
+  t.anisotropy=renderer.capabilities.getMaxAnisotropy();
+  textures[slot]=t;
+ }
+ // 只有 base color 走 sRGB；法线/粗糙/金属/AO 是数据图，保持线性，否则 AO 会发粉。
+ if(textures.map)textures.map.colorSpace=THREE.SRGBColorSpace;
+ object.traverse(node=>{
+  if(!node.isMesh)return;
+  for(const mat of [].concat(node.material||[])){
+   if(!mat)continue;
+   if(textures.map&&!mat.map)mat.map=textures.map;
+   if(textures.normalMap&&!mat.normalMap)mat.normalMap=textures.normalMap;
+   // phong（FBXLoader 的默认材质）没有 roughness/metalness 槽，用 in 守卫跳过；
+   // aoMap 各材质都有，且默认走 uv 通道（FBX 几何自带 uv），直接挂。
+   if(textures.aoMap&&'aoMap' in mat&&!mat.aoMap)mat.aoMap=textures.aoMap;
+   if(textures.roughnessMap&&'roughnessMap' in mat&&!mat.roughnessMap){mat.roughnessMap=textures.roughnessMap;mat.roughness=1;}
+   if(textures.metalnessMap&&'metalnessMap' in mat&&!mat.metalnessMap){mat.metalnessMap=textures.metalnessMap;mat.metalness=1;}
+   mat.needsUpdate=true;   // map 槽从无到有要重编译 program，否则 define 不生效
+  }
+ });
+}
+
  /** 包围盒自动取景 + 接影地面。FBX 单位常是厘米，glTF 常是米，写死距离必然忽远忽近。 */
  function frameObject(object){
   root.add(object);
@@ -808,6 +867,9 @@ window.addEventListener('resize',onResize);
   for(const entry of manifest.entries.filter(e=>e.role==='texture')){
    try{byBase.set(String(entry.name||'').toLowerCase(),await toLocalBlobUrl(entry.url));}catch{}
   }
+  // 槽位索引：FBX 引用贴图时常带分辨率后缀（…_4K_Base_color.png），与包内实际挑中的
+  // 最小档文件名对不上，按关键词槽位兜底改写；glTF 的贴图在文件内部，用不到这条。
+  const bySlot=packTextureSlots(manifest,byBase);
   const modelRes=await fetch(modelEntry.url,{headers:LOCAL_HEADER});
   if(!modelRes.ok)throw new Error(`模型文件取不到 HTTP ${modelRes.status}`);
   const buf=await modelRes.arrayBuffer();
@@ -817,7 +879,10 @@ window.addEventListener('resize',onResize);
   const manager=new THREE.LoadingManager();
   manager.setURLModifier(url=>{
    const base=String(url).split(/[\\/]/).pop().split('?')[0].toLowerCase();
-   return byBase.get(base)||byBase.get(decodeURIComponent(base))||url;
+   const exact=byBase.get(base)||byBase.get(decodeURIComponent(base));
+   if(exact)return exact;
+   const slot=packSlotOf(base);
+   return (slot&&bySlot.get(slot))||url;
   });
   let object=null;
   if(/\.fbx$/i.test(modelEntry.name)){
@@ -830,6 +895,8 @@ window.addEventListener('resize',onResize);
   }
   if(!object)throw new Error('模型解析结果为空');
   if(token!==loadToken){disposeObject(object);return false;}
+  // FBX 不带贴图引用时材质是默认白膜，这里按槽位把包里的贴图补上（见 applyPackTextures）。
+  applyPackTextures(object,bySlot);
   frameObject(object);
   return true;
  }

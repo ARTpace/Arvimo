@@ -98,9 +98,13 @@ export async function scanPage({url,cursor,ids}, {signal,json=publicJson,read=re
 }
 function result(data,source) {
   if(!Array.isArray(data.results))throw new Error('模型列表数据格式不符合预期');
-  const models=data.results.map(normalizeModel).filter(Boolean);
+  const normalized=data.results.map(normalizeModel).filter(Boolean);
+  // Sketchfab 的搜索索引里混着已下架/已删除的模型（典型如 Google Poly 存档导入）：详情接口
+  // 已经 404，缩略图也随之下架，渲染出来就是一张「缩略图加载失败」的空卡片（2026-10-19
+  // 用户反馈）。搜索结果一律剔除没有可用缩略图的条目，连着卡片一起不出现在网格里。
+  const models=normalized.filter(m=>m.thumbnail);
   const skipped=data.results.length-models.length;
-  return {models,received:data.results.length,next:validNext(data.next),pending:[],source,warnings:skipped?[`本页有 ${skipped} 个旧式 ID 或不完整条目不受当前导出引擎支持，已跳过；结果不是完整合集。`]:[]};
+  return {models,received:data.results.length,next:validNext(data.next),pending:[],source,warnings:skipped?[`本页有 ${skipped} 个已下架或不受支持的条目（无可用缩略图/旧式 ID），已过滤；结果不是完整合集。`]:[]};
 }
 async function hydrate(ids,pending,source,json,signal) {
   const models=[],warnings=[];let position=0;

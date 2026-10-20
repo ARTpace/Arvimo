@@ -1,0 +1,16 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {matchesWindowsOwner,lockOwnerAlive,processIdentity} from '../server/process-lock.mjs';
+
+test('lock identity rejects exited processes and reused PIDs without killing anything',()=>{
+ const owner={pid:123,startedAt:10000,executable:'C:\\AssetVault\\node.exe'};
+ assert.equal(matchesWindowsOwner(owner,null),false);
+ assert.equal(matchesWindowsOwner(owner,{startedAt:20000,executable:owner.executable}),false);
+ assert.equal(matchesWindowsOwner(owner,{startedAt:10000,executable:'C:\\Other\\node.exe'}),false);
+ assert.equal(matchesWindowsOwner(owner,{startedAt:10005,executable:owner.executable.toUpperCase()}),true);
+ assert.equal(matchesWindowsOwner(owner,{startedAt:10005,executable:null}),true);
+ assert.equal(matchesWindowsOwner({pid:123},{isLibrary:false}),false);
+ assert.equal(matchesWindowsOwner({pid:123},{isLibrary:true}),true);
+ assert.equal(lockOwnerAlive(processIdentity()),true);
+ assert.throws(()=>lockOwnerAlive({pid:-1}),/锁无效/);
+});

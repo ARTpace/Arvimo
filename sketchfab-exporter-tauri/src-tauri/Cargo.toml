@@ -1,6 +1,6 @@
 [package]
 name = "assetvault"
-version = "0.1.7"
+version = "0.1.9"
 description = "AssetVault - Sketchfab 模型导出与本地库桌面版"
 authors = ["AssetVault"]
 edition = "2021"
@@ -30,3 +30,5 @@ base64 = "0.22"
 sha2 = "0.10"
 winreg = "0.55"
 tauri-plugin-updater = "2"
+tauri-plugin-single-instance = "2"
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_System_JobObjects", "Win32_System_Threading"] }

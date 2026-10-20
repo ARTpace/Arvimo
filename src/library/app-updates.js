@@ -10,6 +10,13 @@ export function createAppUpdates({hasActiveTasks=()=>false}={}){
  auto.onchange=()=>{try{localStorage.setItem(preference,String(auto.checked));}catch{}};
  if(!api?.core?.invoke){$('[data-version]').textContent='浏览器模式';status.textContent='请在 AssetVault 桌面版中检查和安装更新。';check.disabled=auto.disabled=true;return {card,start(){}};}
  const invoke=api.core.invoke;
+ const exit=document.createElement('button');exit.type='button';exit.className='secondary';exit.textContent='退出应用';
+ const lifecycle=document.createElement('p');lifecycle.className='compact-note';lifecycle.textContent='关闭窗口会收起到系统托盘；彻底退出请点击下方按钮。';
+ exit.onclick=async()=>{
+  if(hasActiveTasks()&&!confirm('仍有下载或导出任务，退出会中断这些任务。确定退出应用？'))return;
+  try{await invoke('quit_app');}catch(error){status.textContent=`退出失败：${String(error)}`;}
+ };
+ card.append(lifecycle,exit);
  api.app.getVersion().then(v=>{$('[data-version]').textContent=`当前版本 ${v}`;}).catch(()=>{$('[data-version]').textContent='AssetVault 桌面版';});
  function lock(value){busy=value;check.disabled=value;action.disabled=value;}
  async function checkUpdate(background=false){

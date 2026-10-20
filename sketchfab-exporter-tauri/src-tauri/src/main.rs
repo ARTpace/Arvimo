@@ -3,6 +3,8 @@
 
 mod licensing;
 mod updates;
+mod data_path;
+mod process_group;
 
 use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
@@ -13,14 +15,33 @@ use std::sync::Mutex;
 use std::os::windows::process::CommandExt;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Manager};
 
 /// Windows 下隐藏被拉起的 node sidecar 控制台窗口（避免启动瞬间闪一下命令行窗）。
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 /// 持有 node 服务子进程句柄，应用退出时统一回收。
-struct NodeGuard(Mutex<Option<Child>>);
+struct NodeGuard(Mutex<Option<Child>>, Mutex<Option<process_group::ProcessGroup>>);
+impl NodeGuard {
+    fn stop(&self) {
+        println!("[desktop] stopping backend process group");
+        if let Some(mut child) = self.0.lock().unwrap().take() {
+            // Closing the job kills Node and its workers, not unrelated applications.
+            self.1.lock().unwrap().take();
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        println!("[desktop] backend process group stopped");
+    }
+}
+#[derive(Default)]
+struct BootError(Mutex<Option<String>>);
+
+#[tauri::command]
+fn backend_startup_error(app: AppHandle) -> Option<String> {
+    app.state::<BootError>().0.lock().unwrap().clone()
+}
 
 /// sidecar 启动所需的全部路径。setup 里先算好放进 state，
 /// 这样「启动时已授权」和「界面上刚激活成功」两条路都能复用同一个启动函数。
@@ -60,12 +81,13 @@ fn server_ready(port: u16) -> bool {
                 "GET /api/health HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n"
             );
             if s.write_all(request.as_bytes()).is_ok() {
-                let mut buf = [0u8; 512];
-                if let Ok(n) = s.read(&mut buf) {
+                let mut buf = Vec::new();
+                let _ = s.set_read_timeout(Some(std::time::Duration::from_secs(2)));
+                if s.take(8192).read_to_end(&mut buf).is_ok() {
                     // 只看到 HTTP 响应头还不够 —— 端口上可能坐着别的程序。
                     // 健康检查会自报服务名，认这个名字才说明真的是我们的服务，
                     // 否则会把界面导航到一个陌生的本地服务上去。
-                    if String::from_utf8_lossy(&buf[..n]).contains("assetvault-local-library") {
+                    if String::from_utf8_lossy(&buf).contains("assetvault-local-library") {
                         return true;
                     }
                 }
@@ -76,15 +98,13 @@ fn server_ready(port: u16) -> bool {
     false
 }
 
-/// 界面是否已经接管「关闭」这件事。
-/// 工作台的 app.js 加载完成、成功监听到关闭事件后才会置位；在那之前（仍在
-/// waiting / splash 页）没人能接这个事件，拦下关闭只会让按钮失灵，所以照旧直接退出。
-static CLOSE_UI_READY: AtomicBool = AtomicBool::new(false);
+/// 托盘可用时关窗隐藏，否则最小化，避免窗口隐藏后无法找回。
+static TRAY_READY: AtomicBool = AtomicBool::new(false);
 
-/// 由界面在监听成功后调用：此后关闭窗口改为「问一句」而不是直接退出。
+/// 兼容仍缓存着旧关闭弹窗逻辑的前端。
 #[tauri::command]
 fn close_ui_ready() {
-    CLOSE_UI_READY.store(true, Ordering::Relaxed);
+    // 保留旧前端命令兼容性；关闭行为由原生窗口统一处理。
 }
 
 /// 从托盘把主窗口叫回来：可能被「缩到托盘」隐藏过，也可能还最小化着。
@@ -98,13 +118,16 @@ fn show_main_window(app: &tauri::AppHandle) {
 
 /// 「缩到托盘」：只把窗口藏起来，node 服务与后台下载照常跑，点托盘图标随时叫回来。
 #[tauri::command]
-fn hide_to_tray(window: tauri::Window) {
-    let _ = window.hide();
+fn hide_to_tray(app: AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.hide();
+    }
 }
 
 /// 「退出应用」：走正常退出流程，RunEvent::Exit 里会把 node 子进程一并回收。
 #[tauri::command]
 fn quit_app(app: tauri::AppHandle) {
+    println!("[desktop] explicit quit requested");
     app.exit(0);
 }
 
@@ -217,9 +240,11 @@ fn start_backend(app: &AppHandle) -> Result<(), String> {
         return Ok(());
     }
     let backend = app.state::<Backend>();
+    *app.state::<BootError>().0.lock().unwrap() = None;
     // 每次启动挑一个空闲端口，避免与残留的旧进程抢同一个端口（详见 free_port 注释）。
     let port = free_port();
     let mut cmd = Command::new(&backend.node_exe);
+    let group = process_group::ProcessGroup::new().map_err(|e| format!("无法创建后台进程组：{e}"))?;
     cmd.arg(&backend.entry)
         .env("SFX_STATIC_ROOT", &backend.static_root)
         .env("SFX_DATA_DIR", &backend.data_dir)
@@ -238,7 +263,16 @@ fn start_backend(app: &AppHandle) -> Result<(), String> {
     #[cfg(windows)]
     cmd.creation_flags(CREATE_NO_WINDOW);
 
-    let mut child = cmd.spawn().map_err(|e| format!("启动 node 服务失败: {e}"))?;
+    let mut child = cmd.spawn().map_err(|e| {
+        let message = format!("启动 node 服务失败: {e}");
+        *app.state::<BootError>().0.lock().unwrap() = Some(message.clone());
+        message
+    })?;
+    if let Err(error) = group.attach(&child) {
+        let _ = child.kill();let _ = child.wait();
+        return Err(format!("无法管理后台进程生命周期：{error}"));
+    }
+    app.state::<NodeGuard>().1.lock().unwrap().replace(group);
 
     // 转发子进程日志到主进程 stdout/stderr，便于排查。
     if let Some(out) = child.stdout.take() {
@@ -249,9 +283,22 @@ fn start_backend(app: &AppHandle) -> Result<(), String> {
         });
     }
     if let Some(err) = child.stderr.take() {
+        let handle = app.clone();
+        let log = backend.data_dir.join("startup-error.log");
         std::thread::spawn(move || {
+            let mut lines = Vec::new();
             for line in BufReader::new(err).lines().map_while(Result::ok) {
                 eprintln!("[node] {line}");
+                lines.push(line);
+                if lines.len() > 40 { lines.remove(0); }
+            }
+            if !lines.is_empty() {
+                let details = lines.join("\n");
+                let _ = std::fs::write(&log, &details);
+                let message = if details.contains("另一个服务使用") {
+                    "启动失败：另一个 AssetVault 后台服务正在使用下载记录。请退出旧版软件或源码启动的服务后重新打开。".to_string()
+                } else { format!("本地服务启动失败：{}。日志：{}", lines.last().unwrap(), log.display()) };
+                *handle.state::<BootError>().0.lock().unwrap() = Some(message);
             }
         });
     }
@@ -267,6 +314,9 @@ fn start_backend(app: &AppHandle) -> Result<(), String> {
             }
         } else {
             eprintln!("[node] 本地服务在端口 {port} 上未就绪，界面会停在等待页。");
+            let state = handle.state::<BootError>();
+            let mut error = state.0.lock().unwrap();
+            if error.is_none() { *error = Some("本地服务启动超时，请关闭旧版 AssetVault 后重新打开。".into()); }
         }
     });
 
@@ -275,14 +325,16 @@ fn start_backend(app: &AppHandle) -> Result<(), String> {
 
 fn main() {
     let app = tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, _, _| show_main_window(app)))
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(updates::UpdateState::default())
-        .manage(NodeGuard(Mutex::new(None)))
+        .manage(NodeGuard(Mutex::new(None), Mutex::new(None)))
+        .manage(BootError::default())
         .setup(|app| {
             // 资源随安装包解压：node.exe 运行时 + sidecar-server 目录。
             let resource_dir = app.path().resource_dir()?;
             // 数据与下载目录放到应用数据目录，避免写入安装目录（可能无写权限）。
-            let app_data = app.path().app_data_dir()?;
+            let app_data = data_path::resolve(&app.path().app_data_dir()?)?;
 
             let data_dir = app_data.join("data");
             let download_dir = app_data.join("downloads");
@@ -335,8 +387,7 @@ fn main() {
                 }
             }
 
-            // 常驻托盘：关窗口时用户可能选「缩到托盘」，总得有地方能把窗口叫回来，
-            // 否则一旦隐藏，应用就彻底找不到了（这也是这个模式的前提）。
+            // 常驻托盘：关窗口后后台服务继续运行。
             // 左键单击 = 唤起窗口；右键 = 弹出菜单（打开 / 退出）。
             let show_item = MenuItem::with_id(app, "show", "打开 AssetVault", true, None::<&str>)?;
             let quit_item = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
@@ -364,23 +415,20 @@ fn main() {
                 tray = tray.icon(icon.clone());
             }
             // 托盘建不起来（系统策略等原因）不该拖垮整个应用：提示一声，照常启动。
-            if let Err(error) = tray.build(app) {
-                eprintln!("创建系统托盘失败，关闭窗口会退回直接退出：{error}");
+            match tray.build(app) {
+                Ok(_) => TRAY_READY.store(true, Ordering::Relaxed),
+                Err(error) => eprintln!("创建系统托盘失败，关闭窗口会改为最小化：{error}"),
             }
 
             Ok(())
         })
-        // 关窗口不再直接退出：拦下默认关闭行为，交给界面问一句「退出还是缩到托盘」。
-        // 这里只 prevent_close + 发事件，真正的 hide / exit 由用户点选后回传命令执行。
+        // 原生处理关闭，启动页或前端异常时也能保持后台任务运行。
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                // 界面还没接管（仍在 waiting / splash 页，或前端出了别的问题）时照旧直接退出，
-                // 免得关闭按钮变成失灵的；界面接管后，才拦下这次关闭去问「缩到托盘还是退出」。
-                if !CLOSE_UI_READY.load(Ordering::Relaxed) {
-                    return;
-                }
                 api.prevent_close();
-                let _ = window.emit("sfx:close-requested", ());
+                if !TRAY_READY.load(Ordering::Relaxed) || window.hide().is_err() {
+                    let _ = window.minimize();
+                }
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -388,6 +436,7 @@ fn main() {
             quit_app,
             open_external,
             close_ui_ready,
+            backend_startup_error,
             license_info,
             activate_with,
             updates::check_app_update,
@@ -399,10 +448,7 @@ fn main() {
 
     app.run(|app_handle, event| {
         if let tauri::RunEvent::Exit = event {
-            if let Some(mut child) = app_handle.state::<NodeGuard>().0.lock().unwrap().take() {
-                let _ = child.kill();
-                let _ = child.wait();
-            }
+            app_handle.state::<NodeGuard>().stop();
         }
     });
 }

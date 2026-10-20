@@ -1,4 +1,5 @@
 import {createDownloadUI} from './download-ui.js';
+import {createPersistentStorage} from './persistent-storage.js';
 import {createArtstationUI} from './artstation-ui.js';
 import {createAmbientcgUI} from './ambientcg-ui.js';
 import {createPolyhavenUI} from './polyhaven-ui.js';
@@ -38,6 +39,8 @@ const brainstorm=createThemeBrainstorm();
 let settingsPanel;
 const fmt=n=>n==null?'—':Number(n)>=1000?`${(Number(n)/1000).toFixed(Number(n)>=10000?0:1)}k`:String(n);
 let storage;try{storage=window.localStorage;}catch{}
+try{storage=await createPersistentStorage(storage);}catch(error){alert(`${error.message}。暂时使用页面缓存，本次修改可能无法持久保存。`);}
+window.addEventListener('assetvault:storage-error',event=>toast(event.detail));
 const initial=loadLibrary(storage);
 const newFeed=()=>({rows:[],request:null,next:null,pending:[],pages:0,busy:false,token:0,controller:null,status:'',error:false,aborted:false,warnings:[],visited:new Set(),origin:''});
 // 每个结果流都先建好骨架，骨架清单来自 platforms.js 的 FEEDS：加平台时不用回来改这里，
@@ -438,28 +441,9 @@ async function browseFolderInto(inputId,errorId){
  if(error)error.textContent='';
  try{const folder=await downloads.pickFolder(input.value.trim());if(folder)input.value=folder;}catch(e){if(error)error.textContent=e.message;toast(e.message);}
 }
-// 桌面版（Tauri）专属：关闭按钮不再直接退出，而是让用户选「缩到托盘 / 退出应用」。
-// 关窗动作已被 Rust 侧 prevent_close 拦下并发出事件（见 src-tauri/src/main.rs），
-// 这里只负责弹选择框、把结果回传命令；用浏览器直接打开工作台时整段不生效。
-function setupDesktopCloseChoice(){
- const api=window.__TAURI__;
- const dialog=$('#close-dialog');
- if(!api?.event?.listen||!dialog)return;
- const invoke=api.core?.invoke;
- // 监听成功后告诉主进程「界面已接管」：此后关窗口才走询问流程。
- // 万一没接管成功（权限缺失、前端异常），主进程会保持直接退出，关闭按钮不会变成失灵的。
- api.event.listen('sfx:close-requested',()=>{if(!dialog.open)dialog.showModal();})
-  .then(()=>invoke?.('close_ui_ready'))
-  .catch(error=>console.warn('无法接管关闭事件，关闭窗口仍会直接退出：',error));
- // 按 ESC 不算做选择：对话框关掉了却没决定，会让人以为窗口已经被处理过。
- dialog.addEventListener('cancel',event=>event.preventDefault());
- $('#close-to-tray').onclick=()=>{dialog.close();invoke?.('hide_to_tray');};
- $('#close-quit').onclick=()=>{dialog.close();invoke?.('quit_app');};
-}
 function setup(){
  restoreDiscoveryFilters();
  refreshTopicStrip();
- setupDesktopCloseChoice();
  downloads=createDownloadUI({$,icon,esc,toast,legacy:()=>state.tasks,requestLegacy:uid=>requestDownload([uid]),isVisible:()=>state.route==='downloads',onUpdate:changed=>{counts();if(changed&&state.route!=='downloads')renderGrid();}});downloads.setup();
  artstation=createArtstationUI({$,icon,esc,toast,state,requestFeed});artstation.setup();
  // ambientCG 侧栏（分类 / 精度 / 输出方式）：分类清单开页就拉一次，静态 facets 不常变。
@@ -521,15 +505,23 @@ function setup(){
   $('#asset-query').value=chip.dataset.topic;refreshTopicStrip();startSearch({record:true});
  });
  // 主题拆包助手（A3）：一句话主题 → AI 拆成一组搜索词，点一下即检索。
- const themeInput=$('#theme-input'),themeResults=$('#theme-results');
+ const themeInput=$('#asset-query'),themeResults=$('#theme-results');
+ themeInput.title='多个搜索词用逗号分隔，例如：house, tree, cart；AI 可将主题拆解成搜索词';
+ let themeToken=0;
+ themeInput.addEventListener('input',()=>{themeToken++;});
  $('#theme-breakdown-btn').onclick=async()=>{
   const theme=themeInput.value.trim();if(!theme){themeInput.focus();return;}
+  const token=++themeToken,button=$('#theme-breakdown-btn');button.disabled=true;button.textContent='拆解中…';
   themeResults.hidden=false;themeResults.innerHTML='<span class="theme-loading">正在拆解主题…</span>';
   const data=await brainstorm(theme);
+  button.disabled=false;button.textContent='✦ AI 拆解';
+  if(token!==themeToken){themeResults.hidden=true;return;}
   if(!data.brainstormed){themeResults.innerHTML=`<span class="theme-empty">${esc(data.reason||'未能拆解，请换个说法')}</span>`;return;}
-  themeResults.innerHTML=data.terms.map(t=>`<button type="button" class="theme-chip" data-term="${esc(t)}">${esc(t)}</button>`).join('');
+  const terms=[...new Set(data.terms.filter(t=>typeof t==='string').map(t=>t.trim()).filter(Boolean))].slice(0,8);
+  if(!terms.length){themeResults.textContent='未生成有效搜索词，请换个说法';return;}
+  themeInput.value=terms.join(', ');refreshTopicStrip();persist();
+  themeResults.innerHTML='<span>已填入搜索栏，点击搜索可同时检索；也可点击单个词：</span>'+terms.map(t=>`<button type="button" class="theme-chip" data-term="${esc(t)}">${esc(t)}</button>`).join('');
  };
- themeInput.addEventListener('keydown',event=>{if(event.key==='Enter'){event.preventDefault();$('#theme-breakdown-btn').click();}});
  themeResults.addEventListener('click',event=>{
   const chip=event.target.closest('[data-term]');if(!chip)return;
   $('#asset-query').value=chip.dataset.term;refreshTopicStrip();startSearch({record:true});
@@ -617,17 +609,21 @@ $('#load-more').onclick=()=>more({more:true});$('#load-all').onclick=()=>more({m
  $('#select-all').onclick=()=>{filtered().forEach(m=>state.selected.add(m.uid));renderGrid();};$('#deselect').onclick=()=>{state.selected.clear();renderGrid();};$('#collect-selected').onclick=()=>collect([...state.selected]);$('#download-selected').onclick=()=>requestDownload([...state.selected]);$('#download-images-selected').onclick=()=>imageDownload.requestImages([...state.selected]);
 
 // 关弹窗要停掉 three.js 的渲染循环并释放 GPU 资源 —— 只清iframe 的 src 的话，Poly Haven
- // 的 canvas 会继续每帧渲染，白烧 CPU/GPU 直到页面刷新。
- //
- // close 事件是**排队异步派发**的，而「上一个弹窗还开着就点下一个资产」这条路是
- // close() → showModal() → gltfPreview.load() 同步走完的：新预览的 load 先占了 loadToken，
- // 这个迟到的 close 再跑一遍就会把 token 作废、canvas 藏起来，于是新资产永远等不到自己的
- // 加载回调——表现就是「第一个模型能看，之后每个都是黑屏」。所以弹窗若已经重新打开，
- // 这属于上一轮的收尾，一律跳过。
+// 的 canvas 会继续每帧渲染，白烧 CPU/GPU 直到页面刷新。
+//
+// Sketchfab 的 iframe 反过来：**不**清 src。dialog 一关它就是 display:none，浏览器暂停
+// 它的渲染循环（不烧 GPU），但 WebGL 上下文和已加载的模型保持热态，同一个模型再次
+// 预览直接秒开；换模型时 preview() 发现地址不同会自己重设 src。
+//
+// close 事件是**排队异步派发**的，而「上一个弹窗还开着就点下一个资产」这条路是
+// close() → showModal() → gltfPreview.load() 同步走完的：新预览的 load 先占了 loadToken，
+// 这个迟到的 close 再跑一遍就会把 token 作废、canvas 藏起来，于是新资产永远等不到自己的
+// 加载回调——表现就是「第一个模型能看，之后每个都是黑屏」。所以弹窗若已经重新打开，
+// 这属于上一轮的收尾，一律跳过。
 $('#preview-dialog').addEventListener('close',()=>{
   if($('#preview-dialog').open)return;
-  $('#viewer').removeAttribute('src');gltfPreview.close();
- });
+  gltfPreview.close();
+});
  document.querySelectorAll('dialog').forEach(d=>d.addEventListener('click',e=>{if(e.target===d){const r=d.getBoundingClientRect();if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom)d.close();}}));
  $('#settings-button').onclick=$('#download-settings').onclick=openSettings;$('#help').onclick=()=>$('#help-dialog').showModal();
  const aiSettings=createAISettings({$,toast});

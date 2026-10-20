@@ -1,4 +1,5 @@
 import http from 'node:http';
+import {createLibraryStorage} from './library-storage.mjs';
 import fs from 'node:fs/promises';
 import {createReadStream,writeSync} from 'node:fs';
 import {DownloadManager} from './downloads.mjs';
@@ -112,6 +113,7 @@ export function createLibraryServer({scan=scanPage,search=searchPage,open=openPu
   // 一个进程同时只会跑一个服务端实例，所以这里直接换掉模块级那一份。
   if(cacheDir)httpCache=createResponseCache(cacheDir);
   const ai=createAIService({file:path.join(resolveDataDir(root).dir,'ai-settings.json')});
+  const libraryStorage=createLibraryStorage(downloads?.dataDir||resolveDataDir(root).dir,downloads);
   return http.createServer(async(req,res)=>{
     res.setHeader('X-Content-Type-Options','nosniff');res.setHeader('Referrer-Policy','no-referrer');
     res.setHeader('Cache-Control','no-store');
@@ -122,6 +124,14 @@ export function createLibraryServer({scan=scanPage,search=searchPage,open=openPu
     const controller=new AbortController();req.on('aborted',()=>controller.abort());res.on('close',()=>{if(!res.writableEnded)controller.abort();});
     try {
       const u=new URL(req.url,`http://${req.headers.host}`);
+      if(u.pathname==='/api/library-state'){
+        if(req.headers['x-sfx-local']!=='1')return json(res,403,{error:'缺少本地请求标识'});
+        if(req.method==='GET')return json(res,200,await libraryStorage.load());
+        if(req.method==='POST'){
+          let text='';for await(const chunk of req){text+=chunk;if(Buffer.byteLength(text)>12*1024*1024)throw Error('资产库状态过大');}
+          await libraryStorage.save(JSON.parse(text));return json(res,200,{saved:true});
+        }
+      }
       if(u.pathname==='/api/health'&&req.method==='GET')return json(res,200,{name:'assetvault-local-library',version:SERVER_VERSION,mode:'local',engine:'existing-exporter'});
       if(u.pathname.startsWith('/api/ai/')){
         if(req.headers['x-sfx-local']!=='1')return json(res,403,{error:'缺少本地请求标识'});
@@ -131,7 +141,9 @@ export function createLibraryServer({scan=scanPage,search=searchPage,open=openPu
           if(u.pathname==='/api/ai/settings')return json(res,200,await ai.configure(input));
           if(u.pathname==='/api/ai/models')return json(res,200,await ai.models(input,controller.signal));
           if(u.pathname==='/api/ai/test')return json(res,200,await ai.test(controller.signal));
-          if(u.pathname==='/api/ai/translate')return json(res,200,await ai.translate(input.query));
+          // expand=true 走合并调用：一次 LLM 推理同时返回英文翻译和扩展词，
+          // 中文搜索不再串行等两次推理（旧 /expand 端点保留，行为不变）。
+          if(u.pathname==='/api/ai/translate')return json(res,200,input.expand===true?await ai.translateSearch(input.query):await ai.translate(input.query));
           if(u.pathname==='/api/ai/expand')return json(res,200,await ai.expand(input.query));
           if(u.pathname==='/api/ai/parse-local')return json(res,200,await ai.parseLocal(input.query));
           if(u.pathname==='/api/ai/brainstorm')return json(res,200,await ai.brainstorm(input.query));

@@ -1,7 +1,8 @@
 #![windows_subsystem = "windows"]
 
-use std::{fs, path::{Path, PathBuf}, process::Command, os::windows::process::CommandExt};
+use std::{fs, io::{BufRead, BufReader}, path::{Path, PathBuf}, process::{Command, Stdio}, os::windows::process::CommandExt};
 use tao::{event::{Event, WindowEvent}, event_loop::{ControlFlow, EventLoopBuilder}, window::WindowBuilder};
+use tao::platform::windows::WindowBuilderExtWindows;
 use wry::WebViewBuilder;
 use base64::Engine;
 
@@ -11,7 +12,7 @@ const HIDDEN: u32 = 0x08000000;
 
 #[derive(serde::Deserialize)]
 struct Request { action: String, path: Option<String>, shortcut: Option<bool> }
-enum Message { Request(Request), Finished(Result<bool, String>) }
+enum Message { Request(Request), Stage(&'static str), Finished(Result<bool, String>) }
 
 fn valid_path(value: &str) -> bool {
     let bytes = value.as_bytes();
@@ -24,7 +25,33 @@ fn valid_path(value: &str) -> bool {
 
 fn ps_literal(value: &str) -> String { format!("'{}'", value.replace('\'', "''")) }
 
-fn install(path: &str, shortcut: bool) -> Result<bool, String> {
+fn installed_directory(value: &str) -> Option<PathBuf> {
+    let value = value.trim().trim_matches('"');
+    (valid_path(value) && Path::new(value).join("assetvault.exe").is_file()).then(|| PathBuf::from(value))
+}
+
+fn existing_installation() -> Option<serde_json::Value> {
+    use winreg::{RegKey, enums::{HKEY_LOCAL_MACHINE, HKEY_CURRENT_USER, KEY_READ, KEY_WOW64_64KEY, KEY_WOW64_32KEY}};
+    for hive in [HKEY_LOCAL_MACHINE, HKEY_CURRENT_USER] {
+        for view in [KEY_WOW64_64KEY, KEY_WOW64_32KEY] {
+            let root = RegKey::predef(hive);
+            let uninstall = root.open_subkey_with_flags(r"Software\Microsoft\Windows\CurrentVersion\Uninstall\AssetVault", KEY_READ | view).ok();
+            let version = uninstall.as_ref().and_then(|key| key.get_value::<String, _>("DisplayVersion").ok());
+            let location = uninstall.as_ref().and_then(|key| key.get_value::<String, _>("InstallLocation").ok());
+            let legacy = root.open_subkey_with_flags(r"Software\assetvault\AssetVault", KEY_READ | view).ok()
+                .and_then(|key| key.get_value::<String, _>("").ok());
+            for value in [location, legacy].into_iter().flatten() {
+                if let Some(path) = installed_directory(&value) {
+                    return Some(serde_json::json!({"path":path,"version":version}));
+                }
+            }
+        }
+    }
+    None
+}
+
+fn install(path: &str, shortcut: bool, stage: impl Fn(&'static str)) -> Result<bool, String> {
+    stage("preparing");
     let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
     let temporary = std::env::temp_dir().join(format!("AssetVault-setup-{}-{nonce}", std::process::id()));
     fs::create_dir(&temporary).map_err(|e| e.to_string())?;
@@ -33,13 +60,22 @@ fn install(path: &str, shortcut: bool) -> Result<bool, String> {
         fs::write(&engine, ENGINE).map_err(|e| e.to_string())?;
         let arguments = format!("/S {} /D={path}", if shortcut { "" } else { "/NS" });
         // Elevate only the NSIS child; the UI and subsequently launched app stay unelevated.
-        let script = format!("$ErrorActionPreference='Stop'; try {{ $p=Start-Process -FilePath {} -ArgumentList {} -Verb RunAs -Wait -PassThru; Write-Output $p.ExitCode }} catch {{ Write-Error $_; exit 1 }}", ps_literal(&engine.to_string_lossy()), ps_literal(&arguments));
-        let output = Command::new("powershell.exe")
+        let script = format!("$ErrorActionPreference='Stop'; try {{ $p=Start-Process -FilePath {} -ArgumentList {} -Verb RunAs -PassThru; $null=$p.Handle; Write-Output 'INSTALLING'; $p.WaitForExit(); Write-Output $p.ExitCode }} catch {{ Write-Error $_; exit 1 }}", ps_literal(&engine.to_string_lossy()), ps_literal(&arguments));
+        stage("authorizing");
+        let mut child = Command::new("powershell.exe")
             .args(["-NoProfile", "-NonInteractive", "-Command", &script])
-            .creation_flags(HIDDEN).output().map_err(|e| e.to_string())?;
-        if !output.status.success() { return Err("未能启动安装，可能已取消管理员授权。请重试。".into()); }
-        match String::from_utf8_lossy(&output.stdout).trim() {
-            "0" | "3010" if Path::new(path).join("assetvault.exe").is_file() => Ok(String::from_utf8_lossy(&output.stdout).trim() == "3010"),
+            .creation_flags(HIDDEN).stdout(Stdio::piped()).stderr(Stdio::null())
+            .spawn().map_err(|e| e.to_string())?;
+        let mut code = String::new();
+        for line in BufReader::new(child.stdout.take().unwrap()).lines() {
+            let line = line.map_err(|e| e.to_string())?;
+            if line.trim() == "INSTALLING" { stage("installing"); }
+            else if !line.trim().is_empty() { code = line.trim().to_owned(); }
+        }
+        if !child.wait().map_err(|e| e.to_string())?.success() { return Err("未能启动安装，可能已取消管理员授权。请重试。".into()); }
+        stage("verifying");
+        match code.as_str() {
+            "0" | "3010" if Path::new(path).join("assetvault.exe").is_file() => Ok(code == "3010"),
             code => Err(format!("安装未完成（退出码 {code}）。请检查安装目录权限或关闭正在运行的 AssetVault 后重试。")),
         }
     })();
@@ -53,10 +89,15 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let proxy = event_loop.create_proxy();
     let window = WindowBuilder::new().with_title("安装 AssetVault")
         .with_inner_size(tao::dpi::LogicalSize::new(1040., 700.))
+        .with_visible(false).with_decorations(false).with_undecorated_shadow(false)
+        .with_background_color((13, 18, 24, 255))
         .with_resizable(false).build(&event_loop)?;
     let embedded_url = format!("data:text/html;charset=utf-8;base64,{}", base64::engine::general_purpose::STANDARD.encode(HTML));
+    let existing = existing_installation();
+    let initialization = format!("window.__INSTALLER_NATIVE__=true;window.__INSTALLER_EXISTING__={};", serde_json::to_string(&existing)?);
     let webview = WebViewBuilder::new().with_html(HTML)
-        .with_initialization_script("window.__INSTALLER_NATIVE__=true;")
+        .with_background_color((13, 18, 24, 255))
+        .with_initialization_script(&initialization)
         .with_navigation_handler(move |url| url == "about:blank" || url == embedded_url)
         .with_ipc_handler(move |request| {
             if let Ok(message) = serde_json::from_str(request.body()) { let _ = proxy.send_event(Message::Request(message)); }
@@ -70,6 +111,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         match event {
             Event::WindowEvent { event: WindowEvent::CloseRequested, .. } if !busy => *control_flow = ControlFlow::Exit,
             Event::UserEvent(Message::Request(request)) => match request.action.as_str() {
+                "ready" => window.set_visible(true),
+                "drag" => { let _ = window.drag_window(); },
                 "install" if !busy && installed.is_none() => {
                     let path = request.path.unwrap_or_default();
                     if !valid_path(&path) { report = Some(serde_json::json!({"state":"error","message":"请选择有效的本地绝对路径，例如 C:\\Program Files\\AssetVault。"})); }
@@ -77,7 +120,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         installed = Some(PathBuf::from(&path));
                         busy = true;
                         let proxy = proxy.clone();
-                        std::thread::spawn(move || { let _ = proxy.send_event(Message::Finished(install(&path, request.shortcut.unwrap_or(true)))); });
+                        std::thread::spawn(move || {
+                            let result = install(&path, request.shortcut.unwrap_or(true), |stage| { let _ = proxy.send_event(Message::Stage(stage)); });
+                            let _ = proxy.send_event(Message::Finished(result));
+                        });
                     }
                 }
                 "launch" if !busy => if let Some(path) = &installed {
@@ -95,6 +141,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     Ok(restart) => serde_json::json!({"state":"done","restart":restart}),
                     Err(message) => { installed = None; serde_json::json!({"state":"error","message":message}) }
                 });
+            }
+            Event::UserEvent(Message::Stage(stage)) => {
+                report = Some(serde_json::json!({"state":"progress","stage":stage}));
             }
             _ => {}
         }
@@ -126,5 +175,16 @@ mod tests {
         assert!(valid_path("D:\\模型工具\\AssetVault"));
         for value in ["C:\\", "relative", "C:\\a\" /S", "C:\\a\nb", "C:\\..\\Windows", "C:\\a:b", "C:\\foo."] { assert!(!valid_path(value), "{value}"); }
         assert_eq!(ps_literal("a'b"), "'a''b'");
+    }
+    #[test]
+    fn ignore_stale_installation_and_normalize_quoted_path() {
+        let folder = std::env::temp_dir().join(format!("assetvault-detect-test-{}", std::process::id()));
+        fs::create_dir(&folder).unwrap();
+        let quoted = format!("\"{}\"", folder.display());
+        assert!(installed_directory(&quoted).is_none());
+        fs::write(folder.join("assetvault.exe"), b"fixture").unwrap();
+        assert_eq!(installed_directory(&quoted), Some(folder.clone()));
+        assert!(installed_directory("relative").is_none());
+        fs::remove_dir_all(folder).unwrap();
     }
 }

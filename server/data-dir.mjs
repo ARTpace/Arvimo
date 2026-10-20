@@ -7,7 +7,7 @@ export const LEGACY_DATA_DIR_NAME='.sketchvault';
  * 只在「新目录不存在、旧目录存在」时改名；改名失败（被占用 / 无权限）就继续用旧目录，绝不删数据。
  */
 export function resolveDataDir(root){
- // 安装版由 Tauri 传 SFX_DATA_DIR（%APPDATA%\com.assetvault.desktop\data）。
+ // 安装版由 Tauri 传 SFX_DATA_DIR（%APPDATA%\AssetVault\data，旧路径兼容迁移）。
  // 安装目录常在 Program Files 下、没有写权限，以前所有数据目录都按 sidecar 根目录推导，
  // 结果 AI 设置 mkdir 直接 EPERM。只要外面给了绝对路径就以它为准。
  const override=process.env.SFX_DATA_DIR;

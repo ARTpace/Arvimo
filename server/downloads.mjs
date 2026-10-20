@@ -3,6 +3,7 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import {randomUUID} from 'node:crypto';
 import {execFile} from 'node:child_process';
+import {processIdentity,lockOwnerAlive} from './process-lock.mjs';
 import {runExportWorker,browserPath} from './export-worker.mjs';
 import {runArtstationWorker} from './artstation-worker.mjs';
 import {runPolyhavenJob} from './polyhaven.mjs';
@@ -143,6 +144,12 @@ export function modelSnapshot(m,kind){
 function cleanStem(name,uid){let stem=String(name||'model').replace(/\.zip$/i,'').replace(/[<>:"/\\|?*\x00-\x1f]/g,'_').replace(/[. ]+$/,'').slice(0,100)||'model';if(!stem.includes(uid.slice(0,8)))stem+='-'+uid.slice(0,8);return stem;}
 export function cleanFilename(name,uid){return cleanStem(name,uid)+'.zip';}
 export function cleanFolderName(name,uid){return cleanStem(name,uid);}
+function optionKey(value){
+ if(Array.isArray(value))return JSON.stringify(value.map(item=>JSON.parse(optionKey(item))));
+ if(value&&typeof value==='object')return JSON.stringify(Object.fromEntries(Object.keys(value).sort().filter(key=>value[key]!==undefined).map(key=>[key,JSON.parse(optionKey(value[key]))])));
+ return JSON.stringify(value);
+}
+const sameFolder=(a,b)=>process.platform==='win32'?path.resolve(a).toLowerCase()===path.resolve(b).toLowerCase():path.resolve(a)===path.resolve(b);
 export class DownloadManager{
  constructor({dataDir,defaultFolder,runner=runExportWorker,artRunner=runArtstationWorker,imageRunner=runImageJob,polyRunner=runPolyhavenJob,pizzaRunner=runPolypizzaJob,kenneyRunner=runKenneyJob,freestyleRunner=runFreestylizedJob,materialRunner=runAmbientcgJob,verify=verifyArchive,browser=browserPath,blender=blenderPath,fbxConverter=convertGlbToFbx,blenderImporter=launchBlenderImport,materialImporter=launchBlenderMaterialImport,hdriImporter=launchBlenderHdriImport,folderPicker=nativeFolderPicker,autoStart=true}={}){
   this.instanceId=randomUUID();this.dataDir=path.resolve(dataDir);this.defaultFolder=path.resolve(defaultFolder);this.runner=runner;this.artRunner=artRunner;this.imageRunner=imageRunner;this.polyRunner=polyRunner;this.pizzaRunner=pizzaRunner;this.kenneyRunner=kenneyRunner;this.freestyleRunner=freestyleRunner;this.materialRunner=materialRunner;this.verify=verify;this.browser=browser;this.blender=blender;this.fbxConverter=fbxConverter;this.blenderImporter=blenderImporter;this.materialImporter=materialImporter;this.hdriImporter=hdriImporter;this.folderPicker=folderPicker;this.autoStart=autoStart;this.jobs=[];this.workers=new Map();this.transfers=new Map();this.closed=false;this.baseUrl=null;this.revision=0;this.timer=null;this.persistTimer=null;this.warning='';
@@ -150,7 +157,7 @@ export class DownloadManager{
  }
  async init(){
   await fsp.mkdir(this.dataDir,{recursive:true});this.lockPath=path.join(this.dataDir,'manager.lock');
-  try{const fd=fs.openSync(this.lockPath,'wx');fs.writeFileSync(fd,JSON.stringify({pid:process.pid}));fs.closeSync(fd);}catch(e){if(e.code!=='EEXIST')throw e;let pid;try{pid=JSON.parse(fs.readFileSync(this.lockPath)).pid;}catch{throw Error('下载记录目录锁无效，请检查 manager.lock');}let alive=true;try{process.kill(pid,0);}catch(e){if(e.code==='ESRCH')alive=false;}if(alive)throw Error('此下载记录目录已由另一个服务使用');fs.unlinkSync(this.lockPath);return this.init();}
+  try{const fd=fs.openSync(this.lockPath,'wx');fs.writeFileSync(fd,JSON.stringify(processIdentity()));fs.closeSync(fd);}catch(e){if(e.code!=='EEXIST')throw e;let owner;try{owner=JSON.parse(fs.readFileSync(this.lockPath));}catch{throw Error('下载记录目录锁无效，请检查 manager.lock');}if(lockOwnerAlive(owner))throw Error('此下载记录目录已由另一个服务使用');fs.unlinkSync(this.lockPath);return this.init();}
   try{
    this.store=path.join(this.dataDir,'tasks.json');let saved;
    if(fs.existsSync(this.store)){try{saved=JSON.parse(fs.readFileSync(this.store,'utf8'));}catch{try{saved=JSON.parse(fs.readFileSync(this.store+'.bak','utf8'));this.warning='任务记录损坏，已从上次备份恢复；原损坏文件已保留。';fs.copyFileSync(this.store,this.store+'.damaged-'+Date.now());fs.copyFileSync(this.store+'.bak',this.store);}catch{throw Error('任务记录损坏，已停止启动，未覆盖原文件');}}}
@@ -238,7 +245,7 @@ export class DownloadManager{
   // 先把请求排进队列，循环结束后统一收结果，避免一个卡住把整批入队都拖住。
   const reopen=[];
   if(this.jobs.length+models.length>500)throw Error('任务记录将超过 500 条，请清理历史后重试');
-  for(const m of models){const same=j=>j.kind===m.kind&&j.uid===m.uid&&JSON.stringify(j.options)===JSON.stringify(options)&&path.resolve(j.downloadDir)===path.resolve(folder);const previous=this.jobs.find(j=>same(j)&&(ACTIVE.has(j.state)||WAITING.has(j.state)))||this.jobs.findLast(same);
+  for(const m of models){const same=j=>j.kind===m.kind&&j.uid===m.uid&&optionKey(j.options)===optionKey(options)&&sameFolder(j.downloadDir,folder);const previous=this.jobs.find(j=>same(j)&&(ACTIVE.has(j.state)||WAITING.has(j.state)))||this.jobs.findLast(j=>same(j)&&j.state==='saved'&&exists(j.filePath||''))||this.jobs.findLast(same);
    if(previous&&(ACTIVE.has(previous.state)||WAITING.has(previous.state)||previous.state==='saved'&&exists(previous.filePath||'')&&!input.force)){
     if(openInBlender&&previous.state==='saved'&&exists(previous.filePath||''))reopen.push({uid:m.uid,job:previous});
     duplicates.push({uid:m.uid,name:m.name,state:previous.state});continue;
@@ -261,7 +268,7 @@ export class DownloadManager{
    else if(WAITING.has(j.state))this.update(j,{state:'cancelled',finishedAt:Date.now(),message:'已取消排队'});else throw Error('此任务已结束');
   }else if(action==='hold'){if(!['queued','retry_wait'].includes(j.state))throw Error('只能暂停尚未开始的任务；转换中请使用取消');this.update(j,{state:'held',message:'已暂停排队'});
   }else if(action==='resume'){if(j.state!=='held')throw Error('任务不是暂停排队状态');this.update(j,{state:'queued',message:'等待后台处理'});
-  }else if(action==='retry'){if(!['failed','cancelled','interrupted'].includes(j.state))throw Error('此任务不能重试');if(this.jobs.some(x=>x.id!==id&&x.uid===j.uid&&path.resolve(x.downloadDir)===path.resolve(j.downloadDir)&&JSON.stringify(x.options)===JSON.stringify(j.options)&&(ACTIVE.has(x.state)||WAITING.has(x.state))))throw Error('已有相同模型的任务正在处理或等待');this.log(j,'手动重试：从头下载，沿用任务原目录和导出设置');this.update(j,{state:'queued',message:'等待重新下载',retryCount:0,nextAttemptAt:null,finishedAt:null,warning:null,bytesWritten:0,totalBytes:null,verification:null});
+  }else if(action==='retry'){if(!['failed','cancelled','interrupted'].includes(j.state))throw Error('此任务不能重试');if(this.jobs.some(x=>x.id!==id&&x.kind===j.kind&&x.uid===j.uid&&sameFolder(x.downloadDir,j.downloadDir)&&optionKey(x.options)===optionKey(j.options)&&(ACTIVE.has(x.state)||WAITING.has(x.state))))throw Error('已有相同模型的任务正在处理或等待');if(this.jobs.some(x=>x.id!==id&&x.kind===j.kind&&x.uid===j.uid&&sameFolder(x.downloadDir,j.downloadDir)&&optionKey(x.options)===optionKey(j.options)&&x.state==='saved'&&exists(x.filePath||'')))throw Error('此资产已下载且文件仍存在，无需重试');this.log(j,'手动重试：从头下载，沿用任务原目录和导出设置');this.update(j,{state:'queued',message:'等待重新下载',retryCount:0,nextAttemptAt:null,finishedAt:null,warning:null,bytesWritten:0,totalBytes:null,verification:null});
   }else if(action==='remove'){// Terminal state is the real guard: run() never writes state again afterwards,
    // and the worker entry can still linger for a tick after a job finishes.
    if(!terminal.has(j.state))throw Error('请先取消任务再移除记录');this.jobs=this.jobs.filter(x=>x.id!==id);this.save();

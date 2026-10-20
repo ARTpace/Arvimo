@@ -14,10 +14,7 @@ pub async fn check_app_update(app: AppHandle) -> Result<serde_json::Value, Strin
     }
     let handle = app.clone();
     let update = app.updater_builder().on_before_exit(move || {
-        if let Some(mut child) = handle.state::<super::NodeGuard>().0.lock().unwrap().take() {
-            let _ = child.kill();
-            let _ = child.wait();
-        }
+        handle.state::<super::NodeGuard>().stop();
     }).timeout(std::time::Duration::from_secs(20))
         .build().map_err(|e| e.to_string())?.check().await.map_err(|e| e.to_string())?;
     let result = match &update {
