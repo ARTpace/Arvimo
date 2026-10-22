@@ -267,6 +267,7 @@ fn start_backend(app: &AppHandle) -> Result<(), String> {
     cmd.arg(&backend.entry)
         .env("SFX_STATIC_ROOT", &backend.static_root)
         .env("SFX_DATA_DIR", &backend.data_dir)
+        .env("SFX_REPLACE_LIBRARY_OWNER", "1")
         .env("SFX_DOWNLOAD_DIR", &backend.download_dir)
         .env("SFX_BROWSER", &backend.browser_exe)
         .env("SFX_BROWSER_INSTALL_DIR", &backend.browser_root)

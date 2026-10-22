@@ -1,5 +1,9 @@
 import {ACTIVE,WAITING,TERMINAL} from './download-progress.js';
 import {createTaskCard} from './download-card.js';
+import {createFolderPicker} from './folder-picker.js';
+import {createBrowserDelivery,fetchBrowserAsset} from './browser-delivery.js';
+import {createClientDirectory} from './client-directory.js';
+import {isLanVisitor} from './visitor-mode.js';
 // Only Sketchfab conversion drives a headless browser; ArtStation runs the mviewer CLI, so a
 // missing browser must not be reported as a problem for an ArtStation-only queue.
 const needsBrowser=j=>j.kind==='sketchfab'&&!TERMINAL.has(j.state);
@@ -9,12 +13,26 @@ const needsBrowser=j=>j.kind==='sketchfab'&&!TERMINAL.has(j.state);
  *  converter), `platform` tells picture jobs which source their pictures live on. The whitelist
  *  exists to keep accidental card baggage (feeds, caches, DOM handles) out of the POST body —
  *  extend it deliberately when the queue learns a new field. */
-export const modelPayload=({uid,name,author,license,thumbnail,downloadable,artworkUrl,artId,platform,assetId,assetType,hasMarmoset})=>({uid,name,author,license,thumbnail,downloadable,artworkUrl,artId,platform,assetId,assetType,hasMarmoset});
+export const modelPayload=({uid,name,author,license,thumbnail,downloadable,artworkUrl,artId,platform,assetId,assetType,sourceType,hasMarmoset})=>({uid,name,author,license,thumbnail,downloadable,artworkUrl,artId,platform,assetId,assetType,sourceType,hasMarmoset});
 export function createDownloadUI({$,icon,esc,toast,legacy,requestLegacy,onUpdate,isVisible}){
+ const visitor=isLanVisitor(),clientDirectory=createClientDirectory();
  const ui={jobs:[],settings:null,connected:false,filter:'all',selected:new Set(),revision:-1,timer:null,pending:false};
- const card=createTaskCard({esc,icon});
+ const card=createTaskCard({esc,icon,visitor});
+ const folderPicker=createFolderPicker({esc,icon});
+ const directoryReady=visitor?clientDirectory.restore().catch(()=>{}):Promise.resolve();
+ let browserStorage;try{browserStorage=window.localStorage;}catch{}
+ async function downloadAsset(id){
+  await directoryReady;
+  const {blob,filename}=await fetchBrowserAsset(id);
+  if(visitor&&await clientDirectory.save(blob,filename)){toast('资产已保存到本地文件夹：'+clientDirectory.name);return;}
+  const url=URL.createObjectURL(blob);
+  const link=document.createElement('a');link.href=url;link.download=filename;document.body.append(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),60000);
+  toast('已交给浏览器保存；若被拦截，请允许自动下载');
+ }
+ const delivery=createBrowserDelivery({storage:browserStorage,forceEnabled:visitor,download:downloadAsset,onError:error=>toast('自动下载失败：'+error.message)});
  async function api(route='',body){const get=body===undefined;const r=await fetch('/api/downloads'+route,{method:get?'GET':'POST',cache:'no-store',headers:{'X-SFX-Local':'1',...(get&&ui.etag?{'If-None-Match':ui.etag}:{}),...(get?{}:{'Content-Type':'application/json'})},...(get?{}:{body:JSON.stringify(body)})});if(r.status===304)return null;const data=await r.json();if(!r.ok)throw Error(data.error||'下载服务请求失败');if(get)ui.etag=r.headers.get('ETag');return data;}
  function promptForFolder(){
+  if(visitor)return;
   const status=ui.folderStatus;if(!status||status.ok)return;
   const key=`${status.folder||ui.settings?.folder||''}:${status.code||''}`;if(ui.pathPromptedFor===key)return;ui.pathPromptedFor=key;
   const dialog=$('#download-path-dialog');if(!dialog)return;
@@ -28,7 +46,7 @@ export function createDownloadUI({$,icon,esc,toast,legacy,requestLegacy,onUpdate
  function renderHeader(){
   $('#task-count').textContent=ui.jobs.length;$('#download-service').innerHTML=`<span class="live-dot"></span>${ui.connected?'后台服务在线 · 关页仍可下载':'等待连接后台服务'}`;
   $('#download-warning').hidden=!ui.warning;$('#download-warning').textContent=ui.warning||'';
-  $('#download-folder').textContent=ui.settings?.folder||'正在读取保存目录…';
+  $('#download-folder').textContent=visitor?(clientDirectory.name?`本机文件夹：${clientDirectory.name}`:'此电脑的浏览器下载目录（在浏览器设置中指定）'):(ui.settings?.folder||'正在读取保存目录…');
   // 队列说明原本占一整行，简化后收进暂停键的 title：鼠标停上去就有，不占版面。
   const pause=$('#queue-pause');
   pause.textContent=ui.settings?.paused?'继续排队':'暂停队列';
@@ -54,6 +72,7 @@ export function createDownloadUI({$,icon,esc,toast,legacy,requestLegacy,onUpdate
  }
  function render(){renderHeader();renderList();}
  async function action(action,id){try{
+  if(action==='download-local'){await downloadAsset(id);return;}
   if(action==='log'){const t=ui.jobs.find(t=>t.id===id);const a=document.createElement('a'),url=URL.createObjectURL(new Blob([JSON.stringify({...t,logs:undefined},null,2)+'\n\n'+t.logs.join('\n')],{type:'text/plain;charset=utf-8'}));a.href=url;a.download=`assetvault-${t.uid.slice(0,8)}.txt`;a.click();setTimeout(()=>URL.revokeObjectURL(url),10000);return;}
   if(action==='reveal'){await api(`/tasks/${id}/reveal`,{});return;}
   await api(`/tasks/${id}/action`,{action});await refresh();
@@ -62,9 +81,20 @@ export function createDownloadUI({$,icon,esc,toast,legacy,requestLegacy,onUpdate
  async function reveal(id){if(!id)throw Error('缺少任务编号');await api(`/tasks/${id}/reveal`,{});}
  /** 手动把已保存的文件送进 Blender：服务端会重新检查文件还在不在，不存在就报错。 */
  async function sendToBlender(id){if(!id)throw Error('缺少任务编号');accept(await api(`/tasks/${id}/send-blender`,{}));}
- async function pickFolder(initial){const data=await api('/pick-folder',{folder:initial||ui.settings?.folder||ui.defaultFolder||''});return data?.cancelled?null:data.folder;}
+ async function pickFolder(initial){if(visitor)throw Error('访客不能选择主机目录，请在下载管理中指定本机保存位置');return folderPicker(initial||ui.settings?.folder||ui.defaultFolder||'');}
  async function chooseFolder(input,error){const button=$('#browse-download-path');if(button)button.disabled=true;if(error)error.textContent='';try{const folder=await pickFolder(input.value.trim());if(folder)input.value=folder;}catch(e){if(error)error.textContent=e.message;toast(e.message);}finally{if(button)button.disabled=false;}}
  function setup(){
+  if(visitor){
+   directoryReady.then(()=>renderHeader());
+   $('#download-folder').closest('.download-location').querySelector('small').textContent='保存到我的电脑';
+   $('#change-download-folder').textContent='指定保存位置';
+   const dialog=$('#client-download-dialog');
+   $('#client-choose-directory').hidden=!clientDirectory.supported;
+   $('#client-choose-directory').onclick=async()=>{
+    try{await clientDirectory.choose();renderHeader();dialog.close();toast('后续资产将自动保存到：'+clientDirectory.name);}
+    catch(error){if(error.name!=='AbortError')toast(error.message);}
+   };
+  }
   $('#tasks').addEventListener('click',e=>{
    const button=e.target.closest('[data-task-disclosure]');if(!button)return;
    const detail=button.closest('.task').querySelector(`details[data-kind="${button.dataset.taskDisclosure}"]`);
@@ -74,16 +104,17 @@ export function createDownloadUI({$,icon,esc,toast,legacy,requestLegacy,onUpdate
   $('#tasks').addEventListener('change',e=>{const id=e.target.dataset.jobSelect;if(id){e.target.checked?ui.selected.add(id):ui.selected.delete(id);render();}});
   $('#task-select-visible').onclick=()=>{for(const t of visible())ui.selected.add(t.id);render();};$('#task-deselect').onclick=()=>{ui.selected.clear();render();};
   $('#queue-pause').onclick=async()=>{try{accept(await api('/settings',{paused:!ui.settings.paused}));}catch(e){toast(e.message);}};
-  $('#change-download-folder').onclick=()=>{$('#download-path-input').value=ui.settings?.folder||'';$('#download-path-error').textContent='';$('#download-path-dialog').showModal();};
+  $('#change-download-folder').onclick=()=>{if(visitor){$('#client-download-dialog').showModal();return;}$('#download-path-input').value=ui.settings?.folder||'';$('#download-path-error').textContent='';$('#download-path-dialog').showModal();};
   $('#save-download-path').onclick=async()=>{const button=$('#save-download-path');button.disabled=true;$('#download-path-error').textContent='';try{await saveSettings({folder:$('#download-path-input').value.trim()});$('#download-path-dialog').close();toast('默认保存路径已更新，新任务将使用此目录');}catch(e){$('#download-path-error').textContent=e.message;}finally{button.disabled=false;}};
   $('#browse-download-path').onclick=()=>chooseFolder($('#download-path-input'),$('#download-path-error'));
   $('#download-refresh').onclick=refresh;$('#open-download-folder').onclick=async()=>{try{await api('/reveal',{});}catch(e){toast(e.message);}};
   $('#clear-tasks').onclick=()=>{if(confirm('清除已结束的后台任务记录？不会删除磁盘文件。'))batch('remove',ui.jobs.filter(t=>TERMINAL.has(t.state)).map(t=>t.id));};
-  refresh();ui.timer=setInterval(refresh,750);document.addEventListener('visibilitychange',()=>{if(!document.hidden)refresh();});
+  const poll=async()=>{await refresh();if(ui.connected)delivery.accept(ui.jobs);};
+  poll();ui.timer=setInterval(poll,750);document.addEventListener('visibilitychange',()=>{if(!document.hidden)poll();});
  }
   // `platform` rides along for picture jobs: the queue stores it so a restored job still asks the
   // right source where its pictures live, instead of guessing from the URL shape.
-  async function enqueue(models,options,force,folder,kind='sketchfab',extra={}){const result=await api('/tasks',{kind,models:models.map(modelPayload),options,authorized:true,force,folder,...extra});await refresh();return result;}
- async function saveSettings(values){accept(await api('/settings',values));}
- return Object.assign(ui,{render,refresh,setup,enqueue,saveSettings,pickFolder,reveal,sendToBlender,activeCount:()=>ui.jobs.filter(j=>ACTIVE.has(j.state)||WAITING.has(j.state)).length});
+  async function enqueue(models,options,force,folder,kind='sketchfab',extra={}){const result=await api('/tasks',{kind,models:models.map(modelPayload),options,authorized:true,force,folder,...extra});delivery.track(result.added||[]);await refresh();delivery.accept(ui.jobs);return result;}
+ async function saveSettings(values){if(visitor)throw Error('访客不能修改主机设置');accept(await api('/settings',values));}
+ return Object.assign(ui,{render,refresh,setup,enqueue,saveSettings,pickFolder,reveal,sendToBlender,activeCount:()=>ui.jobs.filter(j=>ACTIVE.has(j.state)||WAITING.has(j.state)).length,saveToClient:downloadAsset});
 }

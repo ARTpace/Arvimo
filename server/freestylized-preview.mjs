@@ -73,9 +73,13 @@ export function pickPreviewEntries(entries,type){
  const files=entries.filter(e=>e.length>0&&!e.name.endsWith('/'));
  const images=()=>files.filter(e=>IMAGE_EXT.test(e.name)&&!/readme|license|preview|thumb/i.test(e.name));
  if(type==='models'){
-  const gltf=files.filter(e=>/\.(glb|gltf)$/i.test(e.name)).sort((a,b)=>lodRank(a)-lodRank(b)||b.length-a.length);
-  const fbx=files.filter(e=>/\.fbx$/i.test(e.name)).sort((a,b)=>lodRank(a)-lodRank(b)||b.length-a.length);
-  const model=gltf[0]||fbx[0];
+  // 优先级：glTF/GLB（自带贴图与材质）> FBX > OBJ/STL/PLY/3MF（纯网格，前端给默认材质）。
+  // 每一档内部先按 lod 再按体积排，避免拿到 4K 大包里的高模。
+  const byLod=(a,b)=>lodRank(a)-lodRank(b)||b.length-a.length;
+  const gltf=files.filter(e=>/\.(glb|gltf)$/i.test(e.name)).sort(byLod);
+  const fbx=files.filter(e=>/\.fbx$/i.test(e.name)).sort(byLod);
+  const plain=files.filter(e=>/\.(obj|stl|ply|3mf)$/i.test(e.name)).sort(byLod);
+  const model=gltf[0]||fbx[0]||plain[0];
   if(!model)return null;
   let budget=TEXTURE_BUDGET,count=0;
   const textures=[];
@@ -83,7 +87,7 @@ export function pickPreviewEntries(entries,type){
    if(count>=TEXTURE_LIMIT||e.length>budget)continue;
    textures.push({entry:e,role:'texture'});budget-=e.length;count++;
   }
-  return {kind:/\.(glb|gltf)$/i.test(model.name)?'model':'fbx',items:[{entry:model,role:'model'},...textures]};
+  return {kind:'model',items:[{entry:model,role:'model'},...textures]};
  }
  if(type==='textures'){
   const pool=images();

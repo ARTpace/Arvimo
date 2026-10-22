@@ -60,6 +60,17 @@ export function declaredImages(info){
 }
 /** The `textures` list a material bundle's info.json declares, validated the same way: the
  *  declaration IS the provenance, so it must exist and every path must stay inside `textures/`. */
+const SBSAR_MAGIC=Buffer.from('377abcaf271c','hex');
+/** ambientCG 的 .sbsar 是 7z 容器。校验只看文件头，避免把任意字节当成 Substance 归档收下。 */
+export function assertSbsar(prefix,name){
+ if(!prefix||prefix.length<SBSAR_MAGIC.length||!prefix.subarray(0,SBSAR_MAGIC.length).equals(SBSAR_MAGIC))throw Error(`不是 Substance 归档（.sbsar）：${name||'(空)'}`);
+}
+export function isSbsarMaterial(info){return !!(info&&info.kind==='material'&&String(info.format||'').toUpperCase()==='SBSAR');}
+export function declaredSbsar(info){
+ const file=info&&typeof info.substanceFile==='string'?info.substanceFile:'';
+ if(!/^[^/\\:*?"<>|\x00]+\.sbsar$/i.test(file))throw Error(`info.json 里的 Substance 文件无效：${file||'(空)'}`);
+ return file;
+}
 export function declaredTextures(info){
   const list=info&&Array.isArray(info.textures)?info.textures:null;
   if(!list||!list.length)throw Error('info.json 没有登记材质贴图');
@@ -79,7 +90,7 @@ export async function verifyArchive(file,{uid,signal}={}){
   if(end<0)throw Error('ZIP 目录缺失');
   const count=tail.readUInt16LE(end+10),cdSize=tail.readUInt32LE(end+12),cdOffset=tail.readUInt32LE(end+16);
   if(tail.readUInt16LE(end+4)||tail.readUInt16LE(end+6)||tail.readUInt16LE(end+8)!==count||!count||count>10000||cdSize>8*1024**2||cdOffset+cdSize>size-tail.length+end)throw Error('不支持此 ZIP 结构');
-  const directory=await read(handle,cdSize,cdOffset);const names=new Set();let p=0,total=0,info=null,glbs=[],warning=false;const regions=[],imageEntries=[],textureEntries=[];
+  const directory=await read(handle,cdSize,cdOffset);const names=new Set();let p=0,total=0,info=null,glbs=[],warning=false;const regions=[],imageEntries=[],textureEntries=[],sbsarEntries=[];
   for(let n=0;n<count;n++){
    signal?.throwIfAborted();if(p+46>directory.length||directory.readUInt32LE(p)!==0x02014b50)throw Error('ZIP 目录损坏');
    const flags=directory.readUInt16LE(p+8),method=directory.readUInt16LE(p+10),crc=directory.readUInt32LE(p+16),packed=directory.readUInt32LE(p+20),length=directory.readUInt32LE(p+24),nl=directory.readUInt16LE(p+28),el=directory.readUInt16LE(p+30),cl=directory.readUInt16LE(p+32),offset=directory.readUInt32LE(p+42);
@@ -97,7 +108,7 @@ export async function verifyArchive(file,{uid,signal}={}){
    const source=packed?fs.createReadStream(file,{start,end:start+packed-1,signal}):null;
    // Empty stored entries need no stream (Node does not accept end=-1).
    let bytes=0,sum=0xffffffff,parts=[],prefixBytes=0;
-   const keep=name.endsWith('.glb')?32*1024**2:name==='info.json'?1024*1024:IMAGE_ENTRY.test(name)||TEXTURE_ENTRY.test(name)?IMAGE_PREFIX_BYTES:0;
+   const keep=name.endsWith('.glb')?32*1024**2:name==='info.json'?1024*1024:IMAGE_ENTRY.test(name)||TEXTURE_ENTRY.test(name)?IMAGE_PREFIX_BYTES:/\.sbsar$/i.test(name)?16:0;
    if(packed){const stream=method===8?source.pipe(createInflateRaw()):source;source.on('error',e=>stream.destroy(e));
     try{for await(const chunk of stream){signal?.throwIfAborted();bytes+=chunk.length;if(bytes>length||bytes>MAX)throw Error('ZIP 解压长度异常');sum=crc32(chunk,sum);if(prefixBytes<keep){const part=chunk.subarray(0,keep-prefixBytes);parts.push(part);prefixBytes+=part.length;}}}finally{source.destroy();stream.destroy();}
    }
@@ -113,6 +124,7 @@ export async function verifyArchive(file,{uid,signal}={}){
    // and a material bundle keeps its maps under `textures/` for the same reason.
    if(IMAGE_ENTRY.test(name))imageEntries.push({name,prefix:data,size:length});
    if(TEXTURE_ENTRY.test(name))textureEntries.push({name,prefix:data,size:length});
+   if(/\.sbsar$/i.test(name))sbsarEntries.push({name,prefix:data,size:length});
   }
   regions.sort((a,b)=>a[0]-b[0]);for(let i=1;i<regions.length;i++)if(regions[i][0]<regions[i-1][1])throw Error('ZIP 条目内容重叠');
   if(p!==directory.length)throw Error('ZIP 目录长度不一致');
@@ -127,6 +139,12 @@ export async function verifyArchive(file,{uid,signal}={}){
    for(const entry of imageEntries)if(!declared.some(item=>item.file===entry.name))throw Error(`ZIP 内有未登记的作品图片：${entry.name}`);
    images=imageEntries.map(e=>inspectImage(e.prefix,e.name,e.size));
    if(!images.length)throw Error('ZIP 内没有作品图片');
+  }else if(isSbsarMaterial(info)){
+   const file=declaredSbsar(info);
+   const entry=sbsarEntries.find(e=>e.name===file);
+   if(!entry)throw Error(`ZIP 内缺少已登记的 Substance 文件：${file}`);
+   assertSbsar(entry.prefix,file);
+   textures=[];
   }else if(info.kind==='material'){
    // A material bundle follows the same two-direction rule for its PBR maps: every declared
    // texture present, every present texture declared, each one a real image container.
@@ -140,9 +158,10 @@ export async function verifyArchive(file,{uid,signal}={}){
    if(!declared.length)throw Error('ZIP 内没有登记的文件');
    for(const item of declared)if(!names.has(item.file))throw Error(`ZIP 内缺少已登记的文件：${item.file}`);
   }else if(info.platform==='polyhaven'){
-   if(![...names].some(name=>/\.(?:fbx|gltf|glb)$/i.test(name)))throw Error('ZIP 内没有 Poly Haven 的模型文件');
+   if(![...names].some(name=>/\.(?:fbx|gltf|glb|blend|usdc|usd)$/i.test(name)))throw Error('ZIP 内没有 Poly Haven 的模型文件');
+   for(const item of info.files||[])if(!names.has(item.file))throw Error(`ZIP 内缺少 Poly Haven 文件：${item.file}`);
   }else if(!glbs.length)throw Error('缺少有效 GLB 或模型来源信息不匹配');
-  result={bytes:size,entries:count,glbs,images,textures,warning,author:String(info.author||''),source:String(info.source_url||'')};
+  result={bytes:size,entries:count,glbs,images,textures,warning,info,author:String(info.author||''),source:String(info.source_url||'')};
  }finally{await handle.close();}
  const digest=createHash('sha256');for await(const chunk of fs.createReadStream(file,{signal}))digest.update(chunk);
  return {...result,sha256:digest.digest('hex'),verifiedAt:Date.now()};

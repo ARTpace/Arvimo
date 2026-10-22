@@ -2,6 +2,29 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import {deflateRawSync} from 'node:zlib';
 import {crc32} from './archive.mjs';
+import {createReadStream} from 'node:fs';
+
+// ponytail: classic ZIP (under 2GB input), store files in chunks instead of buffering the tree.
+export async function writeZipFiles(destination,files,{signal}={}){
+ const handle=await fsp.open(destination,'wx');let offset=0;const central=[];
+ const write=async(buffer,position=offset)=>{let written=0;while(written<buffer.length){const result=await handle.write(buffer,written,buffer.length-written,position+written);if(!result.bytesWritten)throw Error('ZIP 写入中断');written+=result.bytesWritten;}if(position===offset)offset+=written;};
+ try{
+  if(files.length>65535)throw Error('ZIP 文件数量超过限制');
+  for(const file of files){
+   signal?.throwIfAborted();
+   const name=Buffer.from(file.relative),start=offset,header=Buffer.alloc(30);
+   if(name.length>65535)throw Error('ZIP 文件名过长');
+   header.writeUInt32LE(0x04034b50);header.writeUInt16LE(20,4);header.writeUInt16LE(0x800,6);header.writeUInt16LE(33,12);header.writeUInt16LE(name.length,26);
+   await write(header);await write(name);let crc=0xffffffff,size=0;
+   for await(const chunk of createReadStream(file.full,{signal})){crc=crc32(chunk,crc);size+=chunk.length;if(size>file.size)throw Error('打包期间文件发生变化');await write(chunk);}
+   if(size!==file.size)throw Error('打包期间文件发生变化');
+   crc=(crc^0xffffffff)>>>0;header.writeUInt32LE(crc,14);header.writeUInt32LE(size,18);header.writeUInt32LE(size,22);await write(header,start);
+   const cd=Buffer.alloc(46);cd.writeUInt32LE(0x02014b50);cd.writeUInt16LE(20,4);cd.writeUInt16LE(20,6);cd.writeUInt16LE(0x800,8);cd.writeUInt16LE(33,14);cd.writeUInt32LE(crc,16);cd.writeUInt32LE(size,20);cd.writeUInt32LE(size,24);cd.writeUInt16LE(name.length,28);cd.writeUInt32LE(start,42);central.push(cd,name);
+  }
+  const start=offset;for(const buffer of central)await write(buffer);
+  const end=Buffer.alloc(22);end.writeUInt32LE(0x06054b50);end.writeUInt16LE(files.length,8);end.writeUInt16LE(files.length,10);end.writeUInt32LE(offset-start,12);end.writeUInt32LE(start,16);await write(end);
+ }finally{await handle.close();}
+}
 
 // Minimal ZIP writer (store + deflateRaw) with no external dependencies.
 // Entry names use forward slashes and are flagged UTF-8 (general purpose bit 11).

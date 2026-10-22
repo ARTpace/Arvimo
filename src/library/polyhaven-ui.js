@@ -1,23 +1,17 @@
 // Poly Haven sidebar: asset type (models / materials) plus official categories.
 // Changing either control restarts the Poly Haven feed. Categories reload when the type changes
 // because the two catalogs do not share a category list.
-import {esc} from './html-esc.js';
+import {fetchCategories,fillOptions} from './category-options.js';
 
-export function createPolyhavenUI({$,toast,requestFeed}){
+export function createPolyhavenUI({$,esc,toast,requestFeed}){
  const ui={categories:null};
  async function loadCategories(){
   const type=$('#polyhaven-type').value;
   const kind=type==='textures'||type==='hdris'?type:'models';
   try{
-   const r=await fetch(`/api/polyhaven/categories?type=${kind}`,{cache:'no-store',headers:{'X-SFX-Local':'1'}});
-   const data=await r.json().catch(()=>({}));
-   if(!r.ok)throw Error(data.error||`Poly Haven 分类请求失败 HTTP ${r.status}`);
-   ui.categories=Array.isArray(data.categories)?data.categories:[];
-   const keep=$('#polyhaven-category').dataset.keep||$('#polyhaven-category').value;
-   $('#polyhaven-category').innerHTML=['<option value="">全部分类</option>',...ui.categories.map(c=>`<option value="${esc(c.value)}">${esc(c.label)}${c.count?` · ${c.count}`:''}</option>`)].join('');
-   if([...$('#polyhaven-category').options].some(o=>o.value===keep))$('#polyhaven-category').value=keep;
-   else $('#polyhaven-category').value='';
-   delete $('#polyhaven-category').dataset.keep;
+   const rows=await fetchCategories(`/api/polyhaven/categories?type=${kind}`);
+   ui.categories=rows;
+   fillOptions($,'#polyhaven-category',rows,'全部分类',esc);
   }catch(e){toast(`Poly Haven 分类加载失败，仍可按关键词搜索：${e.message}`);}
  }
  function read(){

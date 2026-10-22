@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mergeTags,tagsFor,addAITags,tagPanel} from '../src/library/asset-tags.js';
+import {mergeTags,tagsFor,addAITags,tagPanel,userTagsFor,addUserTag,removeUserTag,listUserTags,renameUserTag,deleteUserTag} from '../src/library/asset-tags.js';
 import {loadLibrary,saveLibrary} from '../src/library/library-state.js';
 import {filterLocalAssets} from '../src/library/local-filters.js';
 import {createCardView} from '../src/library/card-view.js';
@@ -42,4 +42,30 @@ test('所有平台卡片都有统一标签入口，包括只有官方页面的�
   const html=cards.card({uid,platform,name:'Asset',license:'CC0',assetType:'packs'});
   assert.match(html,/data-action="asset-tags"/,platform);
  }
+});
+test('我的标签：增删、跨资产重命名/删除，与平台/AI 层合并检索',()=>{
+ const state={aiTags:{},models:[]};
+ assert.equal(addUserTag(state,{uid},'robot'),1);
+ assert.equal(addUserTag(state,{uid},' robot '),0);
+ assert.equal(addUserTag(state,{uid},'metal'),1);
+ assert.deepEqual(userTagsFor(state,{uid}),['robot','metal']);
+ assert.equal(removeUserTag(state,{uid},'ROBOT'),1);
+ assert.deepEqual(userTagsFor(state,{uid}),['metal']);
+ state.models=[{uid},{uid:'b'.repeat(32)}];
+ addUserTag(state,{uid},'robot');
+ assert.deepEqual(listUserTags(state).map(t=>t.name).sort(),['metal','robot']);
+ assert.equal(renameUserTag(state,'robot','机甲'),1);
+ assert.deepEqual(userTagsFor(state,{uid}),['metal','机甲']);
+ assert.equal(deleteUserTag(state,'metal'),1);
+ assert.deepEqual(userTagsFor(state,{uid}),['机甲']);
+ assert.equal(tagsFor(state,{uid,tags:['src']}).length,2);
+});
+test('标签面板三层并排：平台可检索、AI 带 ✦、我的带 ×，评分备注同面板',()=>{
+ const html=tagPanel({aiTags:{[uid]:['ai-tag']},userTags:{[uid]:['mine']},userMeta:{[uid]:{rating:3,note:'ok'}}},{uid,tags:['platform']},esc);
+ assert.match(html,/data-tag="platform"/);
+ assert.match(html,/✦ ai-tag/);
+ assert.match(html,/data-remove-tag="mine"/);
+ assert.match(html,/data-rate="3"/);
+ assert.match(html,/>ok</);
+ assert.doesNotMatch(html,/data-remove-tag="platform"/);
 });

@@ -11,7 +11,7 @@ const PLATFORMS = [
   ['Sketchfab', '#filters-sketchfab', ['#online-category', '#online-sort']],
   ['ArtStation', '#filters-artstation', ['#art-category', '#art-type', '#art-sort', '#art-picked']],
   ['Poly Haven', '#filters-polyhaven', ['#polyhaven-type', '#polyhaven-category']],
-  ['ambientCG', '#filters-ambientcg', ['#ambientcg-category']],
+  ['ambientCG', '#filters-ambientcg', ['#ambientcg-type', '#ambientcg-category']],
   ['Kenney', '#filters-kenney', ['#kenney-category', '#kenney-series']],
   ['Poly Pizza', '#filters-polypizza', ['#polypizza-cc0']],
   ['FreeStylized', '#filters-freestylized', ['#freestylized-type', '#freestylized-category']],

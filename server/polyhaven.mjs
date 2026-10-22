@@ -361,6 +361,13 @@ async function runPolyhavenHdri({uid,options,output,assetId},{signal,progress}){
  const stem=String(assetId).replace(/[^\w.-]/g,'_').slice(0,80)||'polyhaven';
  return {zipName:`${stem}-hdri`,title:meta.title,author:'Poly Haven',thumbnail:null};
 }
+export function polyhavenModelFiles(entry){
+ const files={...(entry?.include||{})};
+ // The main model is separate from include, which contains only dependent buffers/textures.
+ if(entry?.url){const name=decodeURIComponent(new URL(entry.url).pathname.split('/').pop());files[name]={url:entry.url,size:entry.size,md5:entry.md5};}
+ return files;
+}
+
 export async function runPolyhavenJob({uid,options,output,profile,assetId,assetType='models'},{signal,progress=()=>{}}={}){
   signal?.throwIfAborted();
   if(!assetId)throw Error('Poly Haven 资产 ID 缺失');
@@ -381,17 +388,12 @@ export async function runPolyhavenJob({uid,options,output,profile,assetId,assetT
   if(!hasModelFormat&&pickPolyhavenTextureFiles(files,{resolution:'2K'}).length){
     return runPolyhavenMaterial({uid,options,output,assetId},{signal,progress});
   }
-  // 格式降级要看「这个格式的包里有没有模型文件」，不能只看 files[format] 这个键在不在：
-  // Poly Haven 的清单里 fbx 条目**总是存在**，但里面常常只有贴图（真正的几何数据在
-  // gltf 条目的 <asset>.bin 里）。按「键是否存在」判断会让降级永远不触发，
-  // 于是选出一个只有贴图、没有模型文件的格式，最后在校验环节报
-  // 「导出目录里没有 Poly Haven 的模型文件」。
-  const MODEL_FILE=/\.(?:fbx|gltf|glb|bin|blend|usdc|usd)$/i;
+  const MODEL_FILE=/\.(?:fbx|gltf|glb|blend|usdc|usd)$/i;
   const formatHasModel=key=>{
     const tiers=files?.[key];
     if(!tiers||typeof tiers!=='object')return false;
     for(const tier of Object.values(tiers)){
-      const include=tier?.[key]?.include;
+      const include=polyhavenModelFiles(tier?.[key]);
       if(include&&Object.keys(include).some(rel=>MODEL_FILE.test(rel)))return true;
     }
     return false;
@@ -407,7 +409,7 @@ export async function runPolyhavenJob({uid,options,output,profile,assetId,assetT
   if(!resMap||typeof resMap!=='object')throw Error(`Poly Haven 未提供 ${format} 格式`);
   const resName=pickResolution(resMap,maxEdge);
   if(!resName)throw Error(`Poly Haven 没有可用分辨率的 ${format} 格式`);
-  const entries=resMap[resName]?.[format]?.include;
+  const entries=polyhavenModelFiles(resMap[resName]?.[format]);
   const rels=Object.keys(entries||{});
   if(!rels.length)throw Error('Poly Haven 文件清单为空');
   progress({stage:'transferring',message:`正在下载 ${format} 模型（${resName}），共 ${rels.length} 个文件`,bytesWritten:0,totalBytes:rels.length});
@@ -418,12 +420,15 @@ export async function runPolyhavenJob({uid,options,output,profile,assetId,assetT
     const url=typeof info==='string'?info:info?.url;
     if(!url)continue;
     const dest=path.join(output,rel);
+    if(!path.resolve(dest).startsWith(path.resolve(output)+path.sep))throw Error('Poly Haven 文件清单含无效路径');
     await downloadFile(url,dest,{signal});
+    if(Number.isFinite(info?.size)&&(await fs.stat(dest)).size!==info.size)throw Error(`Poly Haven 文件下载不完整：${rel}`);
     done++;
     progress({stage:'transferring',message:`已下载 ${done}/${rels.length} · ${path.basename(rel)}`,bytesWritten:done,totalBytes:rels.length});
   }
   const meta={
     uid,platform:'polyhaven',assetId,format,resolution:resName,
+    files:await Promise.all(rels.map(async file=>({file,bytes:(await fs.stat(path.join(output,file))).size}))),
     url:`https://polyhaven.com/a/${assetId}`,license:'CC0 1.0 通用公共领域贡献',
     exportedAt:new Date().toISOString(),tool:'AssetVault · Poly Haven (CC0)',
     note:'Poly Haven 资产，CC0 1.0 通用公共领域贡献，可商用无需署名。',

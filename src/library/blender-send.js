@@ -20,10 +20,11 @@ export function classifyBlenderJob(job){
  if(!job?.id)return null;
  const kind=job.kind,at=job.assetType;
  if(kind==='images')return null;
+ if(job.options?.textureFormat==='SBSAR')return null;
  if(kind==='artstation'&&job.hasMarmoset===false)return null;
  if(kind==='freestylized'&&at==='alphas')return null;
- if(kind==='ambientcg'||kind==='polyhaven'&&at==='textures'||kind==='freestylized'&&(at==='textures'||at==='smart'))return 'material';
- if(kind==='polyhaven'&&at==='hdris'||kind==='freestylized'&&at==='skybox')return 'hdri';
+ if(kind==='ambientcg'&&(!at||at==='textures')||kind==='polyhaven'&&at==='textures'||kind==='freestylized'&&(at==='textures'||at==='smart'))return 'material';
+ if(['polyhaven','ambientcg'].includes(kind)&&at==='hdris'||kind==='freestylized'&&at==='skybox')return 'hdri';
  return 'model';
 }
 /** 没有可发送的本地文件、或资产类型根本没有可导入内容，就返回空串：卡片和预览面板共用此判定。 */

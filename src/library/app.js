@@ -1,4 +1,5 @@
 import {createDownloadUI} from './download-ui.js';
+import {isLanVisitor} from './visitor-mode.js';
 import {createPersistentStorage} from './persistent-storage.js';
 import {createArtstationUI} from './artstation-ui.js';
 import {createAmbientcgUI} from './ambientcg-ui.js';
@@ -11,14 +12,16 @@ import {PLATFORMS,ALL,DEFAULT_PLATFORM,platformById,platformLabel,routeLink,FEED
 import {createContentModes,modeTarget} from './content-modes.js';
 import {combine,statusText,subtitleText,pageInfoNote,loadMoreLabel,describeRequest,feedErrorMessage} from './discovery-view.js';
 import {galleryAvailable,galleryActive,aspectRatioStyle} from './gallery-view.js';
-import {loadLibrary,saveLibrary,mergeModels,collectModels,UID,loadDiscovery,saveDiscovery} from './library-state.js';
+import {loadLibrary,saveLibrary,mergeModels,collectModels,UID,loadDiscovery,saveDiscovery,trashModels,restoreModels,purgeModels,setUserMeta,userMetaFor} from './library-state.js';
 import {enhanceSelects} from './picker.js';
 import {findLocalJob,createBlenderButton,classifyBlenderJob} from './blender-send.js';
 import {icon} from './icon-set.js';
 import {createCardView} from './card-view.js';
+import {probeLocalBridge,importIntoLocalBlender,createLocalBlenderGuide} from './client-blender.js';
 import {openExternal} from './open-url.js';
 import {createLibraryView} from './library-view.js';
 import {createGltfPreview} from './gltf-preview.js';
+import {createLocalFiles} from './local-files.js';
 import {createDiscoveryFeed,resetDiscoveryFeeds} from './discovery-feed.js';
 import {createImageDownloader} from './image-download.js';
 import {createBlenderBridgePanel} from './blender-bridge.js';
@@ -30,14 +33,17 @@ import {createFilterTrees} from './filter-tree.js';
 import {esc} from './html-esc.js';
 import {filterLocalAssets} from './local-filters.js';
 import {createAISettings} from './ai-settings.js';
-import {tagsFor,addAITags,tagPanel} from './asset-tags.js';
+import {tagsFor,addAITags,tagPanel,addUserTag,removeUserTag,listUserTags,renameUserTag,mergeUserTag,deleteUserTag,mergeTags} from './asset-tags.js';
 import {previewActions} from './preview-actions.js';
 import {authorButton} from './asset-author.js';
 import {createSimilarAssets} from './similar-assets.js';
 import {createSettingsPanel} from './settings-panel.js';
+import {createLanSharingSettings} from './lan-sharing.js';
 import {createAppUpdates} from './app-updates.js';
 import {bindLocalSearch,createLocalQueryParser,createThemeBrainstorm,createTagSuggester} from './search-translation.js';
 const $=selector=>document.querySelector(selector);
+const visitor=isLanVisitor();
+document.documentElement.dataset.lanVisitor=String(visitor);
 const parseLocal=createLocalQueryParser();
 const brainstorm=createThemeBrainstorm();
 let settingsPanel;
@@ -73,7 +79,7 @@ const persist=()=>{clearTimeout(persistTimer);persistTimer=setTimeout(persistNow
 function discoveryFilters(){
  const value=id=>{const node=document.querySelector(id);return node?node.value:'';};
  const checked=id=>{const node=document.querySelector(id);return !!node?.checked;};
- return {query:value('#asset-query'),polyhavenType:value('#polyhaven-type'),polyhavenCategory:value('#polyhaven-category'),ambientcgCategory:value('#ambientcg-category'),kenneyCategory:value('#kenney-category'),kenneySeries:value('#kenney-series'),freestylizedType:value('#freestylized-type'),freestylizedCategory:value('#freestylized-category'),polypizzaCc0:checked('#polypizza-cc0'),onlineCategory:value('#online-category'),onlineSort:value('#online-sort'),downloadable:checked('#online-downloadable'),animated:checked('#online-animated'),staffpicked:checked('#online-staffpicked')};
+ return {query:value('#asset-query'),polyhavenType:value('#polyhaven-type'),polyhavenCategory:value('#polyhaven-category'),ambientcgType:value('#ambientcg-type'),ambientcgCategory:value('#ambientcg-category'),kenneyCategory:value('#kenney-category'),kenneySeries:value('#kenney-series'),freestylizedType:value('#freestylized-type'),freestylizedCategory:value('#freestylized-category'),polypizzaCc0:checked('#polypizza-cc0'),onlineCategory:value('#online-category'),onlineSort:value('#online-sort'),downloadable:checked('#online-downloadable'),animated:checked('#online-animated'),staffpicked:checked('#online-staffpicked')};
 }
 function restoreDiscoveryFilters(){
  const filters=savedDiscovery?.filters;if(!filters)return;
@@ -83,6 +89,7 @@ function restoreDiscoveryFilters(){
  set('#polyhaven-type',filters.polyhavenType);
  set('#polyhaven-category',filters.polyhavenCategory);
  if(filters.polyhavenCategory&&$('#polyhaven-category'))$('#polyhaven-category').dataset.keep=filters.polyhavenCategory;
+ set('#ambientcg-type',filters.ambientcgType||'material');
  set('#ambientcg-category',filters.ambientcgCategory);
  if(filters.ambientcgCategory&&$('#ambientcg-category'))$('#ambientcg-category').dataset.keep=filters.ambientcgCategory;
  set('#kenney-category',filters.kenneyCategory);
@@ -104,11 +111,45 @@ function toast(message){$('#toast').textContent=message;$('#toast').classList.ad
 // 发什么样的任务，答案必须只有一个，所以两边都问这一个对象。
 const imageDownload=createImageDownloader({icon,toast,downloads:()=>downloads,findModel,refresh:()=>{renderGrid();counts();}});
 // 卡片怎么画也住在自己的模块里（card-view.js）； Drawer 只把它需要的合作者喂进去。
-const cardView=createCardView({icon,esc,fmt,state,queuePulse,imageDownload,blenderSendButton,classifyBlenderJob,platformLabel,artstationUI:()=>artstation,downloadsUI:()=>downloads});
+const cardView=createCardView({icon,esc,fmt,state,queuePulse,imageDownload,blenderSendButton,classifyBlenderJob,platformLabel,artstationUI:()=>artstation,downloadsUI:()=>downloads,isVisitor:visitor});
 // 状态行、网格、筛选行摆放、预览弹窗的画法都住在 library-view.js；这里解构出同名函数，
 // 所以其余代码读起来还是只有 renderGrid() / counts() 这层语义。
 const gltfPreview=createGltfPreview();
-const view=createLibraryView({$,icon,esc,fmt,state,queuePulse,cardView,composite,filtered,activeModes,galleryActive,categories:CATEGORIES,describeArt:request=>artstation.describe(request),artstationUI:()=>artstation,downloadsUI:()=>downloads,filterTreesUI:()=>filterTrees,mergedFiltersUI:()=>mergedFilters,findModel,blenderSendButton,imageDownload,gltfPreview});
+// 资产库文件夹里没登记成下载任务的文件（用户自己拷进去的素材）：扫描 + 通用预览。
+const localFiles=createLocalFiles({$,icon,esc,gltfPreview,notify:message=>toast(message),onChanged:()=>scanLibraryFiles(true)});
+// 资产包/文件都不是 state.models 的成员（那份数据要求 32 位 hex uid），只在绘制层接在网格后面，
+// 搜索词与类型筛选跟着资产库工具条走。已有下载任务或已在库里的资产不再从磁盘重复出一张卡。
+function extraCards(){
+ const query=state.search||'';
+ const kind=$('#local-kind')?.value||'';
+ const known=new Set([...state.models.map(model=>model.uid),...(downloads?.jobs||[]).map(job=>job.uid)].filter(Boolean));
+ const packages=localFiles.packages()
+  .filter(pkg=>!pkg.uid||!known.has(pkg.uid))
+  .filter(pkg=>localFiles.matchesPackage(pkg,{query,kind}))
+  .map(pkg=>({key:`pkg|${pkg.root}|${pkg.rel}`,html:localFiles.packageCard(pkg)}));
+ const rest=localFiles.entries()
+  .filter(file=>localFiles.matches(file,{query,kind}))
+  .map(file=>({key:`${file.root}|${file.rel}`,html:localFiles.card(file)}));
+ return [...packages,...rest];
+}
+/** 扫一遍资产库文件夹：下载落盘的资产包 + 用户自己拷进去的素材，只有这条路能看见。 */
+async function scanLibraryFiles(manual=false){
+ const status=$('#local-file-status');
+ if(manual&&status)status.textContent='正在扫描…';
+ try{
+  const result=await localFiles.scan();
+  if(!result)return;
+  const count=result.packages.length,loose=result.files.length;
+  if(status)status.textContent=count||loose
+   ?`磁盘上另有 ${count} 个资产包${loose?`、${loose} 个零散文件`:''}${result.truncated?'（数量过多已截断）':''}`
+   :'';
+  if(state.route!=='discover')renderGrid();
+ }catch(error){
+  if(status)status.textContent='扫描失败';
+  if(manual)toast?.(`扫描资产库文件夹失败：${error.message}`);
+ }
+}
+const view=createLibraryView({$,icon,esc,fmt,state,queuePulse,cardView,composite,filtered,activeModes,galleryActive,categories:CATEGORIES,describeArt:request=>artstation.describe(request),artstationUI:()=>artstation,downloadsUI:()=>downloads,filterTreesUI:()=>filterTrees,mergedFiltersUI:()=>mergedFilters,findModel,blenderSendButton,imageDownload,gltfPreview,extraCards});
 const {counts,renderStatus,renderGrid,placeFilters,preview:previewAsset,syncStickyOffset}=view;
 const similarAssets=createSimilarAssets({dialog:$('#preview-dialog'),state,
  candidates:()=>[...state.models,...Object.values(state.feeds).flatMap(feed=>feed.rows)],
@@ -123,10 +164,10 @@ function refreshPreviewTags(uid){
  details.querySelectorAll('.preview-actions,[data-action="collect"],[data-action="favorite"],[data-action="download"],[data-action="blender-send"]').forEach(node=>node.remove());
  const blenderButton=blenderSendButton({job:findLocalJob(downloads?.jobs||[],uid),className:'secondary preview-blender'});
  const license=details.querySelector('.detail-license');
- const actions=previewActions({model,favorite:state.favorites.has(uid),icon,blenderButton});
- if(license)license.insertAdjacentHTML('afterend',actions);else details.insertAdjacentHTML('beforeend',actions);
- const resolution=details.querySelector('.material-resolution');
- if(resolution)details.querySelector('.preview-actions').insertAdjacentElement('beforebegin',resolution);
+ const actionsHtml=previewActions({model,favorite:state.favorites.has(uid),icon,blenderButton});
+ if(license)license.insertAdjacentHTML('afterend',actionsHtml);else details.insertAdjacentHTML('beforeend',actionsHtml);
+ const actions=details.querySelector('.preview-actions');
+ if(actions)details.querySelectorAll('.material-format,.material-resolution').forEach(node=>actions.insertAdjacentElement('beforebegin',node));
  const source=details.querySelector('.source-link');if(source)details.append(source);
 }
 function preview(uid){
@@ -158,10 +199,15 @@ function filtered(){
   if(state.platform===ALL&&$('#unified-sort').value==='name')return [...rows].sort((a,b)=>String(a.name||'').localeCompare(String(b.name||''),'zh'));
   return rows;
  }
+ // 回收站：走 state.trashed 而不是 models。userTags 已随记录搬进 trashed 里，搜索要拼回去。
+ if(state.filter==='trash'){
+  return filterLocalAssets((state.trashed||[]).map(m=>({...m,tags:mergeTags(m.tags||[],m.userTags||[])})),{search:state.search,english:state.searchEnglish||''},null);
+ }
  let models=state.models.filter(m=>state.filter!=='favorites'||state.favorites.has(m.uid));
  if(state.filter==='downloadable')models=models.filter(m=>m.downloadable);if(state.filter==='animated')models=models.filter(m=>m.animations>0);
  models=filterLocalAssets(models.map(m=>({...m,tags:tagsFor(state,m)})),{kind:$('#local-kind').value,status:$('#local-status').value,search:state.search,english:state.searchEnglish||''},downloads?.connected?downloads.jobs:null);
- return [...models].sort(state.sort==='popular'?(a,b)=>b.likes-a.likes:state.sort==='name'?(a,b)=>a.name.localeCompare(b.name):(a,b)=>(b.addedAt||0)-(a.addedAt||0));
+ const byRating=(a,b)=>userMetaFor(state,b.uid).rating-userMetaFor(state,a.uid).rating||(b.addedAt||0)-(a.addedAt||0);
+ return [...models].sort(state.sort==='popular'?(a,b)=>b.likes-a.likes:state.sort==='name'?(a,b)=>a.name.localeCompare(b.name):state.sort==='rating'?byRating:(a,b)=>(b.addedAt||0)-(a.addedAt||0));
 }
 
 /** 点最近检索里的一条：搜索记录重放那次检索，链接记录回到解析通道。 */
@@ -189,12 +235,15 @@ function route(name){
  const leaving=state.route;
  if(leaving&&leaving!==name)routeScroll.set(leaving,window.scrollY);
  state.route=name;state.selected.clear();
+ document.body.dataset.route=name;
  // 画廊只画在线 A 站结果，本地库与收藏里混着两个平台，离开发现页就退出画廊。
  if(name!=='discover'){state.gallery=false;searchHistory?.close();}
- document.querySelectorAll('[data-route]').forEach(b=>b.classList.toggle('active',b.dataset.route===name));
+ document.querySelectorAll('aside nav button[data-route]').forEach(b=>b.classList.toggle('active',b.dataset.route===name));
  // 顶部面包屑（工作空间 / 当前页）已按用户要求撤掉：侧边栏的高亮项本身就说明了在哪一页。
- $('#library-view').hidden=name==='downloads';$('#downloads-view').hidden=name!=='downloads';$('#search-panel').hidden=name!=='discover';
- if(name==='downloads'){downloads?.render();downloads?.refresh();}else renderGrid();renderStatus();counts();
+ $('#library-view').hidden=name==='downloads';
+ $('#downloads-view').hidden=name!=='downloads';$('#search-panel').hidden=name!=='discover';
+ if(name==='downloads'){downloads?.render();downloads?.refresh();}
+ else renderGrid();renderStatus();counts();
  // 只在真的换页时恢复：首次进入（leaving 与 name 相同）保持浏览器自己的行为，
  // 否则每次刷新页面都会被强制拉回顶部。
  if(leaving&&leaving!==name)restoreRouteScroll(routeScroll.get(name)||0);
@@ -311,13 +360,13 @@ function skipFeed(mode,reason){
    if(mode==='search'){const request=readSearch();request.category=target.category;return request;}
    if(mode==='art'){const request=artstation.read();request.category=target.category;return request;}
    if(mode==='polyhaven')return {q:joinQuery(baseQ,target.q),type:target.type,category:target.category||''};
-   if(mode==='ambientcg')return {q:joinQuery(baseQ,target.q),category:''};
+   if(mode==='ambientcg')return {q:joinQuery(baseQ,target.q),category:'',type:kindType(picked,'ambientcg')||(plan.polyhaven?.type==='hdris'?'hdri,hdri-element':'material')};
    if(mode==='freestylized')return {q:joinQuery(baseQ,target.q),type:target.type,category:'',sort:$('#online-sort').value};
    if(mode==='polypizza')return {q:joinQuery(baseQ,target.q),cc0:$('#polypizza-cc0').checked};
    if(mode==='kenney')return {q:joinQuery(baseQ,target.q),category:'',series:''};
   }
   if(picked.length&&refuse(mode==='polyhaven'?kindType(picked,'polyhaven')||'models':mode==='freestylized'?kindType(picked,'freestylized'):undefined))return null;
-  if(mode==='ambientcg')return ambientcgUI.read();
+  if(mode==='ambientcg')return {...ambientcgUI.read(),...(state.platform===ALL?{type:kindType(picked,'ambientcg')||'material,substance,hdri,hdri-element,3d-model,terrain'}:{})};
   if(mode==='polyhaven'){
    const type=kindType(picked,'polyhaven');
    if(picked.length&&!type){skipFeed(mode,'模型和材质、HDRI 请分开选范围');return null;}
@@ -433,7 +482,8 @@ async function enqueueImmediate(picked,{force=false}={}){
    // 材质任务的选项：精度取自卡片下载键左边的选择（批量取第一张，服务端再校验一次），
    // 输出固定为解压文件夹——材质没有 GLB/FBX 选项，也不再给压缩包与文件夹的二选一。
    const materialResolution=/^[1248]K$/.test(picked[0]?.materialResolution||'')?picked[0].materialResolution:'2K';
-   const downloadOptions=kind==='ambientcg'||polyMaterial?{output:'folder',resolution:materialResolution,textureFormat:'JPG'}:polyHdri?{output:'folder',resolution:materialResolution,textureFormat:'HDR'}:kind==='freestylized'?{output:'folder',format:'glb',resolution:materialResolution}:kind==='polypizza'||kind==='kenney'?{output:'folder',format:'glb'}:{...state.options,output:'folder',format:'fbx',downloadTextures:true,pngOnly:true,fastZip:true};
+   const ambientFormat=picked[0]?.sourceType==='substance'?'SBSAR':picked[0]?.materialFormat==='PNG'||picked[0]?.materialFormat==='SBSAR'?picked[0].materialFormat:'JPG';
+   const downloadOptions=kind==='ambientcg'?{output:'folder',resolution:materialResolution,textureFormat:ambientFormat}:polyMaterial?{output:'folder',resolution:materialResolution,textureFormat:'JPG'}:polyHdri?{output:'folder',resolution:materialResolution,textureFormat:'HDR'}:kind==='freestylized'?{output:'folder',format:'glb',resolution:materialResolution}:kind==='polypizza'||kind==='kenney'?{output:'folder',format:'glb'}:{...state.options,output:'folder',format:'fbx',downloadTextures:true,pngOnly:true,fastZip:true};
   // kind 已在函数顶部由 jobKindOf(picked) 判定，覆盖 Poly Haven 等新平台，不再写死 sketchfab
   const result=await downloads.enqueue(picked,downloadOptions,force,undefined,kind);
   const libraryResult=collectModels(state.models,picked);state.models=libraryResult.models;persist();
@@ -448,15 +498,38 @@ async function enqueueImmediate(picked,{force=false}={}){
 }
 function requestDownload(ids){
  const picked=mergeModels([],ids.map(findModel).filter(Boolean)).map(m=>({...m}));
+ if(visitor)return downloadToClient(picked);
  enqueueImmediate(picked);
+}
+/** 访客点下载是「存到我这台电脑」：主机已有文件就直接传过来（不重跑抓取流程），
+ *  没有才排进主机队列，再由浏览器接收器把成品拉到本机指定目录。 */
+async function downloadToClient(models){
+ const jobs=downloads?.jobs||[],queue=[];
+ for(const model of models){
+  const job=jobs.findLast(j=>j.uid===model.uid&&j.state==='saved'&&j.fileExists!==false&&j.id);
+  if(!job){queue.push(model);continue;}
+  try{await downloads.saveToClient(job.id);}catch(e){toast(e.message);}
+ }
+ if(queue.length)await enqueueImmediate(queue);
 }
 /** 只传输已在本地的文件：不进队列、不重新下载，所以入口是任务编号而不是模型编号。 */
 async function sendBlenderToOpenScene(id){
  if(!downloads?.sendToBlender)return toast('后台服务未连接，无法发送到 Blender。');
  try{await downloads.sendToBlender(id);toast('已发送到已打开的 Blender 场景');}catch(e){toast(e.message);}
 }
+/** 访客的 Blender 在他自己电脑上：先探本机桥接，探到就把主机上的成品整包推过去导入，
+ *  探不到就弹插件安装引导（主机的桥接和插件管不到别人的机器）。 */
+let localBlenderGuide=null;
+async function sendToLocalBlender(id){
+ if(!id)return toast('这份资产在主机上还没有成品，请先下载到本机再导入。');
+ const bridge=await probeLocalBridge();
+ if(!bridge){localBlenderGuide?.open();return;}
+ try{toast('正在传输到本机 Blender…');const result=await importIntoLocalBlender(id);toast(result.imported>0?`已导入本机 Blender：${result.imported} 个对象`:'已导入本机 Blender');}
+ catch(e){toast(e.message);}
+}
 function renderTasks(){downloads?.render();}
 function openSettings(){
+ if(visitor)return;
  $('#pack-mode').value=state.options.packMode;$('#texture-size').value=state.options.maxTextureEdge;$('#scan-limit').value=state.options.scanLimit;
  $('#backend-folder').value=downloads?.settings?.folder||'';$('#backend-concurrency').value=downloads?.settings?.concurrency||1;$('#backend-retries').value=downloads?.settings?.retryLimit??1;
  // 每次打开都重新探一次：用户很可能刚重启过 Blender，状态得跟上。
@@ -475,6 +548,9 @@ function setup(){
  restoreDiscoveryFilters();
  refreshTopicStrip();
  downloads=createDownloadUI({$,icon,esc,toast,legacy:()=>state.tasks,requestLegacy:uid=>requestDownload([uid]),isVisible:()=>state.route==='downloads',onUpdate:changed=>{counts();if(changed&&state.route!=='downloads')renderGrid();}});downloads.setup();
+ if(visitor)localBlenderGuide=createLocalBlenderGuide({toast});
+ localFiles.setup();
+ $('#local-rescan')?.addEventListener('click',()=>scanLibraryFiles(true));
  artstation=createArtstationUI({$,icon,esc,toast,state,requestFeed});artstation.setup();
  // ambientCG 侧栏（分类 / 精度 / 输出方式）：分类清单开页就拉一次，静态 facets 不常变。
  ambientcgUI=createAmbientcgUI({$,toast,requestFeed});ambientcgUI.setup();
@@ -487,7 +563,7 @@ function setup(){
  // 设置面板里的「运行环境」：后台浏览器不再随安装包分发，缺了就点这里下载。
  browserRuntime=createBrowserRuntimePanel({$,esc,icon,toast});browserRuntime.setup();
  // 首次运行的依赖准备：缺了后台浏览器 / Blender / 桥接脚本时自己弹出来，之后从设置页进来。
- setupWizard=createSetupWizard({$,esc,icon,toast});setupWizard.setup();
+ if(!visitor){setupWizard=createSetupWizard({$,esc,icon,toast,downloads});setupWizard.setup();}
  resolveArtworkLink=async url=>{
   // 只负责「识别出这个作品」，不碰下载队列：结果卡片的下载键由主人在结果区点。
   // 入队逻辑只留在 enqueueImmediate 那一条路上，避免识别顺手把任务排上。
@@ -502,7 +578,7 @@ function setup(){
  contentModes=createContentModes({state,onPick:applyContentMode,buttons:document.querySelectorAll('[data-content-mode]')});   // 两个快捷入口：模型模式＝只看 Sketchfab，图片模式＝只看 A 站并排瀑布流
  placeFilters();                                                // 宽屏把筛选行搬进左侧栏，窄屏搬回搜索卡片
  window.addEventListener('resize',()=>{clearTimeout(filterTimer);filterTimer=setTimeout(()=>{placeFilters();syncStickyOffset();},120);});
- fillIcons();$('#online-category').innerHTML=CATEGORIES.map(([value,label])=>`<option value="${value}">${label}</option>`).join('');filterTrees.refresh();/* 分类选项填进去了，树可以画叶子了 */searchHistory=createSearchHistory({$,icon,state,persist,toast,onPick:applyHistory});searchHistory.setup();renderPlatform();route('discover');
+ fillIcons();$('#online-category').innerHTML=CATEGORIES.map(([value,label])=>`<option value="${value}">${label}</option>`).join('');filterTrees.refresh();/* 分类选项填进去了，树可以画叶子了 */searchHistory=createSearchHistory({$,icon,state,persist,toast,onPick:applyHistory});searchHistory.setup();renderPlatform();route('discover');scanLibraryFiles();
  if(initial.migrated||initial.warning){$('#migration-note').hidden=false;$('#migration-note span').textContent=initial.warning||`已兼容旧版：保留 ${state.models.length} 个模型及收藏、任务记录。新的在线结果不会再自动入库。`;persistNow();}
  $('#dismiss-migration').onclick=()=>{$('#migration-note').hidden=true;};
  document.addEventListener('click',e=>{
@@ -510,9 +586,12 @@ function setup(){
   // 详情面板里所有「打开官方页面」都是这类链接，统一在这里接走，交给系统默认浏览器。
   const external=e.target.closest('a[target="_blank"]');
   if(external&&/^https?:/i.test(external.href||'')){e.preventDefault();openExternal(external.href);return;}
-  const routeButton=e.target.closest('[data-route]');if(routeButton)route(routeButton.dataset.route);
+  const routeButton=e.target.closest('aside nav button[data-route]');if(routeButton)route(routeButton.dataset.route);
   const close=e.target.closest('[data-close]');if(close)$('#'+close.dataset.close).close();
-  const action=e.target.closest('[data-action]');if(action){const {uid}=action.dataset;switch(action.dataset.action){case 'preview':preview(uid);break;case 'download':requestDownload([uid]);break;case 'download-images':imageDownload.requestImages([uid]);break;case 'blender-send':sendBlenderToOpenScene(action.dataset.id);break;case 'favorite':toggleFavorite(uid);break;case 'ai-tags':aiTagThis(uid);break;case 'collect':collect([uid]);break;case 'reveal-download':downloads?.reveal(action.dataset.id).catch(e=>toast(e.message));break;case 'remove':if(confirm('从模型库移除此模型和收藏？不会删除已下载文件。')){state.models=state.models.filter(m=>m.uid!==uid);state.favorites.delete(uid);state.selected.delete(uid);persist();renderGrid();}break;}}
+  const action=e.target.closest('[data-action]');if(action){const {uid}=action.dataset;switch(action.dataset.action){case 'preview':preview(uid);break;case 'download':requestDownload([uid]);break;case 'download-images':imageDownload.requestImages([uid]);break;case 'blender-send':if(visitor)sendToLocalBlender(action.dataset.id);else sendBlenderToOpenScene(action.dataset.id);break;case 'favorite':toggleFavorite(uid);break;case 'ai-tags':aiTagThis(uid);break;case 'collect':collect([uid]);break;case 'reveal-download':downloads?.reveal(action.dataset.id).catch(e=>toast(e.message));break;case 'remove':trashModels(state,[uid]);persist();renderGrid();counts();toast('已移入回收站 · 资产筛选里选「回收站」可恢复');break;case 'restore':{const r=restoreModels(state,[uid]);persist();renderGrid();counts();toast(r.refused?'模型库已满（1000 个），先清理再恢复':'已放回模型库');break;}case 'purge':if(confirm('彻底删除这条记录？不可恢复（不会删除已下载的文件）。')){purgeModels(state,[uid]);persist();renderGrid();counts();}break;case 'add-user-tag':addUserTagFromDialog(uid);break;}}
+  // 评分与「我的标签」× 删除：都长在标签面板里，先于 data-tag 搜索拦截，不然点星会顺带发起检索。
+  const rate=e.target.closest('[data-rate]');if(rate){setUserMeta(state,rate.dataset.uid,{rating:Number(rate.dataset.rate)});persist();renderTagDialog(rate.dataset.uid);renderGrid();patchMetaFor(rate.dataset.uid);return;}
+  const rmTag=e.target.closest('[data-remove-tag]');if(rmTag){const box=rmTag.closest('[data-asset-tags]'),model=box?.dataset.assetTags?findModel(box.dataset.assetTags):null;if(model){removeUserTag(state,model,rmTag.dataset.removeTag);persist();renderTagDialog(model.uid);renderGrid();}return;}
   const filter=e.target.closest('[data-filter]');if(filter){state.filter=filter.dataset.filter;state.selected.clear();document.querySelectorAll('[data-filter]').forEach(b=>b.classList.toggle('active',b===filter));renderGrid();}
   const tag=e.target.closest('[data-tag]');if(tag){$('#preview-dialog').close();writeSearch({q:tag.dataset.tag});startSearch();}
   
@@ -521,7 +600,15 @@ function setup(){
  // 材质精度选择（卡片下载键左边、预览面板各一份）：写回模型对象，重渲染时按它回填，
  // 下载时也从同一个字段读——不复制第二份状态，就不存在两处显示不一致。
  // 写回后必须重渲染：下载键的「已下载」按精度判定，不刷新的话切了精度按钮还停在旧档位的状态。
- document.addEventListener('change',e=>{const select=e.target.closest('[data-material-resolution]');if(!select)return;const model=findModel(select.dataset.materialResolution);if(!model||model.materialResolution===select.value)return;model.materialResolution=select.value;renderGrid();});
+ document.addEventListener('change',e=>{
+  // 备注：change 在失焦时才触发，不会和打字争焦点；落库后顺手把整份 userMeta 补进磁盘 info.json。
+  const note=e.target.closest('[data-note-for]');
+  if(note){setUserMeta(state,note.dataset.noteFor,{note:note.value});persist();renderGrid();patchMetaFor(note.dataset.noteFor);return;}
+  const resolution=e.target.closest('[data-material-resolution]');
+  if(resolution){const model=findModel(resolution.dataset.materialResolution);if(!model||model.materialResolution===resolution.value)return;model.materialResolution=resolution.value;renderGrid();return;}
+  const format=e.target.closest('[data-material-format]');
+  if(!format)return;const model=findModel(format.dataset.materialFormat);if(!model||model.materialFormat===format.value)return;model.materialFormat=format.value;renderGrid();
+ });
  // 只有「手动在搜索框里敲关键词并提交」才写进最近检索：分类 / 排序 / 复选这些筛选动作
  // 也会重发检索，但它们是筛选不是检索词，混进历史里只会把真正的关键词挤掉（2026-10-16 用户要求）。
  $('#asset-search-form').addEventListener('submit',e=>{e.preventDefault();startSearch({record:true});});
@@ -613,6 +700,74 @@ const tagSuggester=createTagSuggester();
   renderGrid();
  };
  $('#tag-all').onclick=tagAllAssets;
+/** 包即真相：评分/备注/AI 标签写进浏览器状态的同时，异步补一份进磁盘 info.json。
+ *  只对扫得到的资产包发请求；ZIP 包与未登记包静默跳过（状态才是主存储，失败不打扰用户）。 */
+function patchMetaFor(uid){
+ const pkg=(localFiles.packages()||[]).find(p=>p.uid===uid);
+ if(!pkg||pkg.type==='zip')return;
+ const body={root:pkg.root,rel:pkg.rel};
+ if(state.aiTags?.[uid]?.length)body.ai={tags:state.aiTags[uid],updatedAt:Date.now()};
+ const meta=userMetaFor(state,uid);
+ if(meta.rating||meta.note)body.user={rating:meta.rating,note:meta.note};
+ if(!body.ai&&!body.user)return;
+ fetch('/api/local/meta-patch',{method:'POST',cache:'no-store',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).catch(()=>{});
+}
+function addUserTagFromDialog(uid){
+ const model=findModel(uid);if(!model)return;
+ const input=$(`[data-user-tag-input="${CSS.escape(uid)}"]`);
+ const value=(input?.value||'').trim();
+ if(!value)return;
+ const added=addUserTag(state,model,value);
+ input.value='';persist();renderTagDialog(uid);renderGrid();
+ toast(added?`已添加标签「${value}」`:'这个标签已经有了');
+}
+// 标签输入框里回车＝添加（按钮是给不想摸键盘的人留的）。
+document.addEventListener('keydown',e=>{
+ if(e.key!=='Enter')return;
+ const input=e.target.closest('[data-user-tag-input]');
+ if(!input)return;
+ e.preventDefault();addUserTagFromDialog(input.dataset.userTagInput);
+});
+// 标签管理：重命名 / 合并 / 删除「我的标签」，另带一键清除 AI 标签（AI 的可再生，不值得逐个管）。
+function renderTagManage(){
+ const tags=listUserTags(state);
+ $('#tag-manage-content').innerHTML=tags.length
+  ?tags.map(t=>`<div class="tm-row"><span class="tm-name" title="${esc(t.name)}">${esc(t.name)}</span><span class="tm-count">${t.count} 个资产</span><span class="tm-ops"><button type="button" class="text-button" data-tm="rename" data-name="${esc(t.name)}">重命名</button><button type="button" class="text-button" data-tm="merge" data-name="${esc(t.name)}">合并…</button><button type="button" class="text-button tm-del" data-tm="delete" data-name="${esc(t.name)}">删除</button></span></div>`).join('')
+  :'<p class="compact-note">还没有「我的标签」。打开资产的标签面板即可添加；AI 整理的标签不在这里管。</p>';
+ $('#tag-manage-count').textContent=tags.length?`共 ${tags.length} 个标签 · ${tags.reduce((sum,t)=>sum+t.count,0)} 次引用`:'';
+}
+function openTagManage(){renderTagManage();const dialog=$('#tag-manage-dialog');if(!dialog.open)dialog.showModal();}
+$('#tag-manage').onclick=openTagManage;
+document.addEventListener('click',e=>{
+ const op=e.target.closest('[data-tm]');if(!op)return;
+ const name=op.dataset.name;
+ if(op.dataset.tm==='rename'){
+  const next=prompt(`把标签「${name}」重命名为：`,name);
+  if(!next||!next.trim()||next.trim()===name)return;
+  const count=renameUserTag(state,name,next.trim());
+  if(!count)return toast('没找到这个标签，可能已被删除');
+  persist();renderTagManage();renderGrid();toast(`已重命名为「${next.trim()}」，影响 ${count} 个资产`);
+ }
+ if(op.dataset.tm==='merge'){
+  const target=prompt(`把「${name}」合并到哪个标签？输入目标标签名：`,name);
+  if(!target||!target.trim())return;
+  const count=mergeUserTag(state,name,target.trim());
+  if(!count)return toast('没找到这个标签，可能已被删除');
+  persist();renderTagManage();renderGrid();toast(`已合并到「${target.trim()}」，影响 ${count} 个资产`);
+ }
+ if(op.dataset.tm==='delete'){
+  if(!confirm(`从所有资产上删除标签「${name}」？`))return;
+  const count=deleteUserTag(state,name);
+  if(!count)return toast('没找到这个标签，可能已被删除');
+  persist();renderTagManage();renderGrid();toast(`已删除「${name}」，影响 ${count} 个资产`);
+ }
+});
+$('#tm-clear-ai').onclick=()=>{
+ const total=Object.keys(state.aiTags||{}).length;
+ if(!total)return toast('没有 AI 标签可清除');
+ if(!confirm(`清除全部 ${total} 个资产的 AI 标签？平台标签和我的标签不受影响，之后可重新整理。`))return;
+ state.aiTags={};persist();renderTagManage();renderGrid();toast('已清除全部 AI 标签');
+};
  let tagBusy=false,tagAbort=false;
  async function aiTagThis(uid){
   const model=findModel(uid);if(!model)return;
@@ -622,7 +777,7 @@ const tagSuggester=createTagSuggester();
    const data=await tagSuggester({name:model.name,author:model.author,kind:model.assetType||model.kind,existing:tagsFor(state,model)});
    if(!data.tagged||!data.tags.length){toast(data.reason||'未能生成标签');if(activeTagUid===uid)$('#asset-tags-status').textContent=data.reason||'未能生成标签，可重试。';return;}
    const added=addAITags(state,model,data.tags);
-   persistNow();renderGrid();refreshPreviewTags(uid);
+   persistNow();patchMetaFor(uid);renderGrid();refreshPreviewTags(uid);
    const message=added?`已补充 ${added} 个 AI 标签，已自动保存到本机。`:'没有新增标签，原有标签已保留。';
    if(activeTagUid===uid)$('#asset-tags-status').textContent=message;
    toast(message);
@@ -644,7 +799,7 @@ const tagSuggester=createTagSuggester();
     tagging.add(m.uid);
     try{
      const data=await tagSuggester({name:m.name,author:m.author,kind:m.assetType||m.kind,existing:tagsFor(state,m)});
-     if(data.tagged&&data.tags.length){addAITags(state,m,data.tags);persistNow();}
+     if(data.tagged&&data.tags.length){addAITags(state,m,data.tags);persistNow();patchMetaFor(m.uid);}
     }catch{}finally{tagging.delete(m.uid);}
     done++;
     if(done%5===0){persist();renderGrid();toast(`已整理 ${done}/${candidates.length}`);}
@@ -703,9 +858,8 @@ $('#preview-dialog').addEventListener('close',()=>{
  $('#settings-button').onclick=$('#download-settings').onclick=openSettings;$('#help').onclick=()=>$('#help-dialog').showModal();
  const aiSettings=createAISettings({$,toast});
  const appUpdates=createAppUpdates({hasActiveTasks:()=>downloads.activeCount()>0});
- settingsPanel=createSettingsPanel({$,loadAI:()=>aiSettings.load(),updateCard:appUpdates.card});
- window.addEventListener('assetvault:open-updates',()=>appUpdates.open());
- appUpdates.start();
+ settingsPanel=createSettingsPanel({$,loadAI:()=>aiSettings.load(),updateCard:appUpdates.card,sharing:createLanSharingSettings({toast})});
+ if(!visitor){window.addEventListener('assetvault:open-updates',()=>appUpdates.open());appUpdates.start();}
  $('#open-setup-wizard').onclick=()=>{$('#settings-dialog').close();setupWizard?.open();};
  $('#reset-folder').onclick=()=>{$('#backend-folder').value=downloads.defaultFolder||downloads.settings?.folder||'';};
  $('#browse-backend-folder').onclick=()=>browseFolderInto('#backend-folder');
@@ -714,7 +868,10 @@ $('#preview-dialog').addEventListener('close',()=>{
  window.addEventListener('pagehide',persistNow);
   // 顶部那条状态栏（连接指示灯 + 头像）已撤掉，所以这里不再往元素里写状态：
  // 连上了就安静地做「首次进入自动检索」，连不上才出声（状态行 + 一条提示）。
- fetch('/api/health').then(r=>{if(!r.ok)throw Error();return r.json();}).then(()=>{const warm=activeModes().some(mode=>state.feeds[mode].rows.length);if(!warm&&activeModes().every(mode=>!state.feeds[mode].request&&!state.feeds[mode].busy&&!state.feeds[mode].rows.length)&&state.route==='discover'&&!$('#asset-query').value.trim())startSearch();}).catch(()=>{state.feeds[activeModes()[0]].status='请通过 Start-Library.cmd 启动工作台。';state.feeds[activeModes()[0]].error=true;renderStatus();toast('本地服务未连接：卡片动作都依赖本地服务');});
+ fetch('/api/health').then(r=>{if(!r.ok)throw Error();return r.json();}).then(()=>{
+  try{const warm=activeModes().some(mode=>state.feeds[mode].rows.length);if(!warm&&activeModes().every(mode=>!state.feeds[mode].request&&!state.feeds[mode].busy&&!state.feeds[mode].rows.length)&&state.route==='discover'&&!$('#asset-query').value.trim())startSearch();}
+  catch(error){const feed=state.feeds[activeModes()[0]];feed.status=`初始化搜索失败：${error.message}`;feed.error=true;renderStatus();toast(feed.status);}
+ },()=>{state.feeds[activeModes()[0]].status='本地服务未连接，请重新启动 AssetVault。';state.feeds[activeModes()[0]].error=true;renderStatus();toast('本地服务未连接：卡片动作都依赖本地服务');});
 }
 
 setup();

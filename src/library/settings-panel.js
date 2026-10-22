@@ -1,5 +1,12 @@
 /** Group the existing settings controls; moving nodes preserves IDs, values and event handlers. */
-export function createSettingsPanel({$,loadAI,updateCard}){
+import {isLanVisitor} from './visitor-mode.js';
+export function createSettingsPanel({$,loadAI,updateCard,sharing}){
+ if(isLanVisitor()){
+  for(const selector of ['#settings-button','#ai-settings-button','#download-settings','#settings-dialog','#ai-dialog']){
+   const node=$(selector);if(node){node.hidden=true;node.inert=true;}
+  }
+  return {open(){}};
+ }
  const dialog=$('#settings-dialog'),body=dialog.querySelector('.settings-body');
  const cards=[...body.querySelectorAll(':scope > .settings-card')];
  const aiCard=$('#ai-dialog .settings-card');
@@ -9,6 +16,7 @@ export function createSettingsPanel({$,loadAI,updateCard}){
   {id:'storage',label:'保存与队列',description:'文件路径、任务并发与重试',cards:cards.slice(4,5)},
   {id:'connections',label:'软件与环境',section:'服务连接',description:'Blender 桥接与后台浏览器',cards:cards.slice(2,4)},
   {id:'ai',label:'AI 接入',description:'模型连接、中文搜索翻译与后续智能整理',cards:[aiCard]},
+  ...(sharing?[{id:'sharing',label:'局域网共享',description:'共享访问、密码与连接地址',cards:[sharing.card]}]:[]),
   ...(updateCard?[{id:'updates',label:'软件更新',section:'应用',description:'检查新版本、下载与安装更新',cards:[updateCard]}]:[]),
  ];
  const nav=document.createElement('nav');nav.className='settings-categories';nav.setAttribute('aria-label','设置分类');
@@ -39,9 +47,10 @@ export function createSettingsPanel({$,loadAI,updateCard}){
  function select(id){
   const active=groups.find(group=>group.id===id)||groups[0];
   for(const group of groups){group.page.hidden=group!==active;group.button.classList.toggle('active',group===active);group.button.setAttribute('aria-current',group===active?'page':'false');}
-  title.textContent=active.label;description.textContent=active.description;footer.hidden=['ai','updates'].includes(active.id);
+  title.textContent=active.label;description.textContent=active.description;footer.hidden=['ai','updates','sharing'].includes(active.id);
   content.scrollTop=0;
   if(active.id==='ai'&&!aiLoaded){aiLoaded=true;loadAI();}
+  if(active.id==='sharing')sharing.load();
  }
  nav.addEventListener('click',event=>{const button=event.target.closest('[data-settings-page]');if(button)select(button.dataset.settingsPage);});
  nav.addEventListener('keydown',event=>{

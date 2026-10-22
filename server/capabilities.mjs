@@ -11,7 +11,7 @@
 // 所以两边都从这里取：服务端原样返回 SERVER_CAPABILITIES，启动器用 serverIsCurrent() 判定。
 // 加一个前端要用的新接口 = 在这里加一个能力位，两侧自动同步，没有第二处要记得改的地方。
 
-export const SERVER_VERSION = '3.6.8';
+export const SERVER_VERSION = '3.9.0';
 
 /**
  * 服务端当前具备的能力。新增能力位之后，旧进程会在下次启动时被自动换掉。
@@ -22,6 +22,14 @@ export const SERVER_CAPABILITIES = Object.freeze({
   aiConnection: true,
   aiSearchTranslation: true,
   pickFolder: true,
+  inAppFolderPicker: true,
+  lanSharing: true,
+  // LAN clients need folder-to-ZIP retrieval and persistent device administration.
+  lanFolderDelivery: true,
+  lanLargeFolderDelivery: true,
+  lanDeviceManagement: true,
+  lanVisitorSettingsGuard: true,
+  clearedDownloadHistory: true,
   fixedExportDefaults: true,
   artstationVerifyWindow: true,
   blenderExistingScene: true,
@@ -37,6 +45,8 @@ export const SERVER_CAPABILITIES = Object.freeze({
   // ambientCG 材质检索 + 材质下载（kind:'ambientcg' 走独立 runner）。老进程没有路由，404。
   ambientcgSearch: true,
   ambientcgMaterials: true,
+  ambientcgAssetTypes: true,
+  ambientcgTypedSearchCache: true,
   // ambientCG 交互式材质预览：CSP frame-src 需要放行 releases.pbr.one（官方 PBR 查看器）。
   // 老进程的 CSP 不含这个域，iframe 会被安全策略拦成白屏，所以必须靠能力位换进程。
   ambientcgPreviews: true,
@@ -61,6 +71,12 @@ export const SERVER_CAPABILITIES = Object.freeze({
   // staffpicked + -publishedAt、ArtStation 走 editor_pick + 最新发布（2026-10-16 用户要求默认
   // 列表每天有变化）。老进程仍会给出那份固定的历史点赞榜，所以必须换进程。
   browseFeaturedDaily: true,
+  // 本地文件夹索引：POST /api/library/scan + GET /api/local/file，资产库「自动认领本地素材」全靠这两条。
+  // 老进程没有它们，扫描只会 404——而且因为版本没变永远不会重启，所以必须靠这一位把旧进程换掉。
+  localFolderIndex: true,
+  // 视频转封装：GET /api/local/play，mov/avi/wmv/mkv 这类容器由 ffmpeg 边转边发。
+  // 老进程没有这条路由，视频会直接失败在「放不了」上，同样要靠这一位换进程。
+  mediaTranscode: true,
 });
 
 /** 必须为 true 的能力位（version 单独比）。从契约派生，不手抄，免得再漏一个。 */

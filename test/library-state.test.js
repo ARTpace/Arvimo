@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {loadLibrary,saveLibrary,collectModels,mergeModels,STORAGE_KEY,LEGACY_KEY} from '../src/library/library-state.js';
+import {loadLibrary,saveLibrary,collectModels,mergeModels,STORAGE_KEY,LEGACY_KEY,trashModels,restoreModels,purgeModels,setUserMeta,userMetaFor} from '../src/library/library-state.js';
 const a={uid:'a'.repeat(32),name:'Old model',addedAt:123},b={uid:'b'.repeat(32),name:'New model'};
 const memory=(values={})=>({getItem:k=>values[k]??null,setItem:(k,v)=>{values[k]=v;},values});
 test('v1 migration preserves models, favorites, history, options and interrupted tasks',()=>{const raw=JSON.stringify({models:[a],favorites:[a.uid],history:[{url:'https://sketchfab.com/artist/models'}],options:{maxTextureEdge:4096},tasks:[{...a,id:'job',state:'running',logs:['started']}]});const store=memory({[LEGACY_KEY]:raw}),state=loadLibrary(store);assert.equal(state.migrated,true);assert.deepEqual(state.models,[a]);assert.equal(state.favorites.has(a.uid),true);assert.equal(state.options.maxTextureEdge,4096);assert.equal(state.history[0].kind,'web');assert.equal(state.tasks[0].state,'interrupted');saveLibrary(store,state);assert.equal(store.getItem(LEGACY_KEY),raw);assert.equal(loadLibrary(store).migrated,false);});
@@ -11,3 +11,29 @@ test('full library rejects new models instead of silently discarding old favorit
 test('pagination merging keeps API ranking and replaces duplicate metadata',()=>{assert.deepEqual(mergeModels([a],[b,{...a,name:'Updated'}]).map(m=>m.uid),[a.uid,b.uid]);assert.equal(mergeModels([a],[{uid:'invalid'}]).length,1);});
 test('damaged storage is backed up rather than silently lost',()=>{const store=memory({[STORAGE_KEY]:'broken json'});const state=loadLibrary(store);assert.ok(state.warning);assert.equal(store.getItem(STORAGE_KEY+'-invalid-backup'),'broken json');assert.deepEqual(state.models,[]);});
 test('invalid history and task logs do not crash migration',()=>{const store=memory({[LEGACY_KEY]:JSON.stringify({models:[null,a],history:[null,{}, {url:'javascript:alert(1)'}],tasks:[{...a,state:'running',logs:null}]})});const state=loadLibrary(store);assert.equal(state.models.length,1);assert.equal(state.history.length,0);assert.deepEqual(state.tasks[0].logs,[]);});
+test('移除进回收站可恢复，评分/备注随记录搬迁且刷新不丢',()=>{
+ const store=memory(),state=loadLibrary(store);
+ state.models=collectModels([],[a,b]).models;
+ setUserMeta(state,a.uid,{rating:4,note:'项目A用'});
+ assert.equal(trashModels(state,[a.uid]),1);
+ assert.equal(state.models.length,1);
+ assert.equal(state.userMeta[a.uid],undefined);
+ assert.equal(state.trashed[0].userMeta.rating,4);
+ assert.equal(state.trashed[0].userMeta.note,'项目A用');
+ const r=restoreModels(state,[a.uid]);
+ assert.equal(r.restored,1);assert.equal(r.refused,0);
+ assert.equal(state.models.length,2);
+ assert.equal(userMetaFor(state,a.uid).rating,4);
+ saveLibrary(store,state);
+ assert.equal(userMetaFor(loadLibrary(store),a.uid).note,'项目A用');
+});
+test('彻底删除只清回收站记录；评分截断到 0-5',()=>{
+ const store=memory(),state=loadLibrary(store);
+ state.models=collectModels([],[a]).models;
+ trashModels(state,[a.uid]);
+ assert.equal(purgeModels(state,[a.uid]),1);
+ assert.equal(state.trashed.length,0);
+ assert.equal(state.models.length,0);
+ setUserMeta(state,a.uid,{rating:9});assert.equal(userMetaFor(state,a.uid).rating,5);
+ setUserMeta(state,a.uid,{rating:-3});assert.equal(userMetaFor(state,a.uid).rating,0);
+});

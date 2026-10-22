@@ -8,6 +8,25 @@ import {resolveBlenderImport,findHdriFile} from '../server/blender-import.mjs';
 import {DownloadManager} from '../server/downloads.mjs';
 import {createBlenderButton} from '../src/library/blender-send.js';
 
+test('ambientCG OBJ packages preserve MTL and textures at a persistent import location',async()=>{
+ const base=await temp();
+ try{
+  const dir=await kenneyDelivery(base,{zipEntries:[
+   {name:'apple/apple.obj',data:'mtllib apple.mtl\nv 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3'},
+   {name:'apple/apple.mtl',data:'newmtl apple\nmap_Kd color.jpg'},
+   {name:'apple/color.jpg',data:'texture'},
+  ]});
+  const asset=resolveBlenderImport(dir);
+  assert.match(asset.file,/apple\.obj$/);assert.equal(asset.tmpDir,null);assert.ok(fsSync.existsSync(asset.file));
+  assert.equal(fsSync.readFileSync(path.join(path.dirname(asset.file),'color.jpg'),'utf8'),'texture');
+  assert.equal(resolveBlenderImport(dir).file,asset.file);
+  const terrain=path.join(base,'Terrain001.obj');await fs.writeFile(terrain,'v 0 0 0');
+  assert.equal(resolveBlenderImport(terrain).file,terrain);
+  const button=createBlenderButton({icon:()=>''});
+  assert.match(button({job:{id:'terrain',kind:'ambientcg',assetType:'models',sourceType:'terrain'}}),/blender-send/);
+ }finally{await fs.rm(base,{recursive:true,force:true});}
+});
+
 // 新平台（Kenney / FreeStylized / Poly Pizza / Poly Haven HDRI）下载后的 Blender 导入：
 // 资源包平台的交付目录里只有一个原始 pack.zip，真正的模型在压缩包里；
 // Poly Haven HDRI 是 .hdr 环境贴图，走桥接的 environment 操作设世界环境。
@@ -106,7 +125,7 @@ test('资源包里没有模型时明确报错（FreeStylized 贴图包/天空盒
    {name:'pack/textures/brick_diffuse.jpg',data:'fake-jpg'},
    {name:'pack/preview.png',data:'fake-png'},
   ]});
-  assert.throws(()=>resolveBlenderImport(dir),/资源包里没有可导入 Blender 的 GLB、glTF 或 FBX 模型/);
+  assert.throws(()=>resolveBlenderImport(dir),/资源包里没有可导入 Blender 的 GLB、glTF、FBX 或 OBJ 模型/);
  }finally{await fs.rm(base,{recursive:true,force:true});}
 });
 
@@ -139,6 +158,34 @@ test('HDRI 交付：info.json 清单优先，退回按扩展名扫',async()=>{
   const dir3=path.join(base,'empty');
   await fs.mkdir(dir3,{recursive:true});
   assert.throws(()=>findHdriFile(dir3),/没有[^。]*世界环境/);
+ }finally{await fs.rm(base,{recursive:true,force:true});}
+});
+
+test('ambientCG 天空盒：整包 ZIP 里优先挑 .exr，解到持久目录不清理',async()=>{
+ const base=await temp();
+ try{
+  const dir=path.join(base,'EveningSkyHDRI048B-350dcfee');
+  await fs.mkdir(dir,{recursive:true});
+  await fs.writeFile(path.join(dir,'info.json'),JSON.stringify({
+   kind:'pack',platform:'ambientcg',assetId:'EveningSkyHDRI048B',sourceType:'hdri',
+   files:[{file:'EveningSkyHDRI048B.zip'}],
+  }));
+  await writeZip(path.join(dir,'EveningSkyHDRI048B.zip'),[
+   {name:'EveningSkyHDRI048B_2K_HDR.exr',data:'fake-exr'},
+   {name:'EveningSkyHDRI048B_2K_TONEMAPPED.jpg',data:'fake-jpg'},
+   {name:'EveningSkyHDRI048B_2K.blend',data:'fake-blend'},
+  ]);
+  const first=findHdriFile(dir);
+  // 反证：以前这里返回 os.tmpdir 下的临时目录，调用方 finally 一删，Blender 的
+  // Image datablock 就指向不存在的文件，世界环境整片变成缺失贴图的洋红（用户看到的爆粉）。
+  assert.equal(first.tmpDir,null,'环境图必须落在持久位置，不能交给临时目录');
+  assert.match(first.file,/_2K_HDR\.exr$/,'要挑真 HDR，不能拿 TONEMAPPED 的 LDR 全景图凑数');
+  assert.equal(first.file,path.join(dir,'EveningSkyHDRI048B.unpacked','EveningSkyHDRI048B_2K_HDR.exr'),'解包目录固定在压缩包旁边');
+  assert.ok(fsSync.existsSync(first.file),'交给 Blender 的文件必须真实存在');
+  // 第二次导入直接命中已解包的文件，不重复落盘
+  const second=findHdriFile(dir);
+  assert.equal(second.file,first.file);
+  assert.equal(second.tmpDir,null);
  }finally{await fs.rm(base,{recursive:true,force:true});}
 });
 

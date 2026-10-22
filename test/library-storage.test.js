@@ -3,8 +3,28 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import {createLibraryStorage} from '../server/library-storage.mjs';
+import {createLibraryStorage,restoreLibraryCovers} from '../server/library-storage.mjs';
+import {mergeModels,collectModels} from '../src/library/library-state.js';
 import {createPersistentStorage} from '../src/library/persistent-storage.js';
+
+test('recovered exports regain cached covers without replacing existing covers or adding assets',async()=>{
+ const dir=await fs.mkdtemp(path.join(os.tmpdir(),'assetvault-covers-'));
+ try{
+  const uid='a'.repeat(32),thumbnail='https://example.com/cover.jpg';
+  await fs.writeFile(path.join(dir,'b'.repeat(64)),JSON.stringify({models:[{uid,thumbnail},{uid:'c'.repeat(32),url:'https://polyhaven.com/a/chair',thumbnail}]}));
+  const values={'sfx-library-v2':JSON.stringify({models:[{uid,name:'Original',tags:['custom']}],favorites:[uid]})};
+  const result=await restoreLibraryCovers(values,[{uid,thumbnail:null}],dir);
+  const state=JSON.parse(result.values['sfx-library-v2']);
+  assert.equal(state.models.length,1);assert.equal(state.models[0].thumbnail,thumbnail);
+  assert.deepEqual(state.models[0].tags,['custom']);assert.deepEqual(state.favorites,[uid]);
+  assert.equal(result.recovered[0].thumbnail,thumbnail);
+  const imageResult=await restoreLibraryCovers({},[{uid:'d'.repeat(32),kind:'images',url:'https://polyhaven.com/a/chair/'}],dir);
+  assert.equal(imageResult.recovered[0].thumbnail,thumbnail);
+  const existing={uid,thumbnail};
+  assert.equal(mergeModels([existing],[{uid,thumbnail:null}])[0].thumbnail,thumbnail);
+  assert.equal(collectModels([existing],[{uid,thumbnail:''}]).models[0].thumbnail,thumbnail);
+ }finally{await fs.rm(dir,{recursive:true,force:true});}
+});
 test('frontend restores downloads and favorites across different page storage origins',async()=>{
  const values={};
  const uid='b'.repeat(32);

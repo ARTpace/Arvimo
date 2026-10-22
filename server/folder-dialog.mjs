@@ -20,6 +20,35 @@ function nearestExistingDir(value){
   return current;
 }
 
+/** Read-only directory navigation for the in-app picker; saving still uses resolveFolder. */
+export async function browseFolders({folder='',initial=false}={}){
+  if(typeof folder!=='string'||folder.includes('\0')||/^(\\\\|\/\/)/.test(folder))throw Error('请选择本机文件夹路径');
+  if(!folder){
+    const candidates=process.platform==='win32'?Array.from({length:26},(_,i)=>String.fromCharCode(65+i)+':\\'):['/'];
+    const roots=await Promise.all(candidates.map(async value=>{try{await fs.promises.access(value);return {name:value,path:value};}catch{return null;}}));
+    return {folder:'',parent:null,selectable:false,directories:roots.filter(Boolean)};
+  }
+  if(!path.isAbsolute(folder))throw Error('请输入完整的文件夹路径');
+  const target=initial?nearestExistingDir(folder):folder;
+  if(!target)throw Error('文件夹不存在或磁盘未连接');
+  const current=await fs.promises.realpath(target);
+  if(/^(\\\\|\/\/)/.test(current))throw Error('请选择本机文件夹路径');
+  const directories=[];
+  const handle=await fs.promises.opendir(current);
+  let truncated=false;
+  for await(const entry of handle){
+    if(!entry.isDirectory()&&!entry.isSymbolicLink())continue;
+    if(entry.isSymbolicLink()){
+      try{if(!(await fs.promises.stat(path.join(current,entry.name))).isDirectory())continue;}catch{continue;}
+    }
+    if(directories.length>=2000){truncated=true;break;}
+    directories.push({name:entry.name,path:path.join(current,entry.name)});
+  }
+  directories.sort((a,b)=>a.name.localeCompare(b.name,'zh-CN',{numeric:true}));
+  const parent=path.dirname(current);
+  return {folder:current,parent:parent===current?'':parent,selectable:parent!==current,directories,truncated};
+}
+
 /**
  * The only machine-level check that decides whether the default download folder is usable: it must
  * be an absolute local path, already exist, and be writable. The `code` is what the UI maps to a
@@ -57,8 +86,19 @@ $dialog.Description = '选择 AssetVault 下载目录'
 $dialog.ShowNewFolderButton = $true
 $initial = ${psQuote(selected)}
 if ($initial -and [System.IO.Directory]::Exists($initial)) { $dialog.SelectedPath = $initial }
-$result = $dialog.ShowDialog()
-if ($result -eq [System.Windows.Forms.DialogResult]::OK) { [Console]::Write($dialog.SelectedPath) } else { exit 2 }`;
+$owner = New-Object System.Windows.Forms.Form
+$owner.ShowInTaskbar = $false
+$owner.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::None
+$owner.Size = New-Object System.Drawing.Size(1, 1)
+$owner.Opacity = 0
+$owner.TopMost = $true
+try {
+  # Consume the hidden process startup state before opening the visible modal dialog.
+  $owner.Show()
+  $owner.Activate()
+  $result = $dialog.ShowDialog($owner)
+  if ($result -eq [System.Windows.Forms.DialogResult]::OK) { [Console]::Write($dialog.SelectedPath) } else { exit 2 }
+} finally { $dialog.Dispose(); $owner.Dispose() }`;
   return new Promise((resolve,reject)=>execFile('powershell.exe',['-NoProfile','-STA','-ExecutionPolicy','Bypass','-Command',script],{windowsHide:true,encoding:'utf8',timeout:120000},(error,stdout,stderr)=>{
     if(error){if(error.code===2)return resolve(null);return reject(Error((stderr||'').trim()||error.message));}
     resolve(String(stdout||'').trim()||null);

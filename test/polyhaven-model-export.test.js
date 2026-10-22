@@ -3,6 +3,9 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
+import os from 'node:os';
+import {polyhavenModelFiles} from '../server/polyhaven.mjs';
+import {verifyFolder} from '../server/folder-archive.mjs';
 
 // Poly Haven 模型导出「明明下了文件却报没有模型文件」：错在两个地方都把「有没有贴图」
 // /「后缀名够不够全」当成了「有没有模型」。这两个都是静默走错分支、最后才在无关的
@@ -36,13 +39,27 @@ test('Poly Haven 模型不能因为「有贴图」而被降级成材质任务',(
   '不能再用「fbx 键不存在才降级」——该键总存在，降级永远不触发');
 });
 
-test('Poly Haven 校验要认 .bin —— glTF 包里几何数据就是它',()=>{
- // BarberShopChair_01 的 glTF 清单：BarberShopChair_01.bin + textures/*.jpg，
- // 并没有单独的 .gltf 文件。只认 fbx/gltf/glb 会让每个 glTF 导出都在校验环节被误判失败。
- assert.ok(folder.includes('fbx|gltf|glb|bin|blend|usdc|usd'),
-  '模型文件后缀白名单必须包含 .bin');
- assert.ok(folder.includes("info.platform === 'polyhaven'"),
-  'polyhaven 分支仍要走自己的模型文件判定');
+test('Poly Haven main model URL is downloaded alongside include dependencies',()=>{
+ const entry={url:'https://dl.polyhaven.org/ArmChair_01_4k.gltf',size:100,include:{'ArmChair_01.bin':{url:'https://dl.polyhaven.org/ArmChair_01.bin'},'textures/color.jpg':{url:'https://dl.polyhaven.org/color.jpg'}}};
+ const files=polyhavenModelFiles(entry);
+ assert.equal(files['ArmChair_01_4k.gltf'].url,entry.url);
+ assert.equal(files['ArmChair_01.bin'],entry.include['ArmChair_01.bin']);
+ assert.equal(Object.keys(files).length,3);
+ assert.deepEqual(polyhavenModelFiles({include:entry.include}),entry.include);
+});
+
+test('Poly Haven buffer alone is incomplete and declared dependencies must exist',async()=>{
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'ph-model-'));
+ try{
+  fs.writeFileSync(path.join(dir,'info.json'),JSON.stringify({uid:'a'.repeat(32),platform:'polyhaven'}));
+  fs.writeFileSync(path.join(dir,'model.bin'),'buffer');
+  await assert.rejects(verifyFolder(dir),/没有 Poly Haven 的模型/);
+  fs.writeFileSync(path.join(dir,'model.fbx'),'model');
+  fs.writeFileSync(path.join(dir,'info.json'),JSON.stringify({uid:'a'.repeat(32),platform:'polyhaven',files:[{file:'model.fbx',bytes:5},{file:'color.jpg',bytes:3}]}));
+  await assert.rejects(verifyFolder(dir),/color.jpg/);
+  fs.writeFileSync(path.join(dir,'color.jpg'),'img');
+  assert.equal((await verifyFolder(dir)).info.platform,'polyhaven');
+ }finally{fs.rmSync(dir,{recursive:true,force:true});}
 });
 
 test('纯材质 / HDRI 分支的校验逻辑没有被这次改动带偏',()=>{

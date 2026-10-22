@@ -2,14 +2,14 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import {createHash} from 'node:crypto';
-import {inspectGlb,inspectImage,declaredImages,declaredTextures,IMAGE_PREFIX_BYTES} from './archive.mjs';
-import {zipEntries} from './zip-writer.mjs';
+import {inspectGlb,inspectImage,declaredImages,declaredTextures,declaredSbsar,assertSbsar,isSbsarMaterial,IMAGE_PREFIX_BYTES} from './archive.mjs';
+import {zipEntries,writeZipFiles} from './zip-writer.mjs';
 
 const MAX = 2 * 1024 ** 3;
 const GLB_PREFIX = 32 * 1024 ** 2;
 
 /** Every regular file under `dir`, as `/`-joined relative paths, sorted for stable output. */
-async function collect(dir, signal) {
+async function collect(dir, signal, maxBytes=MAX) {
   const files = [];
   let total = 0;
   const walk = async (current, prefix) => {
@@ -22,7 +22,7 @@ async function collect(dir, signal) {
       if (!entry.isFile()) throw Error(`导出目录包含非普通文件：${relative}`);
       const size = (await fsp.stat(full)).size;
       total += size;
-      if (total > MAX) throw Error('导出内容超过 2GB 限制');
+      if (total > maxBytes) throw Error(`导出内容超过 ${Math.round(maxBytes/1024**2)}MB 打包限制，请在主机上取回文件或选择 ZIP 格式重新导出`);
       files.push({ relative, full, size });
     }
   };
@@ -52,8 +52,8 @@ export async function findStagedGlb(dir) {
  * Pack a finished staging folder as a ZIP. Only used for the "FBX + ZIP" combination: the FBX
  * step needs loose files on disk first, so the archive is built once the conversion is done.
  */
-export async function packFolder(dir, destination, { signal } = {}) {
-  const { files, total } = await collect(dir, signal);
+export async function packFolder(dir, destination, { signal, maxBytes=MAX } = {}) {
+  const { files, total } = await collect(dir, signal, maxBytes);
   const entries = [];
   for (const file of files) {
     signal?.throwIfAborted();
@@ -61,6 +61,12 @@ export async function packFolder(dir, destination, { signal } = {}) {
   }
   await fsp.writeFile(destination, zipEntries(entries));
   return { bytes: total, entries: entries.length };
+}
+
+export async function packFolderDownload(dir,destination,{signal}={}){
+ const {files,total}=await collect(dir,signal);
+ await writeZipFiles(destination,files,{signal});
+ return {bytes:total,entries:files.length};
 }
 
 async function readPrefix(file, length) {
@@ -115,6 +121,13 @@ export async function verifyFolder(dir, { uid, signal } = {}) {
       images.push(inspectImage(prefix, file.relative, file.size));
     }
     if (!images.length) throw Error('导出目录里没有作品图片');
+  } else if (isSbsarMaterial(info)) {
+    const file = declaredSbsar(info);
+    const present = files.find(f => f.relative === file);
+    if (!present) throw Error(`导出目录里缺少已登记的 Substance 文件：${file}`);
+    const prefix = await readPrefix(present.full, Math.min(present.size, 16));
+    assertSbsar(prefix, file);
+    textures = [];
   } else if (info.kind === 'material') {
     const declared = declaredTextures(info);
     const present = files.filter(f => /^textures\/[^/]+$/.test(f.relative));
@@ -132,10 +145,9 @@ export async function verifyFolder(dir, { uid, signal } = {}) {
     if (!declared.length) throw Error('导出目录里没有登记的文件');
     for (const item of declared) if (!files.some(f => f.relative === item.file)) throw Error(`导出目录里缺少已登记的文件：${item.file}`);
   } else if (info.platform === 'polyhaven') {
-    // .bin 也要算模型文件：Poly Haven 的 glTF 包里几何数据就是 <asset>.bin（旁边配贴图），
-    // 并没有单独的 .gltf 文件。只认 fbx/gltf/glb 会让每个 glTF 格式的导出都在这里被误判为失败。
-    const mesh = files.filter(f => /\.(?:fbx|gltf|glb|bin|blend|usdc|usd)$/i.test(f.relative));
+    const mesh = files.filter(f => /\.(?:fbx|gltf|glb|blend|usdc|usd)$/i.test(f.relative));
     if (!mesh.length) throw Error('导出目录里没有 Poly Haven 的模型文件');
+    for(const item of info.files||[]){const file=files.find(f=>f.relative===item.file);if(!file||file.size!==item.bytes)throw Error(`Poly Haven 文件缺失或不完整：${item.file}`);}
   } else if (!glbs.length) throw Error('缺少有效 GLB');
 
   const digest = createHash('sha256');
@@ -147,6 +159,7 @@ export async function verifyFolder(dir, { uid, signal } = {}) {
   }
   return {
     bytes: total,
+    info,
     entries: files.length,
     glbs,
     images,

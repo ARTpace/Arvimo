@@ -1,6 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {matchesWindowsOwner,lockOwnerAlive,processIdentity} from '../server/process-lock.mjs';
+import {matchesWindowsOwner,lockOwnerAlive,processIdentity,canReplaceOwner} from '../server/process-lock.mjs';
+
+test('桌面接管必须同时确认服务命令、路径和创建时间',()=>{
+ const owner={pid:123,startedAt:10000,executable:'C:/AssetVault/node.exe'};
+ const actual={...owner,isLibrary:true};
+ assert.equal(canReplaceOwner(owner,actual),true);
+ assert.equal(canReplaceOwner(owner,{...actual,isLibrary:false}),false);
+ assert.equal(canReplaceOwner(owner,{...actual,startedAt:20000}),false);
+ assert.equal(canReplaceOwner(owner,{...actual,executable:null}),false);
+ assert.equal(canReplaceOwner({pid:123},actual),false);
+});
 
 test('lock identity rejects exited processes and reused PIDs without killing anything',()=>{
  const owner={pid:123,startedAt:10000,executable:'C:\\AssetVault\\node.exe'};

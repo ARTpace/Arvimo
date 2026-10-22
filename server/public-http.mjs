@@ -31,6 +31,8 @@ export function validateUrl(value, { sketchfabOnly=false, artstation=false }={})
   if (!host || /(^|\.)(localhost|local|internal)$/i.test(host) || (net.isIP(host)&&!isPublicIP(host))) throw new Error('不允许访问本机、内网或保留地址');
   if (sketchfabOnly && (!isSketchfabHost(host)||u.protocol!=='https:')) throw new Error('模型引擎只允许访问 Sketchfab HTTPS 域名');
   if (artstation && (!isArtstationHost(host)||u.protocol!=='https:')) throw new Error('ArtStation 流程只允许访问 artstation.com HTTPS 域名');
+  // WHATWG URL leaves ^ literal, but ambientCG's file storage rejects it even in redirect paths.
+  u.pathname=u.pathname.replace(/\^/g,'%5E');
   u.hash='';return u;
 }
 

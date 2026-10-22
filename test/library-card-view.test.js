@@ -10,7 +10,7 @@ const css=fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url))
 
 // 卡片 meta 单行化后只渲染「标题 · 作者（与来源不同名时） · 许可」，统计/平台标签行已移除。
 // 这里用最小桩构造视图，验证单行结构与许可渲染，不牵动真正的 state / Blender 桥。
-const build=(state={favorites:new Set(),models:[],selected:new Set(),tasks:[]},downloadsUI=()=>({jobs:[]}))=>createCardView({
+const build=(state={favorites:new Set(),models:[],selected:new Set(),tasks:[]},downloadsUI=()=>({jobs:[]}),isVisitor=false)=>createCardView({
  icon:name=>`<i class="${name}"></i>`,
  esc:s=>s==null?'':String(s),
  fmt:n=>(n??0).toLocaleString('en-US'),
@@ -21,9 +21,34 @@ const build=(state={favorites:new Set(),models:[],selected:new Set(),tasks:[]},d
  platformLabel,
  artstationUI:()=>({has3dScene:()=>false}),
  downloadsUI,
+ isVisitor,
 });
 
 const render=model=>build().card(model);
+
+test('ambientCG models hide texture tiers and recognise existing model files at any resolution',()=>{
+ for(const sourceType of ['terrain','3d-model']){
+  const model={uid:'a'.repeat(32),name:'Model',platform:'ambientcg',assetType:'models',sourceType,materialResolution:'2K',materialFormat:'PNG'};
+  const job={id:'local',uid:model.uid,state:'saved',fileExists:true,options:{resolution:'1K',textureFormat:'JPG'}};
+  const html=build(undefined,()=>({jobs:[job]})).card(model);
+  assert.doesNotMatch(html,/data-material-resolution/);
+  assert.match(html,/aria-label="已下载到本地"/);
+  assert.match(html,/data-action="reveal-download"/);
+  const missing=build(undefined,()=>({jobs:[{...job,fileExists:false}]})).card(model);
+  assert.doesNotMatch(missing,/aria-label="已下载到本地"/);
+ }
+});
+
+test('SBSAR has no resolution selector but is distinct from baked texture downloads',()=>{
+ const model={uid:'b'.repeat(32),name:'Substance',platform:'ambientcg',assetType:'textures',sourceType:'substance',materialResolution:'8K'};
+ const job={id:'sbsar',uid:model.uid,state:'saved',fileExists:true,options:{resolution:'2K',textureFormat:'SBSAR'}};
+ const html=build(undefined,()=>({jobs:[job]})).card(model);
+ assert.doesNotMatch(html,/data-material-resolution/);
+ assert.match(html,/aria-label="已下载到本地"/);
+ const baked=build(undefined,()=>({jobs:[{...job,options:{textureFormat:'JPG'}}]})).card(model);
+ assert.doesNotMatch(baked,/aria-label="已下载到本地"/);
+ assert.doesNotMatch(render({...model,sourceType:'material',materialFormat:'SBSAR'}),/data-material-resolution/);
+});
 
 test('a saved job whose file is missing allows downloading again',()=>{
  const model={uid:'m'.repeat(32),name:'Missing chair',platform:'sketchfab',license:'CC0'};
@@ -194,15 +219,16 @@ test('an already downloaded card cannot be downloaded again',()=>{
  assert.equal(/<button class="card-download"[^>]*\sdisabled/.test(fresh),false,'未下载的卡片下载键必须可点');
 });
 
-test('the meta row drops the downloadable tag and shortens the license',()=>{
- // 2026-10-16：标题行只留 标题 · 作者 · 许可缩写；「● 可下载」去掉，CC0 全称简化成 CC0。
+test('the meta row drops the downloadable tag and folds the license into a hint key',()=>{
+ // 2026-10-21：许可不再占一行文字（会把标题与作者一起挤成省略号），收成一枚 ? 键，悬停看全文。
  const html=render({uid:'l'.repeat(32),name:'Aerial Asphalt 01',author:'Rob Tuytel',platform:'polyhaven',assetType:'textures',thumbnail:'',license:'CC0 1.0 通用公共领域贡献',downloadable:true});
  assert.equal(html.includes('license-tag'),false,'「● 可下载」标识去掉');
- assert.ok(html.includes('>CC0</span>'),'许可简化成 CC0 缩写');
+ assert.ok(html.includes('license-hint'),'许可变成说明键');
+ assert.equal(/>CC0</.test(html),false,'许可缩写不再直接铺在信息行里');
  assert.ok(html.includes('CC0 1.0 通用公共领域贡献 · 可下载不代表可商用'),'完整许可说明留在 title 里');
- // CC BY 系列保留子条款，不能一律截成 CC BY
+ // 任何许可全称都要能被悬停读到，不能截断
  const by=render({uid:'m'.repeat(32),name:'X',author:'a',thumbnail:'',license:'CC BY-NC-SA 4.0',downloadable:true});
- assert.ok(by.includes('>CC BY-NC-SA</span>'),'CC BY-NC-SA 要保留子条款');
+ assert.ok(by.includes('CC BY-NC-SA 4.0 · 可下载不代表可商用'),'CC BY-NC-SA 全文进 title');
  // 标题固定单行：长名字一律省略号截断，不再撑到两行把卡片拉高（2026-10-16 用户要求）
  assert.equal(/-webkit-line-clamp/.test(css),false,'标题不再允许两行');
  assert.ok(/\.card-title\{[^}]*white-space:nowrap/.test(css),'标题强制单行');
@@ -238,4 +264,37 @@ test('thumbnails that must stay whole get the contain marker, crops stay default
   {uid:'5'.repeat(32),name:'Scene',platform:'artstation',thumbnail:'',license:'CC0',downloadable:true},
   {uid:'6'.repeat(32),name:'Chair',platform:'kenney',thumbnail:'',license:'CC0',downloadable:true},
  ])assert.equal(render(m).includes('thumb-contain'),false,`${m.platform} 不该被标成完整显示`);
+});
+
+// 访客看到的是主机的资产库：主机「已下载」不等于文件到了访客电脑上，所以那个键不能禁用，
+// 打开的文件夹也是主机的，访客不该有点不到的入口。
+test('LAN visitors download to their own computer instead of a disabled 已下载',()=>{
+ const model={uid:'c'.repeat(32),name:'Fox',platform:'sketchfab',assetType:'model'};
+ const job={id:'saved-1',uid:model.uid,state:'saved',fileExists:true};
+ const guest=build(undefined,()=>({jobs:[job]}),true).card(model);
+ assert.match(guest,/<span>下载到本机<\/span>/);
+ assert.doesNotMatch(guest,/<button class="card-download" data-action="download"[^>]*disabled/);
+ assert.doesNotMatch(guest,/data-action="reveal-download"/);
+ assert.match(build(undefined,()=>({jobs:[job]})).card(model),/<span>已下载<\/span>/);
+});
+
+// 入库角标和底部移除键都在改主机的资产库，访客的卡片上不该出现这两个入口。
+test('LAN visitors see no library-membership badge or remove button',()=>{
+ const model={uid:'d'.repeat(32),name:'Fox',platform:'sketchfab',assetType:'model'};
+ const guest=build({favorites:new Set(),models:[model],selected:new Set(),tasks:[]},()=>({jobs:[]}),true).card(model);
+ assert.doesNotMatch(guest,/collect-badge/);
+ assert.doesNotMatch(guest,/data-action="remove"/);
+ assert.match(build({favorites:new Set(),models:[model],selected:new Set(),tasks:[]},()=>({jobs:[]})).card(model),/collect-badge/);
+});
+test('有评分才在卡片显示星级；回收站筛选下移除键换成恢复/彻底删除，访客没有写身份',()=>{
+ const m={uid:'c'.repeat(32),platform:'sketchfab',name:'Rated',license:'CC0'};
+ assert.doesNotMatch(build().card(m),/card-rating/);
+ const rated=build({favorites:new Set(),models:[],selected:new Set(),tasks:[],userMeta:{[m.uid]:{rating:4,note:'x'}}}).card(m);
+ assert.match(rated,/class="card-rating"/);
+ assert.match(rated,/★★★★/);
+ const trashed=build({favorites:new Set(),models:[],selected:new Set(),tasks:[],filter:'trash'}).card(m);
+ assert.match(trashed,/data-action="restore"/);
+ assert.match(trashed,/data-action="purge"/);
+ assert.doesNotMatch(trashed,/data-action="remove"/);
+ assert.doesNotMatch(build({favorites:new Set(),models:[],selected:new Set(),tasks:[],filter:'trash'},()=>({jobs:[]}),true).card(m),/data-action="restore"/);
 });

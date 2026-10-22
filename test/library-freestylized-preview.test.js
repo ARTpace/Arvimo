@@ -18,7 +18,7 @@ test('模型包挑 lod0 的 FBX，贴图按体积从小到大取',()=>{
   'Trowel_01_M101/License.txt',
  ]);
  const picked=pickPreviewEntries(zipIndex(buf),'models');
- assert.equal(picked.kind,'fbx');
+ assert.equal(picked.kind,'model','模型包统一报 model，具体格式由前端按扩展名分派');
  const model=picked.items.find(i=>i.role==='model');
  assert.match(model.entry.name,/lod0\.fbx$/,`lod0 优先，实际挑了 ${model.entry.name}`);
  const textures=picked.items.filter(i=>i.role==='texture').map(i=>i.entry.name);
@@ -31,6 +31,17 @@ test('有 glTF 时不挑 FBX，且 kind 标记为 model',()=>{
  const picked=pickPreviewEntries(zipIndex(buf),'models');
  assert.equal(picked.kind,'model');
  assert.match(picked.items.find(i=>i.role==='model').entry.name,/\.gltf$/);
+});
+
+test('没有 glTF/FBX 时退回 OBJ / STL / PLY / 3MF，不再直接判成「没东西可看」',()=>{
+ for(const name of ['Terrain/terrain.obj','Print/part.stl','Scan/cloud.ply','Print/box.3mf']){
+  const picked=pickPreviewEntries(zipIndex(zipOf([name,'Terrain/albedo.png'])),'models');
+  assert.ok(picked,`${name} 应该能挑出模型`);
+  assert.equal(picked.kind,'model');
+  assert.equal(picked.items.find(i=>i.role==='model').entry.name,name);
+ }
+ // 反证：纯贴图包仍然没有模型可预览
+ assert.equal(pickPreviewEntries(zipIndex(zipOf(['tex/a.png','tex/b.png'])),'models'),null);
 });
 
 test('材质包按文件名认槽位，法线取 OpenGL 约定那张',()=>{

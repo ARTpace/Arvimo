@@ -4,6 +4,7 @@ import {materialOptions,modelSnapshot,DownloadManager} from '../server/downloads
 import {verifyArchive} from '../server/archive.mjs';
 import {verifyFolder} from '../server/folder-archive.mjs';
 import {createLibraryServer} from '../server/library.mjs';
+import {createResponseCache} from '../server/response-cache.mjs';
 import {modelPayload} from '../src/library/download-ui.js';
 import {zipEntries,fixturePng} from './download-fixture.mjs';
 
@@ -21,6 +22,61 @@ const zipBuffer=zipEntries([
  ['Ground054_2K-PNG.blend','blend source'],
  ['Ground054.png',fixturePng(2,2)],
 ]);
+
+test('typed searches bypass material-only responses cached by old servers',async()=>{
+ const dir=await temp();let server;
+ try{
+  const input={type:'hdri,hdri-element'};
+  await createResponseCache(dir).saveJson('ambientcg:'+JSON.stringify(input),{models:[{name:'Old brick material'}]});
+  server=createLibraryServer({cacheDir:dir,ambientcg:async request=>({models:[{name:'Environment',sourceType:'hdri'}],type:request.type})});
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  const response=await fetch(`http://127.0.0.1:${server.address().port}/api/ambientcg/search`,{method:'POST',headers:{'X-SFX-Local':'1','Content-Type':'application/json'},body:JSON.stringify(input)});
+  const data=await response.json();assert.equal(data.models[0].sourceType,'hdri');assert.equal(data.type,input.type);
+ }finally{server?.closeAllConnections();await new Promise(resolve=>server?server.close(resolve):resolve());await fs.rm(dir,{recursive:true,force:true});}
+});
+
+test('environment, substance, model and terrain types survive search, paging and queue payloads',async()=>{
+ for(const [type,assetType] of [['hdri','hdris'],['hdri-element','hdris'],['substance','textures'],['3d-model','models'],['terrain','models']]){
+  const row={...searchRow,type};let requested;
+  const open=async url=>{requested=new URL(url);return {status:200,stream:Readable.from([Buffer.from(JSON.stringify({totalResults:50,assets:[row]}))])};};
+  const result=await ambientcgSearch({type},{open});
+  assert.equal(requested.searchParams.get('type'),type);
+  assert.equal(result.models[0].assetType,assetType);
+  assert.equal(modelSnapshot(modelPayload(result.models[0]),'ambientcg').sourceType,type);
+  assert.equal(JSON.parse(result.next).type,type);
+  await ambientcgSearch({cursor:result.next},{open});assert.equal(requested.searchParams.get('type'),type);
+ }
+});
+
+test('queue forces SBSAR for substances and keeps environment/model categories',async()=>{
+ const dir=await temp();let manager;
+ try{
+  manager=await new DownloadManager({dataDir:path.join(dir,'data'),defaultFolder:path.join(dir,'downloads'),autoStart:false}).init();
+  for(const type of ['hdri','substance','3d-model']){
+   const model=normalizeAmbientcgAsset({...searchRow,id:type,type});
+   const result=await manager.enqueue({authorized:true,kind:'ambientcg',models:[model],options:{resolution:'2K'}});
+   const job=manager.jobs.find(j=>j.id===result.added[0]);assert.equal(job.sourceType,type);
+   if(type==='substance')assert.equal(job.options.textureFormat,'SBSAR');
+   if(type==='hdri')assert.equal(job.storageCategory,'环境');
+   if(type==='3d-model')assert.match(job.storageCategory,/模型/);
+  }
+ }finally{await manager?.close();await fs.rm(dir,{recursive:true,force:true});}
+});
+
+test('official environment/model packages and terrain OBJ remain intact and verify',async()=>{
+ const dir=await temp();
+ try{
+  for(const type of ['hdri','hdri-element','3d-model','terrain']){
+   const extension=type==='terrain'?'obj':'zip',bytes=extension==='obj'?Buffer.from('v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3'):zipEntries([['asset.exr','environment data'],['asset.fbx','original model data']]);
+   const row={...searchRow,type,downloads:[{attributes:'2K',extension,url:'https://ambientcg.com/get?file=asset.'+extension,size:bytes.length}]};
+   const output=path.join(dir,type);
+   await runAmbientcgJob({uid,assetId:row.id,options:{resolution:'2K'},output,workRoot:dir,open:fakeOpen({rows:[row],zip:bytes})});
+   const result=await verifyFolder(output,{uid});assert.equal(result.info.kind,'pack');
+   assert.equal(result.info.sourceType,type);
+   assert.deepEqual(await fs.readFile(path.join(output,row.id+'.'+extension)),bytes);
+  }
+ }finally{await fs.rm(dir,{recursive:true,force:true});}
+});
 /** Fake outbound: the API JSON for /api/v3/assets, the ZIP bytes for the /get download.
  *  Chunks are Buffers — that is the contract openPublic streams honour. */
 function fakeOpen({rows=[{...searchRow,downloads:[downloadRow]}],zip=zipBuffer}={}){
@@ -44,6 +100,7 @@ test('normalizeAmbientcgAsset shapes a card the grid already renders, uid stays 
  assert.equal(normalizeAmbientcgAsset(null),null);
  assert.equal(normalizeAmbientcgAsset({id:''}),null);
  assert.equal(normalizeAmbientcgAsset({id:'X',previews:[]}).viewerUrl,'');
+ assert.equal(normalizeAmbientcgAsset({...searchRow,relations:{parents:['ClaySubstance002']}}).substanceParent,'ClaySubstance002');
 });
 
 test('ambientcgSearch pages via limit/offset and reports an empty library honestly',async()=>{
@@ -53,7 +110,7 @@ test('ambientcgSearch pages via limit/offset and reports an empty library honest
  assert.equal(first.models.length,1);assert.equal(first.total,30);
  assert.match(seen[0],/type=material/);assert.match(seen[0],/q=sand/);assert.match(seen[0],/limit=24/);assert.match(seen[0],/offset=0/);
  const next=JSON.parse(first.next);
- assert.deepEqual(next,{q:'sand',category:'',page:2});
+ assert.deepEqual(next,{q:'sand',category:'',type:'material',page:2});
  await ambientcgSearch({cursor:next},{open:page([searchRow])});
  assert.match(seen[1],/offset=24/);
  const empty=await ambientcgSearch({q:'nothing'},{open:async()=>({stream:Readable.from([Buffer.from(JSON.stringify({totalResults:0,assets:[]}))]),status:200,headers:{}})});
@@ -75,12 +132,17 @@ test('pickAmbientcgDownload honours exact tier, falls back within format then ac
  assert.equal(pickAmbientcgDownload(['2K-JPG'].map(dl),{resolution:'2K',textureFormat:'PNG'}).attributes,'2K-JPG');
  assert.equal(pickAmbientcgDownload([],{}),null);
  assert.equal(pickAmbientcgDownload([{attributes:'weird',url:'https://x'}],{}),null);
+ const sbsar={attributes:'COMPILED',extension:'sbsar',url:'https://ambientcg.com/get?file=ClaySubstance002_COMPILED.sbsar'};
+ assert.equal(pickAmbientcgDownload([dl('2K-JPG'),sbsar],{textureFormat:'SBSAR'}).extension,'sbsar');
+ assert.equal(pickAmbientcgDownload([dl('2K-JPG')],{textureFormat:'SBSAR'}),null);
 });
 
 test('materialOptions validates and defaults; modelSnapshot requires the asset id',()=>{
  assert.deepEqual(materialOptions({}),{output:'folder',resolution:'2K',textureFormat:'JPG'});
  assert.deepEqual(materialOptions({output:'zip',resolution:'8K',textureFormat:'PNG'}),{output:'zip',resolution:'8K',textureFormat:'PNG'});
  assert.equal(materialOptions({resolution:'16K'}).resolution,'2K');
+ assert.equal(materialOptions({textureFormat:'SBSAR'}).textureFormat,'SBSAR');
+ assert.equal(materialOptions({textureFormat:'TIFF'}).textureFormat,'JPG');
  const snapshot=modelSnapshot({uid,assetId:'Ground054',platform:'ambientcg',name:'Ground 054'},'ambientcg');
  assert.equal(snapshot.kind,'ambientcg');assert.equal(snapshot.assetId,'Ground054');
  assert.equal(snapshot.url,'https://ambientcg.com/a/Ground054');
@@ -257,6 +319,27 @@ test('分类表不足 3 条时只当次返回、不落盘（夹具或上游降�
   assert.deepEqual(good.second,{categories:many});
   assert.equal(good.calls,1,'完整分类表必须照旧缓存，否则每次开侧边栏都要回源');
  }finally{server?.closeAllConnections();await new Promise(r=>server?server.close(r):r());}
+});
+
+test('runAmbientcgJob downloads the parent Substance .sbsar when the baked material has none',async()=>{
+ const d=await temp();try{
+  const sbsar=Buffer.from([0x37,0x7a,0xbc,0xaf,0x27,0x1c,1,2,3,4]);
+  const clay={id:'Clay005',title:'Clay 005',maps:['color'],downloads:[{attributes:'2K-JPG',extension:'zip',url:'https://ambientcg.com/get?file=Clay005_2K-JPG.zip'}],relations:{parents:['ClaySubstance002']}};
+  const parent={id:'ClaySubstance002',downloads:[{attributes:'COMPILED',extension:'sbsar',url:'https://ambientcg.com/get?file=ClaySubstance002_COMPILED.sbsar'}]};
+  const open=async url=>{
+   const href=String(url);
+   if(href.includes('/api/v3/assets'))return {stream:Readable.from([Buffer.from(JSON.stringify({assets:[clay,parent]}))]),status:200,headers:{}};
+   if(href.includes('.sbsar'))return {stream:Readable.from([sbsar]),status:200,headers:{'content-length':String(sbsar.length)}};
+   throw Error('unexpected URL: '+href);
+  };
+  const out=path.join(d,'stage.dir');
+  const meta=await runAmbientcgJob({uid,assetId:'Clay005',options:{textureFormat:'SBSAR'},deliver:'folder',output:out,workRoot:d,open});
+  assert.equal(meta.zipName,'ClaySubstance002-sbsar');
+  const result=await verifyFolder(out,{uid});
+  assert.equal(result.info.format,'SBSAR');
+  assert.equal(result.info.substanceFile,'ClaySubstance002.sbsar');
+  assert.equal((await fs.readFile(path.join(out,'ClaySubstance002.sbsar'))).length,sbsar.length);
+ }finally{await fs.rm(d,{recursive:true,force:true});}
 });
 
 test('the queue drives a material job end to end: enqueue, runner, verification, commit',async()=>{

@@ -15,6 +15,11 @@ def _import_asset(filepath):
         bpy.ops.import_scene.gltf(filepath=filepath)
     elif ext == '.fbx':
         bpy.ops.import_scene.fbx(filepath=filepath)
+    elif ext == '.obj':
+        if bpy.app.version >= (4, 0, 0):
+            bpy.ops.wm.obj_import(filepath=filepath)
+        else:
+            bpy.ops.import_scene.obj(filepath=filepath)
     else:
         raise RuntimeError('Unsupported model format: ' + ext)
 

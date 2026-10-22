@@ -7,6 +7,12 @@ import {modelUid,extractModelLinks,normalizeModel,scanPage} from '../server/cata
 import {isPublicIP,validateUrl,readPublic} from '../server/public-http.mjs';
 import {createLibraryServer} from '../server/library.mjs';
 const id='0123456789abcdef0123456789abcdef', other='a'.repeat(32);
+test('outbound URL paths encode ambientCG caret directories without double encoding',()=>{
+ const base='https://acg-download.struffelproductions.com/file/ambientCG-Web/download/Terrain004_qi8fjr6y/';
+ assert.equal(validateUrl(base+'2^Models/Terrain004_2K.obj').href,base+'2%5EModels/Terrain004_2K.obj');
+ const encoded=base+'3%5EAdditional%20Maps/Terrain004_2K-JPG.zip?file=a%2Fb&token=x%2By';
+ assert.equal(validateUrl(encoded).href,encoded);
+});
 const model={uid:id,name:'Model <script>',user:{username:'artist'},isDownloadable:true,faceCount:12,thumbnails:{images:[{width:64,url:'https://media.sketchfab.com/small.jpg'},{width:720,url:'https://media.sketchfab.com/large.jpg'},{width:720,url:'https://evil.example/x.jpg'}]},license:{label:'CC Attribution'},animationCount:1};
 test('model URLs, slugs, embeds, relative links and hostile hostnames',()=>{
  for(const u of [`https://sketchfab.com/models/${id}`,`https://sketchfab.com/3d-models/a-b-${id}`,`https://sketchfab.com/models/${id}/embed?x=1`])assert.equal(modelUid(u),id);

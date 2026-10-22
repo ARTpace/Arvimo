@@ -59,6 +59,7 @@ const SPECS=[
   {key:'category',label:'分类',icon:'list',fold:true,control:'#polyhaven-category'},
  ]},
  {row:'#filters-ambientcg',plate:{emoji:'🪨',label:'ambientCG',tone:'#c3b49a'},fields:[
+  {key:'type',label:'类型',icon:'cube',control:'#ambientcg-type'},
   {key:'category',label:'分类',icon:'list',open:true,fold:true,control:'#ambientcg-category'},
  ]},
  {row:'#filters-freestylized',plate:{emoji:'🎨',label:'FreeStylized',tone:'#d7b4e8'},fields:[

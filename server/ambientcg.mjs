@@ -22,10 +22,16 @@ import {createInflateRaw} from 'node:zlib';
 import {openPublic} from './public-http.mjs';
 import {crc32} from './archive.mjs';
 import {writeEntriesDeliverable} from './deliverable-writer.mjs';
+import {assertSbsar} from './archive.mjs';
 
 const API='https://ambientcg.com';
 const PER_PAGE=24;
-const SEARCH_INCLUDE='type,title,url,tags,maps,previews,thumbnails';
+export const AMBIENTCG_TYPES=['material','hdri','hdri-element','substance','3d-model','terrain'];
+export function ambientcgTypes(value='material'){
+ const types=String(value).split(',').filter(type=>AMBIENTCG_TYPES.includes(type));
+ return [...new Set(types)].join(',')||'material';
+}
+const SEARCH_INCLUDE='type,title,url,tags,maps,previews,thumbnails,relations';
 
 /** Library uid shape is `^[a-f0-9]{32}$` (inherited from Sketchfab), so hash the asset id. */
 export function ambientcgUid(id){
@@ -47,7 +53,7 @@ function thumbnailOf(asset){
  *  Cards carry it so the workbench can embed the same interactive material preview the site has. */
 function viewerUrlOf(asset){
   const previews=Array.isArray(asset?.previews)?asset.previews:[];
-  const hit=previews.find(p=>p&&p.type==='pbr-one-material-shading'&&typeof p.url==='string'&&/^https:\/\//i.test(p.url));
+  const hit=previews.find(p=>p&&['pbr-one-material-shading','pbr-one-panorama-shading','pbr-one-panorama-exposure'].includes(p.type)&&typeof p.url==='string'&&/^https:\/\//i.test(p.url));
   return hit?hit.url:'';
 }
 
@@ -60,6 +66,9 @@ export function normalizeAmbientcgAsset(asset){
     uid:ambientcgUid(slug),
     platform:'ambientcg',
     assetId:slug,
+    sourceType:asset.type||'material',
+    assetType:({'hdri':'hdris','hdri-element':'hdris','3d-model':'models',terrain:'models',substance:'textures'})[asset.type]||'textures',
+    ...(asset.type==='substance'?{materialFormat:'SBSAR'}:{}),
     name:String(asset.title||slug).trim().slice(0,240)||`ambientCG ${slug}`,
     author:'ambientCG',
     thumbnail:thumbnailOf(asset),
@@ -71,6 +80,8 @@ export function normalizeAmbientcgAsset(asset){
     faces:null,vertices:null,likes:0,views:0,animations:0,
     maps:Array.isArray(asset.maps)?asset.maps.map(String).slice(0,12):[],
     viewerUrl:viewerUrlOf(asset),
+    // 烘焙贴图（Clay005）本身没有 .sbsar；官方页上的 Parent Asset 才是 Substance 编译包。
+    substanceParent:Array.isArray(asset.relations?.parents)?String(asset.relations.parents.find(id=>id)||'').slice(0,120):'',
   };
 }
 /** Lazy preview resolution: cards saved into the local library before this version carry no
@@ -115,7 +126,8 @@ export async function ambientcgSearch(input={},{signal,open=openPublic}={}){
   const category=String(rawCategory??'').trim().slice(0,80);
   const current=Math.max(1,Math.min(1000,Number(page)||1));
   const offset=(current-1)*PER_PAGE;
-  const params=new URLSearchParams({type:'material',limit:String(PER_PAGE),offset:String(offset),include:SEARCH_INCLUDE});
+  const type=ambientcgTypes(cursor?.type??input.type);
+  const params=new URLSearchParams({type,limit:String(PER_PAGE),offset:String(offset),include:SEARCH_INCLUDE});
   if(query)params.set('q',query);
   if(category)params.set('category',category);
   const r=await open(`${API}/api/v3/assets?${params}`,{signal,timeout:45000});
@@ -127,9 +139,9 @@ export async function ambientcgSearch(input={},{signal,open=openPublic}={}){
   const hasMore=offset+models.length<total;
   return {
     models,received:models.length,total,page:current,
-    next:hasMore?JSON.stringify({q:query,category,page:current+1}):null,
+    next:hasMore?JSON.stringify({q:query,category,type,page:current+1}):null,
     pending:[],
-    source:'ambientCG · CC0 材质',
+    source:'ambientCG · CC0 资产',
     warnings:total?[]:[`ambientCG 上没有匹配 “${query||category}” 的材质`],
     query:query,
   };
@@ -139,14 +151,14 @@ export async function ambientcgSearch(input={},{signal,open=openPublic}={}){
  * (HDRI rows come back regardless), so the material cut happens client-side; rows are already
  * sorted by asset count descending upstream, which is exactly the order a picker wants.
  */
-export async function ambientcgCategories({signal,open=openPublic}={}){
+export async function ambientcgCategories({signal,open=openPublic,type='material'}={}){
   signal?.throwIfAborted();
   const r=await open(`${API}/api/v3/categories`,{signal,timeout:45000});
   if(r.status<200||r.status>=300){try{r.stream.destroy();}catch{}throw Error(`ambientCG 分类返回 HTTP ${r.status}`);}
   const payload=JSON.parse(await readStreamText(r));
   const rows=Array.isArray(payload)?payload:Array.isArray(payload?.categories)?payload.categories:[];
   return rows
-    .filter(row=>row&&String(row.type)==='material'&&row.id)
+    .filter(row=>row&&ambientcgTypes(type).split(',').includes(String(row.type))&&row.id)
     .map(row=>({value:String(row.id).slice(0,80),label:String(row.title||row.id).slice(0,80),count:Number(row.numberOfAssets)||0}));
 }
 async function readAt(handle,buffer,position){
@@ -243,7 +255,14 @@ export async function ambientcgRenders(id,{signal,open=openPublic}={}){
 }
 const RES_K={'1K':1,'2K':2,'4K':4,'8K':8};
 /** Pick one ZIP tier: exact `<res>-<fmt>` first, else the same format nearest to the request. */
+function isSbsarDownload(d){
+  return !!(d&&typeof d.url==='string'&&(/sbsar/i.test(String(d.extension||''))||/sbsar/i.test(String(d.attributes||''))));
+}
 export function pickAmbientcgDownload(downloads,{resolution='2K',textureFormat='JPG'}={}){
+  if(String(textureFormat).toUpperCase()==='SBSAR'){
+    const list=(Array.isArray(downloads)?downloads:[]).filter(isSbsarDownload);
+    return list.find(d=>String(d.attributes).toUpperCase()==='COMPILED')||list[0]||null;
+  }
   const list=(Array.isArray(downloads)?downloads:[]).filter(d=>d&&typeof d.url==='string'&&(!d.extension||/^zip$/i.test(String(d.extension))));
   const wantedRes=RES_K[resolution]||2,wantedFmt=String(textureFormat).toUpperCase()==='PNG'?'PNG':'JPG';
   const parse=a=>{const m=String(a||'').match(/^(\d+)K-([A-Za-z]+)$/i);return m?{res:Number(m[1]),fmt:m[2].toUpperCase()}:null;};
@@ -297,20 +316,78 @@ export async function runAmbientcgJob({uid,options,output,deliver='folder',workR
   const opts=options||{};
   await fs.mkdir(deliver==='folder'?output:path.dirname(output),{recursive:true});
   progress({stage:'starting',message:`正在获取 ambientCG 材质信息（${assetId}）…`});
-  const params=new URLSearchParams({id:assetId,include:'title,url,maps,downloads'});
+  const params=new URLSearchParams({id:assetId,include:'type,title,url,maps,downloads,relations,thumbnails'});
   const r=await open(`${API}/api/v3/assets?${params}`,{signal,timeout:45000});
   if(r.status<200||r.status>=300){try{r.stream.destroy();}catch{}throw Error(`ambientCG 资产信息返回 HTTP ${r.status}`);}
   const payload=JSON.parse(await readStreamText(r));
   const asset=(Array.isArray(payload?.assets)?payload.assets:[]).find(a=>a&&a.id===assetId);
   if(!asset)throw Error(`ambientCG 上找不到材质 ${assetId}`);
-  const chosen=pickAmbientcgDownload(asset.downloads,{resolution:opts.resolution,textureFormat:opts.textureFormat});
-  if(!chosen)throw Error('ambientCG 没有提供可下载的材质包');
+  const wantSbsar=asset.type==='substance'||String(opts.textureFormat||'').toUpperCase()==='SBSAR';
+  const bundle=['hdri','hdri-element','3d-model','terrain'].includes(asset.type);
+  let chosen=pickAmbientcgDownload(asset.downloads,{resolution:opts.resolution,textureFormat:wantSbsar?'SBSAR':opts.textureFormat});
+  if(bundle){
+    const ext=asset.type==='terrain'?'obj':'zip';
+    const candidates=(asset.downloads||[]).filter(d=>String(d.extension).toLowerCase()===ext);
+    // ponytail: preserve official source packages; never strip model or environment payloads as PBR maps.
+    chosen=candidates.filter(d=>String(d.attributes).split('-').includes(opts.resolution||'2K')).sort((a,b)=>(Number(a.size)||0)-(Number(b.size)||0))[0];
+    if(!chosen)throw Error(`ambientCG 未提供 ${opts.resolution||'2K'} ${ext.toUpperCase()}，请选择其他精度`);
+    if(Number(chosen.size)>512*1024*1024)throw Error('这个规格超过 512MB，请选择较低精度后下载');
+  }
+  let substanceAssetId=assetId;
+  if(wantSbsar&&!chosen){
+    const parents=Array.isArray(asset.relations?.parents)?asset.relations.parents:[];
+    for(const parent of parents){
+      signal?.throwIfAborted();
+      const parentId=String(parent||'').trim();
+      if(!parentId)continue;
+      progress({stage:'starting',message:`正在查找父级 Substance（${parentId}）…`});
+      const parentParams=new URLSearchParams({id:parentId,include:'downloads'});
+      const pr=await open(`${API}/api/v3/assets?${parentParams}`,{signal,timeout:45000});
+      if(pr.status<200||pr.status>=300){try{pr.stream.destroy();}catch{}throw Error(`ambientCG 父级资产返回 HTTP ${pr.status}`);}
+      const parentPayload=JSON.parse(await readStreamText(pr));
+      const parentAsset=(Array.isArray(parentPayload?.assets)?parentPayload.assets:[]).find(a=>a&&a.id===parentId);
+      chosen=parentAsset?pickAmbientcgDownload(parentAsset.downloads,{textureFormat:'SBSAR'}):null;
+      if(chosen){substanceAssetId=parentId;break;}
+    }
+  }
+  if(!chosen)throw Error(wantSbsar?'这个材质没有可下载的 Substance 文件（.sbsar）':'ambientCG 没有提供可下载的材质包');
   await fs.mkdir(workRoot||path.dirname(output),{recursive:true});
   const work=await fs.mkdtemp(path.join(workRoot||path.dirname(output),'acg-material-'));
   try{
-    const zipPath=path.join(work,'source.zip');
+    const zipPath=path.join(work,wantSbsar?'source.sbsar':'source.zip');
     await downloadFile(chosen.url,zipPath,{open,signal,progress});
     signal?.throwIfAborted();
+    if(bundle){
+      const fileName=`${assetId.replace(/[^\w.-]/g,'_')}.${chosen.extension}`;
+      const data=await fs.readFile(zipPath);
+      if(!data.length)throw Error('ambientCG 下载文件为空');
+      if(chosen.extension==='zip')await readZipDirectory(zipPath,{signal});
+      const meta={uid,kind:'pack',platform:'ambientcg',assetId,sourceType:asset.type,assetType:['hdri','hdri-element'].includes(asset.type)?'hdris':'models',title:asset.title||assetId,thumbnail:thumbnailOf(asset),url:`https://ambientcg.com/a/${assetId}`,resolution:opts.resolution||'2K',format:chosen.extension,files:[{file:fileName,bytes:data.length,url:chosen.url}],license:'CC0 1.0',exportedAt:new Date().toISOString()};
+      const written=await writeEntriesDeliverable({entries:[{name:fileName,data},{name:'info.json',data:Buffer.from(JSON.stringify(meta,null,2))}],output,deliver,signal,progress,message:'官方资产文件已就绪'});
+      return {...written,zipName:assetId,title:meta.title,author:'ambientCG',thumbnail:meta.thumbnail};
+    }
+    if(wantSbsar){
+      const data=await fs.readFile(zipPath);
+      assertSbsar(data.subarray(0,16),chosen.url);
+      const stem=String(substanceAssetId).replace(/[^\w.-]/g,'_').slice(0,80)||'ambientcg';
+      const fileName=`${stem}.sbsar`;
+      const meta={
+        uid,kind:'material',platform:'ambientcg',assetId,sourceType:'substance',assetType:'textures',thumbnail:thumbnailOf(asset),
+        title:String(asset.title||assetId).slice(0,240),
+        url:`https://ambientcg.com/a/${assetId}`,
+        source_url:chosen.url,
+        license:'CC0 1.0 通用公共领域贡献',
+        resolution:String(opts.resolution||'2K'),format:'SBSAR',
+        substanceFile:fileName,substanceAssetId,
+        maps:Array.isArray(asset.maps)?asset.maps.map(String):[],
+        textures:[],
+        note:'ambientCG Substance 编译包（.sbsar），CC0 1.0。用 Substance 3D Designer / Painter 打开；烘焙贴图请另选 JPG 或 PNG。',
+        exportedAt:new Date().toISOString(),tool:'AssetVault · ambientCG (CC0)',
+      };
+      progress({stage:'converting',message:deliver==='folder'?'正在写出 Substance 文件…':'正在打包 Substance ZIP…'});
+      const written=await writeEntriesDeliverable({entries:[{name:fileName,data},{name:'info.json',data:Buffer.from(JSON.stringify(meta,null,2),'utf8')}],output,deliver,signal,progress,message:'Substance 文件已就绪'});
+      return {...written,zipName:`${stem}-sbsar`,title:meta.title,author:'ambientCG',thumbnail:null};
+    }
     const entries=await readZipDirectory(zipPath,{signal});
     const kept=[],skipped=[],used=new Set();
     for(const [index,entry] of entries.entries()){

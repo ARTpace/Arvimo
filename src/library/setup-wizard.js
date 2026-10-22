@@ -9,14 +9,11 @@
  * 「以后再说」延后七天；只有真正缺失的依赖才会触发自动提醒。
  */
 import {openExternal} from './open-url.js';
+import {MARK,progressMarkup} from './install-panel.js';
 
 const ROUTE='/api/setup';
 const POLL_MS=300;
 const INSTALL_TIMEOUT_MS=30*60*1000;
-const MARK={
-  check:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7"/></svg>',
-  cross:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7l10 10M17 7 7 17"/></svg>',
-};
 const BADGE={ready:'已就绪',degraded:'可凑合',missing:'待安装',blocked:'待安装'};
 const TONE={ready:'ok',degraded:'warn',missing:'warn',blocked:'warn'};
 
@@ -38,39 +35,63 @@ async function pollJob(route,jobId){
  return data||{};
 }
 
-export function createSetupWizard({$,esc,icon,toast}){
+export function createSetupWizard({$,esc,icon,toast,downloads}){
  const dialog=$('#setup-dialog'),list=$('#setup-list'),note=$('#setup-note'),
        finishButton=$('#setup-finish'),skipButton=$('#setup-skip'),
        pathInput=$('#setup-blender-path'),pathSave=$('#setup-save-blender'),
        pathHint=$('#setup-blender-hint'),recheckButton=$('#setup-recheck');
  let report=null,busyId=null,token=0;
- const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
-
- function stepMark(state){
-  if(state==='done')return `<i class="bridge-step-ok">${MARK.check}</i>`;
-  if(state==='error')return `<i class="bridge-step-bad">${MARK.cross}</i>`;
-  if(state==='active')return '<i class="spinner"></i>';
-  return '<i class="bridge-step-idle"></i>';
+ const folderInput=$('#setup-download-folder'),folderBrowse=$('#setup-browse-folder'),
+       folderSave=$('#setup-save-folder'),folderHint=$('#setup-folder-hint');
+ let folderLoaded=false,folderBusy=false;
+ async function loadFolder(){
+  try{
+   if(folderBusy)return;
+   const deadline=Date.now()+3000;
+   while(downloads.pending&&!downloads.settings&&Date.now()<deadline)await new Promise(resolve=>setTimeout(resolve,50));
+   if(!downloads.settings)await downloads.refresh();
+   if(!downloads.settings?.folder)throw Error('下载服务尚未就绪，请重新检测');
+   // Rechecking dependencies must not overwrite a path the user is editing.
+   if(!folderBusy&&(!folderLoaded||folderInput.value===folderInput.dataset.saved)){
+    folderInput.value=downloads.settings.folder;folderInput.dataset.saved=folderInput.value;
+   }
+   folderLoaded=true;folderInput.disabled=false;folderBrowse.disabled=false;folderSave.disabled=false;
+   folderHint.textContent='新下载按类型归入子文件夹；已有文件和已创建的任务不会自动迁移。';
+  }catch(e){folderHint.textContent='读取保存位置失败：'+String(e.message||e);}
  }
+ async function saveFolder(){
+  if(folderBusy)return false;
+  if(!folderLoaded){folderHint.textContent='请等待下载服务就绪后重新检测。';return false;}
+  if(folderInput.value.trim()===folderInput.dataset.saved)return true;
+  folderBusy=true;folderInput.disabled=folderBrowse.disabled=folderSave.disabled=true;
+  try{
+   const folder=folderInput.value.trim();
+   if(!folder)throw Error('请选择资产保存文件夹');
+   await downloads.saveSettings({folder});
+   folderInput.value=downloads.settings.folder;folderInput.dataset.saved=folderInput.value;
+   folderHint.textContent='已保存，新下载将使用此位置并按类型分类。';return true;
+  }catch(e){folderHint.textContent='保存失败：'+String(e.message||e);return false;}
+  finally{folderBusy=false;folderInput.disabled=folderBrowse.disabled=folderSave.disabled=false;}
+ }
+ const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 
  function renderProgress(item,job){
   const box=list?.querySelector(`[data-progress="${item.id}"]`);
   if(!box)return;
-  const steps=job.steps||[];
-  const percent=Math.max(2,Math.min(100,Math.round(job.percent||0)));
-  const active=steps.find(s=>s.state==='active');
   const done=job.state==='ok'||job.state==='partial';
   box.hidden=false;
   box.dataset.state=job.state;
-  box.innerHTML=`<div class="bridge-progress-head"><span>${done?'安装完成':job.state==='running'?'正在安装':'安装失败'}</span><b>${percent}%</b></div>`
-   +`<div class="bridge-progress-track"><span class="bridge-progress-fill" style="width:${percent}%"></span></div>`
-   +(job.state==='running'&&active?`<p class="bridge-progress-now"><i class="spinner"></i>${esc(active.detail||active.label)}…</p>`:'')
-   +(job.state==='running'?'':`<div class="bridge-result ${job.state==='ok'?'ok':job.state==='partial'?'partial':'failed'}">`
-     +`<span class="bridge-result-mark">${done?MARK.check:MARK.cross}</span><div>`
-     +`<strong>${done?'装好了':'没装成'}</strong>`
-     +`<small>${esc(job.message||'')}</small>`
-     +(done?'':`<small class="reason">原因：${esc(job.error||job.message||'后端没有给出原因')}</small>`)
-     +`</div></div>`);
+  box.innerHTML=progressMarkup({
+   job,esc,
+   headTitle:done?'安装完成':job.state==='running'?'正在安装':'安装失败',
+   nowLabel:active=>active.detail||active.label,
+   resultHtml:`<div class="bridge-result ${job.state==='ok'?'ok':job.state==='partial'?'partial':'failed'}">`
+    +`<span class="bridge-result-mark">${done?MARK.check:MARK.cross}</span><div>`
+    +`<strong>${done?'装好了':'没装成'}</strong>`
+    +`<small>${esc(job.message||'')}</small>`
+    +(done?'':`<small class="reason">原因：${esc(job.error||job.message||'后端没有给出原因')}</small>`)
+    +`</div></div>`,
+  });
  }
 
  function clearProgress(item){
@@ -88,17 +109,23 @@ export function createSetupWizard({$,esc,icon,toast}){
  function render(){
   if(!list||!report)return;
   const items=report.items||[];
-  list.innerHTML=items.map(item=>`<li class="setup-item" data-id="${item.id}">`
+  const renderItem=(item,grouped=false)=>`<${grouped?'div':'li'} class="${grouped?'setup-blender-part':'setup-item'}" data-id="${item.id}">`
    +`<div class="bridge-status" data-tone="${TONE[item.state]||'idle'}"><span class="bridge-dot ${TONE[item.state]||'idle'}"></span>`
-   +`<div class="bridge-copy"><strong>${esc(item.title)}</strong><small>${esc(item.why)}</small></div>`
+   +`<div class="bridge-copy"><strong>${esc(grouped?(item.id==='blender'?'程序路径':'场景桥接'):item.title)}</strong>${grouped?'':`<small>${esc(item.why)}</small>`}</div>`
    +`<span class="setup-badge ${TONE[item.state]||''}">${esc(BADGE[item.state]||'待检查')}</span></div>`
    +`<p class="setup-detail">${esc(item.detail||'')}</p>`
-   +(item.id==='blender'?`<div class="setup-path"><input id="setup-blender-path" type="text" spellcheck="false" placeholder="或者直接粘贴 blender.exe 的完整路径" value="${esc(report.blenderOverride||'')}"><button class="secondary" id="setup-save-blender" type="button">${icon('check')}保存</button></div><p class="setup-hint" id="setup-blender-hint" role="status"></p>`:'')
-   +`<div class="setup-item-actions">${actionButton(item)}</div>`
+   +(item.id==='blender'?`<div class="setup-path"><input id="setup-blender-path" aria-label="Blender 程序路径" type="text" spellcheck="false" placeholder="自动检测，或输入 blender.exe 完整路径" value="${esc(report.blenderOverride||'')}"><button class="secondary" id="setup-save-blender" type="button">${icon('check')}保存</button></div><p class="setup-hint" id="setup-blender-hint" role="status"></p>`:'')
+   +(actionButton(item)?`<div class="setup-item-actions">${actionButton(item)}</div>`:'')
    +`<div class="bridge-progress" data-progress="${item.id}" hidden></div>`
-   +`</li>`).join('');
+   +`</${grouped?'div':'li'}>`;
+  const blender=items.find(item=>item.id==='blender'),bridge=items.find(item=>item.id==='bridge');
+  list.innerHTML=items.filter(item=>item.id!=='bridge'||!blender).map(item=>{
+   if(item.id!=='blender')return renderItem(item);
+   return `<li class="setup-item setup-blender"><strong class="setup-blender-title">Blender</strong><p class="setup-detail">用于模型导出与一键发送到 Blender 场景。</p>`
+    +renderItem(blender,true)+(bridge?renderItem(bridge,true):'')+'</li>';
+  }).join('');
   if(note)note.textContent=report.ready
-   ?'三样都齐了，可以直接开始用。'
+   ?'依赖已就绪，可以直接开始用。'
    :`还有 ${report.pending} 项没就位 —— 现在补上最省事，也可以稍后在「导出设置 → 依赖准备」里再装。`;
   if(finishButton)finishButton.innerHTML=report.ready?`${icon('check')}进入工作台`:`${icon('arrow-right')}先这样，进入工作台`;
   // 列表是重画的，输入框节点换了人，引用要跟着换，否则保存读到的是旧节点。
@@ -121,6 +148,7 @@ export function createSetupWizard({$,esc,icon,toast}){
  }
 
  async function refresh(){
+  await loadFolder();
   try{report=await request();render();return report;}
   catch(e){if(note)note.textContent='读不到依赖状态：'+String(e.message||e);return null;}
  }
@@ -165,15 +193,28 @@ export function createSetupWizard({$,esc,icon,toast}){
  }
 
  async function finish(){
-  try{await request('',{action:'finish'});}catch(e){toast(String(e.message||e));}
-  dialog?.close();
+  finishButton.disabled=true;
+  try{if(await saveFolder()){await request('',{action:'finish'});dialog?.close();}}
+  catch(e){toast(String(e.message||e));}
+  finally{finishButton.disabled=false;}
  }
 
  function setup(){
   if(!dialog)return;
+  folderSave.onclick=async()=>{if(await saveFolder())toast('资产保存位置已保存');};
+  folderBrowse.onclick=async()=>{
+   if(folderBusy)return;
+   const label=folderBrowse.innerHTML;
+   folderBusy=true;folderInput.disabled=folderBrowse.disabled=folderSave.disabled=true;
+   folderBrowse.innerHTML=`${icon('folder')}正在选择…`;
+   folderHint.textContent='请在文件夹面板中选择保存位置，取消将保留原路径。';
+   try{const folder=await downloads.pickFolder(folderInput.value.trim());if(folder)folderInput.value=folder;}
+   catch(e){folderHint.textContent='选择失败：'+String(e.message||e);}
+   finally{folderBusy=false;folderBrowse.innerHTML=label;folderInput.disabled=folderBrowse.disabled=folderSave.disabled=false;}
+  };
   if(skipButton)skipButton.onclick=async()=>{
    skipButton.disabled=true;
-   try{await request('',{action:'dismiss'});dialog.close();}
+   try{if(await saveFolder()){await request('',{action:'dismiss'});dialog.close();}}
    catch(e){toast('暂缓提醒保存失败：'+String(e.message||e));}
    finally{skipButton.disabled=false;}
   };

@@ -49,6 +49,12 @@
 - `local-filters.js` — 本地库类型、任意规格文件可用性和关键词组合筛选；无保存记录不等于磁盘上没有文件。仅读取后台任务，不删除或迁移数据。
 - `library-state.js` — state schema、`mergeModels` / `collectModels`、v1→v2 迁移、UI 默认值（`sfx-library-v2` / `sfx-library-ui`）。
 
+## 本地文件预览
+- `local-files.js` — `createLocalFiles`：扫描资产库里没登记成下载任务的文件，补进资产库网格并按扩展名分派预览。3D / 全景复用 `gltf-preview.js`，图片 / 字体 / 音频 / 视频走 `#file-preview-dialog`。**格式表只留一处**：模型与环境图的唯一分派点是 `gltf-preview.js` 的 `parseModelBuffer` / `loadEnvironmentTexture`，资源包预览和本地预览都调它们，各写一份必然走偏。
+- `tiff-decode.js` — `decodeTiff`：TIFF 解码（未压缩 / LZW / PackBits / Deflate，8 位与 16 位，灰阶 / RGB / 调色板 / CMYK，chunky 与 planar，水平差分预测，多页取首页）。输出 RGBA 字节、不碰 canvas，所以能在 Node 里被测试直接覆盖。LZW 的位宽必须**提前一个码**切换（解码器的字典比编码器少一条），照标准写法差一个码就会从第 512 个条目开始整段错位。
+- `psd-decode.js` — `decodePsd`：PSD 合并图像（RAW / RLE，8 位与 16 位，RGB / 灰度 / 索引色 / CMYK，带 alpha，兼容 PSB 的 8 字节偏移）。只读拼合结果，不解图层。
+- `gltf-preview.js` — 3D 舞台与全景渲染器：模型按扩展名分派到 GLTF / FBX / OBJ / STL / PLY / 3MF loader，环境图走 RGBE / EXR；对本地文件的入口是 `loadLocalModel` / `loadLocalEnvironment`。
+
 ## 视图辅助
 - `gallery-view.js` — 画廊（封面瀑布流、比例自适应）。
 - `html-esc.js` — `esc()` HTML 转义。

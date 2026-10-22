@@ -27,7 +27,7 @@ test('folder output saves a directory instead of a ZIP',async()=>{
  try{
   m=await manager(d);
   m.start('http://127.0.0.1:1');
-  m.enqueue({authorized:true,models:[model],options:{output:'folder'}});
+  await m.enqueue({authorized:true,models:[model],options:{output:'folder'}});
   await wait(()=>m.jobs[0].state==='saved');
   const job=m.jobs[0];
   assert.equal(job.options.output,'folder');
@@ -46,7 +46,7 @@ test('ZIP output keeps delivering a verified archive',async()=>{
  try{
   m=await manager(d);
   m.start('http://127.0.0.1:1');
-  m.enqueue({authorized:true,models:[model],options:{output:'zip',format:'glb'}});
+  await m.enqueue({authorized:true,models:[model],options:{output:'zip',format:'glb'}});
   await wait(()=>m.jobs[0].state==='saved');
   const job=m.jobs[0];
   assert.equal(job.options.output,'zip');
@@ -68,7 +68,7 @@ test('fbx format converts the staged GLB and lands beside it in the folder',asyn
  try{
   m=await manager(d,{fbxConverter});
   m.start('http://127.0.0.1:1');
-  m.enqueue({authorized:true,models:[model],options:{output:'folder',format:'fbx'}});
+  await m.enqueue({authorized:true,models:[model],options:{output:'folder',format:'fbx'}});
   await wait(()=>m.jobs[0].state==='saved');
   const job=m.jobs[0];
   // The converter must be handed the loose GLB the runner just wrote, not the staging folder.
@@ -88,7 +88,7 @@ test('fbx with ZIP output packs the converted tree, so the FBX is inside the arc
  try{
   m=await manager(d,{fbxConverter});
   m.start('http://127.0.0.1:1');
-  m.enqueue({authorized:true,models:[model],options:{output:'zip',format:'fbx'}});
+  await m.enqueue({authorized:true,models:[model],options:{output:'zip',format:'fbx'}});
   await wait(()=>m.jobs[0].state==='saved');
   const job=m.jobs[0];
   // A ZIP was asked for, so the loose staging tree must not survive as the deliverable.
@@ -159,7 +159,7 @@ test('folder helpers locate the GLB and re-pack the tree as a verified archive',
  }finally{await fs.rm(d,{recursive:true,force:true});}
 });
 
-test('the file endpoint refuses to stream a folder and the snapshot reports Blender status',async()=>{
+test('the file endpoint packages a folder and the snapshot reports Blender status',async()=>{
  const d=await temp();let m,server;
  try{
   m=await manager(d);
@@ -169,10 +169,14 @@ test('the file endpoint refuses to stream a folder and the snapshot reports Blen
   m.start(base);
   const snapshot=await (await fetch(base+'/api/downloads',{headers:{'X-SFX-Local':'1'}})).json();
   assert.equal(snapshot.fbxAvailable,false);
-  m.enqueue({authorized:true,models:[model],options:{output:'folder'}});
+  await m.enqueue({authorized:true,models:[model],options:{output:'folder'}});
   await wait(()=>m.jobs[0].state==='saved');
   const response=await fetch(`${base}/api/downloads/tasks/${m.jobs[0].id}/file`);
-  assert.equal(response.status,400);
-  assert.match((await response.json()).error,/导出文件夹/);
+  assert.equal(response.status,200);
+  assert.match(response.headers.get('content-disposition'),/attachment/);
+  const bytes=Buffer.from(await response.arrayBuffer());
+  const archive=path.join(d,'retrieved.zip');await fs.writeFile(archive,bytes);
+  const checked=await verifyArchive(archive,{uid:model.uid});
+  assert.ok(checked.entries>0);
  }finally{await m?.close();server?.closeAllConnections();await new Promise(r=>server?server.close(r):r());await fs.rm(d,{recursive:true,force:true});}
 });

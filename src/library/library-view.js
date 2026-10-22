@@ -10,7 +10,7 @@ import {findLocalJob} from './blender-send.js';
 import {openExternal} from './open-url.js';
 
 export function createLibraryView(ctx){
- const {$,icon,esc,fmt,state,queuePulse,cardView,composite,filtered,activeModes,galleryActive,categories,describeArt,artstationUI,downloadsUI,filterTreesUI,mergedFiltersUI,findModel,blenderSendButton,imageDownload,gltfPreview}=ctx;
+ const {$,icon,esc,fmt,state,queuePulse,cardView,composite,filtered,activeModes,galleryActive,categories,describeArt,artstationUI,downloadsUI,filterTreesUI,mergedFiltersUI,findModel,blenderSendButton,imageDownload,gltfPreview,extraCards=()=>[]}=ctx;
 // 缩略图确认加载失败的在线条目（Sketchfab 图床 404，基本等于模型已下架）：记住 uid，
 // 翻页、换视图、收藏重渲染都不会再把空卡片画回来。会话级即可，下次搜索换一批结果。
 const brokenCovers=new Set();
@@ -45,10 +45,16 @@ function renderStatus(){
 let cardHtml=new Map(),gridSignature='';
 function paintGrid(models,gallery,online,busy){
  const grid=$('#grid');
- const signature=models.map(m=>m.uid).join('|')+(gallery?'#g':'')+(state.compact?'#c':'');
+ // 资产库目录里那些没登记成下载任务的文件（用户自己拷进来的素材）作为额外卡片接在后面。
+ // 它们不是 `state.models` 的成员——那份数据有 32 位 hex uid 的持久化校验，混不进去；
+ // 所以只在绘制层拼接，key 参与签名，扫描结果一变就整块重建。
+ const extras=online?[]:(extraCards()||[]);
+ const signature=models.map(m=>m.uid).join('|')+(gallery?'#g':'')+(state.compact?'#c':'')+(extras.length?`|${extras.map(extra=>extra.key).join(',')}`:'');
  const htmls=models.map(m=>cardView.card(m,{gallery}));
  if(gridSignature===signature&&cardHtml.size&&grid.firstElementChild){
-  const existing=new Map();grid.querySelectorAll('.model-card').forEach(c=>existing.set(c.dataset.uid,c));
+  // 只认带 uid 的卡片：本地素材包现在也复用 .model-card 结构，但它用 data-package 当主键，
+  // 混进来会被记成 undefined 并互相覆盖，导致旧包卡残留在网格里。
+  const existing=new Map();grid.querySelectorAll('.model-card[data-uid]').forEach(c=>existing.set(c.dataset.uid,c));
   const keep=new Set(models.map(m=>m.uid));
   models.forEach((m,i)=>{
    const uid=m.uid,html=htmls[i];
@@ -58,8 +64,10 @@ function paintGrid(models,gallery,online,busy){
    cardHtml.set(uid,html);
   });
   for(const [uid,el] of existing)if(!keep.has(uid)){el.remove();cardHtml.delete(uid);}
+  grid.querySelectorAll('.local-file-card,[data-package]').forEach(node=>node.remove());
+  if(extras.length)grid.insertAdjacentHTML('beforeend',extras.map(extra=>extra.html).join(''));
  }else{
-  grid.innerHTML=htmls.join('')||(busy?'<div class="skeleton"></div>'.repeat(4):'');
+  grid.innerHTML=(htmls.join('')+extras.map(extra=>extra.html).join(''))||(busy?'<div class="skeleton"></div>'.repeat(4):'');
   cardHtml=new Map(models.map((m,i)=>[m.uid,htmls[i]]));
  }
  gridSignature=signature;
@@ -82,7 +90,7 @@ function renderGrid(){
  heading.hidden=!online;
  $('#local-facets').hidden=online;
  if(!online){
-  const total=state.route==='favorites'?state.models.filter(model=>state.favorites.has(model.uid)).length:state.models.length;
+  const total=state.filter==='trash'?(state.trashed||[]).length:state.route==='favorites'?state.models.filter(model=>state.favorites.has(model.uid)).length:state.models.length;
   $('#local-results').textContent=models.length===total?`${total} 项资产`:`${models.length} / ${total} 项`;
   $('#local-results').title=downloadsUI()?.connected?'当前匹配数量 / 资产总数':'下载服务未连接，文件状态暂不可用';
   $('#local-status').disabled=!downloadsUI()?.connected;
@@ -93,8 +101,8 @@ function renderGrid(){
  $('#unified-kind-wrap').hidden=!online||state.platform!=='all';
  $('#unified-sort-wrap').hidden=!online||state.platform!=='all';
  if(!online){
-  $('#library-title').firstChild.textContent=state.route==='favorites'?'我的收藏 ':'我的资产库 ';
-  $('#library-subtitle').textContent='入库保存资源记录，下载后可使用本地文件';
+  $('#library-title').firstChild.textContent=state.filter==='trash'?'回收站 ':state.route==='favorites'?'我的收藏 ':'我的资产库 ';
+  $('#library-subtitle').textContent=state.filter==='trash'?'移除的资产先在这里暂存，可恢复或彻底删除':'入库保存资源记录，下载后可使用本地文件';
  }
  // 三种展示互斥，按钮状态只由这里的状态推导，不在点击处理里各写一遍。
  $('#grid').classList.toggle('compact',state.compact&&!gallery);$('#grid').classList.toggle('gallery',gallery);$('#grid').classList.toggle('loading',online&&f.busy);$('#grid').setAttribute('aria-busy',online&&f.busy?'true':'false');
@@ -108,9 +116,14 @@ function renderGrid(){
  $('#empty-explore').hidden=online&&f.busy;
  if(!online){
   const narrowed=state.search.trim()||state.filter!=='all'||$('#local-kind').value||$('#local-status').value;
+  if(state.filter==='trash'){
+   $('#empty h3').textContent='回收站是空的';
+   $('#empty p').textContent='在模型库里点移除键，资产会先放到这里，随时可以恢复。';
+  }else{
   $('#empty h3').textContent=narrowed?'没有匹配的资产':state.route==='favorites'?'还没有收藏':'为下一个项目，收集第一项资产';
   $('#empty p').textContent=narrowed?'试试其他关键词或类型，或点击“清除筛选”恢复全部资产。':'前往“发现资产”，将需要的资源加入资产库。入库记录与本地下载文件分别管理。';
-  $('#empty-explore').hidden=!!narrowed;
+  }
+  $('#empty-explore').hidden=!!narrowed||state.filter==='trash';
  }
  document.querySelectorAll('.thumbnail').forEach(img=>img.addEventListener('error',()=>{
   // 在线搜索里缩略图 404 基本等于模型已下架（点开原页面也是空的）：整张卡片移出网格，
@@ -213,8 +226,9 @@ function preview(uid){
  /** 预览面板的精度选择：与卡片共用同一份 select，并把已下载档位打勾（判据同卡片：
  *  saved + 文件还在；没记精度的老任务算默认 2K）。 */
  function detailResolutionPicker(m){
-  const res=new Set((downloadsUI()?.jobs||[]).filter(t=>t.uid===m.uid&&t.state==='saved'&&t.fileExists!==false&&t.id).map(t=>t.options?.resolution||'2K'));
-  return cardView.materialResolutionSelect(m,res);
+  const fmt=m.materialFormat==='PNG'||m.materialFormat==='SBSAR'?m.materialFormat:'JPG';
+  const res=new Set((downloadsUI()?.jobs||[]).filter(t=>t.uid===m.uid&&t.state==='saved'&&t.fileExists!==false&&t.id&&(t.options?.textureFormat||'JPG')===fmt).map(t=>t.options?.resolution||'2K'));
+  return (cardView.materialFormatSelect?cardView.materialFormatSelect(m):'')+cardView.materialResolutionSelect(m,res);
  }
  /** Poly Haven 的侧栏：与 Sketchfab 卡片同一套收藏/导出按钮，右侧留给资产自己的信息。
   *  左侧是本地 three.js 渲染（见 gltf-preview.js），不是 iframe，所以这里不碰 #viewer。
@@ -242,7 +256,53 @@ function preview(uid){
  /** ambientCG 材质的交互预览：iframe 里是官方 PBR 查看器（拖动转视角、贴图实时着色），
   *  侧栏是材质自己的信息——贴图通道、CC0 授权、与模型卡片同一套收藏/导出按钮。
   *  查看器地址是懒加载的：搜索结果自带，旧收藏卡片开预览时按 assetId 现取一次并缓存回卡片。 */
+ function localSbsar(m){
+  const jobs=downloadsUI()?.jobs||[];
+  const job=jobs.findLast(t=>t.uid===m.uid&&t.state==='saved'&&t.fileExists!==false&&t.options?.textureFormat==='SBSAR'&&t.filePath);
+  return job?.filePath||'';
+ }
+ function substanceImageUrl(name){
+  return `/api/substance/image?name=${encodeURIComponent(name)}&t=${Date.now()}`;
+ }
+ async function previewSbsar(m){
+  const file=localSbsar(m);
+  $('#model-details').innerHTML=`<div class="eyebrow">SBSAR</div><h2>${esc(m.name)}</h2><p class="author-name">by ${esc(m.author)}</p><div class="detail-license"><strong>${esc(m.license)}</strong><p>${file?'参数由本机 Substance 引擎计算，拖动后球体上的贴图会更新。':'先把格式选成 SBSAR 并下载，才能调参数预览。'}</p></div><div id="sbsar-params" class="sbsar-params"></div><button class="secondary" data-action="collect" data-uid="${esc(m.uid)}">${icon('folder')}加入我的模型库</button>${detailResolutionPicker(m)}<button class="primary" data-action="download" data-uid="${esc(m.uid)}">${icon('download')}导出材质到本地</button>`;
+  const hint=document.querySelector('.viewer-hint');
+  $('#viewer').removeAttribute('src');$('#preview-dialog').showModal();
+  if(!file){hint.textContent='还没有本地 SBSAR 文件';return;}
+  hint.textContent='正在启动 Substance 引擎…';
+  const box=$('#sbsar-params');
+  try{
+   const response=await fetch('/api/substance/open',{method:'POST',headers:{'Content-Type':'application/json','X-SFX-Local':'1'},body:JSON.stringify({file})});
+   const data=await response.json().catch(()=>({}));
+   if(!response.ok)throw Error(data.error||`HTTP ${response.status}`);
+   const urls=()=>Object.fromEntries(Object.entries(data.images||{}).filter(([,name])=>name).map(([slot,name])=>[slot,substanceImageUrl(name)]));
+   await gltfPreview.loadSubstance(urls());
+   let timer=0;
+   box.innerHTML=(data.inputs||[]).map(input=>`<label class="sbsar-input"><span>${esc(input.label)}</span><input data-sbsar-id="${input.id}" data-sbsar-identifier="${esc(input.identifier)}" data-sbsar-type="${esc(input.type)}" type="number" step="any" value="${esc(input.value??'')}" ${input.min!=null?`min="${esc(input.min)}"`:''} ${input.max!=null?`max="${esc(input.max)}"`:''}></label>`).join('')||'<p>这张 SBSAR 没有可调的数值参数。</p>';
+   box.onchange=event=>{
+    const field=event.target.closest('[data-sbsar-id]');if(!field)return;
+    clearTimeout(timer);
+    timer=setTimeout(async()=>{
+     hint.textContent='正在按新参数渲染…';
+     const next=await fetch('/api/substance/input',{method:'POST',headers:{'Content-Type':'application/json','X-SFX-Local':'1'},body:JSON.stringify({id:Number(field.dataset.sbsarId),identifier:field.dataset.sbsarIdentifier,type:field.dataset.sbsarType,value:Number(field.value)})});
+     const body=await next.json().catch(()=>({}));
+     if(!next.ok){hint.textContent=body.error||'参数更新失败';return;}
+     data.images=body.images||data.images;
+     await gltfPreview.loadSubstance(urls());
+    },300);
+   };
+  }catch(e){hint.textContent=e.message;}
+ }
  async function previewMaterial(m){
+  if(m.sourceType==='substance'||(m.materialFormat||'JPG')==='SBSAR')return previewSbsar(m);
+  if(m.assetType==='models'||m.assetType==='hdris'){
+   $('#model-details').innerHTML=`<h2>${esc(m.name)}</h2><p>ambientCG · CC0 · ${m.assetType==='hdris'?'环境':'模型 / 地形'}</p><p>下载保留官方原始文件。${m.sourceType==='terrain'?'地形下载为 OBJ。':''}</p>${detailResolutionPicker(m)}<button class="primary" data-action="download" data-uid="${esc(m.uid)}">${icon('download')}下载</button><a href="${esc(m.url)}" target="_blank" rel="noopener noreferrer">打开官方页面</a>`;
+   const hint=document.querySelector('.viewer-hint');$('#viewer').removeAttribute('src');$('#preview-dialog').showModal();
+   if(m.viewerUrl){$('#viewer').src=m.viewerUrl;hint.textContent='ambientCG 官方环境预览（需要联网）';}
+   else hint.textContent='此资产没有官方交互预览，可下载原始文件或打开官方页面查看';
+   return;
+  }
   const maps=m.maps||[];
   $('#model-details').innerHTML=`<div class="eyebrow">PBR MATERIAL</div><h2>${esc(m.name)}</h2><p class="author-name">by ${esc(m.author)}</p><div class="details-stats"><div><strong>${maps.length||'—'}</strong><span>贴图通道</span></div><div><strong>CC0</strong><span>可商用</span></div></div><div class="detail-license"><strong>${esc(m.license)}</strong><a href="${esc(m.url)}" target="_blank" rel="noopener noreferrer">在 ambientCG 打开 ${icon('external')}</a><p>预览来自 ambientCG 官方的 PBR 材质查看器；导出的材质包包含全部贴图通道，重命名后可直接拖进 Unity / Blender。</p></div><div class="tag-list">${maps.slice(0,8).map(t=>`<button data-tag="${esc(t)}">${esc(t)}</button>`).join('')}</div><button class="secondary" data-action="collect" data-uid="${esc(m.uid)}">${icon('folder')}加入我的模型库</button>${detailResolutionPicker(m)}<button class="primary" data-action="download" data-uid="${esc(m.uid)}">${icon('download')}导出材质到本地</button><a class="source-link" href="${esc(m.url)}" target="_blank" rel="noopener noreferrer">打开原始材质页面 ${icon('external')}</a>`;
   const hint=document.querySelector('.viewer-hint');

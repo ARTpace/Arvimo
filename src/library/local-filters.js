@@ -8,7 +8,7 @@ export function localFileState(jobs,uid){
 
 export function localAssetKind(model){
  if(model.platform==='artstation')return model.hasMarmoset===false?'images':'models';
- if(model.platform==='ambientcg')return 'textures';
+ if(model.platform==='ambientcg')return model.assetType||'textures';
  if(model.platform==='kenney')return 'packs';
  return ({skybox:'hdris',smart:'textures',alphas:'images'})[model.assetType]||model.assetType||'models';
 }

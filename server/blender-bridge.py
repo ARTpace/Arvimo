@@ -10,14 +10,20 @@ can build a Principled BSDF material out of a downloaded PBR texture set.
 import json
 import os
 import queue
+import re
 import socket
+import shutil
 import sys
+import tempfile
 import threading
 import traceback
+import zipfile
 
 HOST = "127.0.0.1"
 PORT = int(os.environ.get("SFX_BLENDER_BRIDGE_PORT", "47752"))
 MAX_LINE = 1024 * 1024
+BRIDGE_VERSION = 2          # 2 = 多了 HTTP 入口，浏览器（局域网访客）也能把资产送进来
+MAX_UPLOAD = 512 * 1024 * 1024
 
 _tasks = queue.Queue()
 _health_ticks = 0
@@ -61,23 +67,236 @@ def _send(conn, payload):
             pass
 
 
-def _read_line(conn):
-    chunks = []
-    total = 0
+def _read_head(conn):
+    """读到首个换行为止，返回原始字节（可能已经带上 body 的开头）。
+
+    两个入口共用这一段：JSON 行协议只取首行，HTTP 还要接着把请求头与 body 读满。
+    """
+    buf = b""
     while True:
         chunk = conn.recv(65536)
         if not chunk:
             break
-        chunks.append(chunk)
-        total += len(chunk)
-        if b"\n" in chunk:
+        buf += chunk
+        if b"\n" in buf:
             break
-        if total > MAX_LINE:
+        if len(buf) > MAX_LINE:
             raise RuntimeError("Request too large")
-    raw = b"".join(chunks).split(b"\n", 1)[0]
-    if not raw:
+    if not buf:
         raise RuntimeError("Empty request")
-    return json.loads(raw.decode("utf-8"))
+    return buf
+
+
+# ---------------------------------------------------------------------------
+# HTTP 入口
+#
+# 桌面版走上面的 JSON 行协议；局域网访客手上只有浏览器，浏览器只会说 HTTP，
+# 所以同一个端口额外认一套极简 HTTP：GET /ping 探活、POST /import-upload 直接
+# 接收资产 ZIP 并导入。两个协议靠首行区分，互不干扰。
+# ---------------------------------------------------------------------------
+# 只对私网/本机来源回 CORS：公网网页即使猜到端口也拿不到访问权。
+_ORIGIN_RE = re.compile(r"^http://(\d{1,3}(?:\.\d{1,3}){3}|localhost)(?::\d+)?$", re.I)
+
+
+def _cors_origin(origin):
+    origin = (origin or "").strip()
+    match = _ORIGIN_RE.match(origin)
+    if not match:
+        return None
+    host = match.group(1).lower()
+    if host == "localhost":
+        return origin
+    try:
+        octets = [int(part) for part in host.split(".")]
+    except ValueError:
+        return None
+    if octets[0] in (10, 127):
+        return origin
+    if octets[0] == 192 and octets[1] == 168:
+        return origin
+    if octets[0] == 172 and 16 <= octets[1] <= 31:
+        return origin
+    return None
+
+
+def _http_reply(conn, status, payload, origin=None):
+    """回一个短 JSON 响应后关闭连接。绝不向外抛异常。"""
+    try:
+        body = b"" if payload is None else json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        reason = {200: "OK", 204: "No Content", 400: "Bad Request", 403: "Forbidden",
+                  404: "Not Found", 405: "Method Not Allowed",
+                  500: "Internal Server Error"}.get(status, "OK")
+        headers = [
+            "HTTP/1.1 %d %s" % (status, reason),
+            "Content-Type: application/json; charset=utf-8",
+            "Content-Length: %d" % len(body),
+            "Connection: close",
+            "Cache-Control: no-store",
+            "Access-Control-Allow-Origin: " + (origin or "null"),
+            "Access-Control-Allow-Methods: GET, POST, OPTIONS",
+            "Access-Control-Allow-Headers: content-type",
+            # Chrome 的 Private Network Access：局域网页面访问 127.0.0.1 时要这一条。
+            "Access-Control-Allow-Private-Network: true",
+        ]
+        conn.sendall(("\r\n".join(headers) + "\r\n\r\n").encode("latin-1") + body)
+    except Exception:
+        pass
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def _read_http(conn, buf):
+    """补齐请求头与 body，返回 (method, path, headers, body)。"""
+    while b"\r\n\r\n" not in buf:
+        chunk = conn.recv(65536)
+        if not chunk:
+            raise RuntimeError("连接在请求头结束前断开")
+        buf += chunk
+        if len(buf) > MAX_LINE:
+            raise RuntimeError("请求头过大")
+    head, _, body = buf.partition(b"\r\n\r\n")
+    lines = head.decode("utf-8", "replace").splitlines()
+    if not lines:
+        raise RuntimeError("空请求")
+    parts = lines[0].split()
+    method = parts[0].upper()
+    path = parts[1] if len(parts) > 1 else "/"
+    headers = {}
+    for line in lines[1:]:
+        if ":" in line:
+            key, value = line.split(":", 1)
+            headers[key.strip().lower()] = value.strip()
+    length = int(headers.get("content-length") or 0)
+    if length > MAX_UPLOAD:
+        raise RuntimeError("上传内容超过 %d MB" % (MAX_UPLOAD // (1024 * 1024)))
+    conn.settimeout(120.0)
+    while len(body) < length:
+        chunk = conn.recv(65536)
+        if not chunk:
+            break
+        body += chunk
+    return method, path, headers, body[:length]
+
+
+def _safe_member(folder, name):
+    """把压缩包内的条目限制在解压目录里，挡住 ../ 穿越。"""
+    target = os.path.abspath(os.path.join(folder, name))
+    root = os.path.abspath(folder) + os.sep
+    return target if target.startswith(root) else None
+
+
+def _pick_model_file(folder):
+    """挑压缩包里最该导入的那个：glb/gltf 优先，其次 fbx/obj，同格式取最大的。"""
+    order = (".glb", ".gltf", ".fbx", ".obj")
+    found = []
+    for root, _dirs, files in os.walk(folder):
+        for name in files:
+            ext = os.path.splitext(name)[1].lower()
+            if ext in order:
+                full = os.path.join(root, name)
+                try:
+                    size = os.path.getsize(full)
+                except OSError:
+                    size = 0
+                found.append((order.index(ext), -size, full))
+    if not found:
+        raise RuntimeError("这个压缩包里没有可导入的模型文件（glb / gltf / fbx / obj）")
+    found.sort()
+    return found[0][2]
+
+
+def _stage_upload(body, name):
+    """把上传内容落成临时目录，返回主模型文件路径；目录由调用方负责清理。"""
+    folder = tempfile.mkdtemp(prefix="assetvault-upload-")
+    if body[:4] == b"PK\x03\x04":
+        archive = os.path.join(folder, "upload.zip")
+        with open(archive, "wb") as handle:
+            handle.write(body)
+        with zipfile.ZipFile(archive) as bundle:
+            for item in bundle.infolist():
+                if item.is_dir():
+                    continue
+                target = _safe_member(folder, item.filename)
+                if not target:
+                    continue
+                os.makedirs(os.path.dirname(target), exist_ok=True)
+                with bundle.open(item) as source, open(target, "wb") as dest:
+                    shutil.copyfileobj(source, dest)
+        try:
+            os.remove(archive)
+        except OSError:
+            pass
+    else:
+        clean = os.path.basename(name or "upload.bin").replace(os.sep, "_")
+        with open(os.path.join(folder, clean), "wb") as handle:
+            handle.write(body)
+    return folder, _pick_model_file(folder)
+
+
+def _bridge_info():
+    info = {"ok": True, "app": "blender", "bridge": "assetvault",
+            "version": BRIDGE_VERSION, "upload": True}
+    try:
+        import bpy
+        info["blender"] = bpy.app.version_string
+    except Exception:
+        pass
+    return info
+
+
+def _respond(conn, req, payload):
+    """按入口协议回话：JSON 行协议还是 HTTP。"""
+    if req.get("_http"):
+        _http_reply(conn, 200 if payload.get("ok") else 500, payload, req.get("_origin"))
+    else:
+        _send(conn, payload)
+
+
+def _handle_http(conn, buf):
+    """在 socket 线程里处理 HTTP；需要动 bpy 的动作照样丢给 timer 线程。"""
+    origin = None
+    try:
+        method, path, headers, body = _read_http(conn, buf)
+        origin = _cors_origin(headers.get("origin"))
+        route = path.split("?", 1)[0]
+        if method == "OPTIONS":
+            _http_reply(conn, 204, None, origin)
+            return
+        if method in ("GET", "HEAD") and route == "/ping":
+            _http_reply(conn, 200, _bridge_info(), origin)
+            return
+        if route not in ("/import-upload", "/import"):
+            _http_reply(conn, 404, {"ok": False, "error": "未知接口：" + route}, origin)
+            return
+        if method != "POST":
+            _http_reply(conn, 405, {"ok": False, "error": "请使用 POST"}, origin)
+            return
+        # 没有可信来源的请求不落盘：只有页面才会带私网 Origin，其余一律拒掉。
+        if not origin:
+            _http_reply(conn, 403, {"ok": False, "error": "来源不受信任"}, None)
+            return
+
+        name = ""
+        if "?" in path:
+            for pair in path.split("?", 1)[1].split("&"):
+                key, _, value = pair.partition("=")
+                if key == "name":
+                    name = value
+        try:
+            from urllib.parse import unquote
+            name = unquote(name)
+        except Exception:
+            pass
+
+        folder, model = _stage_upload(body, name)
+        _tasks.put((conn, {"op": "import", "file": model, "frame": True,
+                           "_http": True, "_origin": origin, "_temp": folder}))
+    except Exception as exc:
+        traceback.print_exc()
+        _http_reply(conn, 400, {"ok": False, "error": str(exc)}, origin)
 
 
 def _import_asset(filepath, frame=True):
@@ -92,6 +311,11 @@ def _import_asset(filepath, frame=True):
         bpy.ops.import_scene.gltf(filepath=filepath)
     elif ext == ".fbx":
         bpy.ops.import_scene.fbx(filepath=filepath)
+    elif ext == ".obj":
+        if bpy.app.version >= (4, 0, 0):
+            bpy.ops.wm.obj_import(filepath=filepath)
+        else:
+            bpy.ops.import_scene.obj(filepath=filepath)
     else:
         raise RuntimeError("Unsupported model format: " + ext)
 
@@ -364,6 +588,15 @@ def _import_environment(filepath):
     if ext not in (".hdr", ".exr", ".png", ".jpg", ".jpeg"):
         raise RuntimeError("Unsupported environment format: " + ext)
     image = bpy.data.images.load(filepath, check_existing=True)
+    # check_existing 可能命中一个已经失效的空壳 datablock（源文件被删/被换过），
+    # 此时贴图会静默变成 Blender 的「缺失贴图」洋红——视口里就是一片爆粉的紫。
+    # 这里强制重读一次，读不出像素就直接报错，别把一个坏的世界环境留给用户。
+    try:
+        image.reload()
+    except Exception:
+        pass
+    if not image.size[0] or not image.size[1]:
+        raise RuntimeError("HDRI 读不出像素（文件缺失或已损坏）：" + filepath)
     # .hdr/.exr 是线性数据，Blender 载入时自动用 Linear 色彩空间，不要碰 colorspace；
     # 但 PNG/JPG 是 LDR 图像，必须显式设成 sRGB，否则天空盒会明显偏暗/偏色。
     if ext in (".png", ".jpg", ".jpeg"):
@@ -446,18 +679,26 @@ def _process_tasks():
         try:
             op = req.get("op")
             if op == "ping":
-                _send(conn, {"ok": True, "app": "blender", "bridge": "assetvault", "version": 1})
+                _respond(conn, req, {"ok": True, "app": "blender", "bridge": "assetvault", "version": BRIDGE_VERSION})
             elif op == "import":
-                _send(conn, _import_asset(req.get("file", ""), bool(req.get("frame", True))))
+                _respond(conn, req, _import_asset(req.get("file", ""), bool(req.get("frame", True))))
             elif op == "material":
-                _send(conn, _import_material(req))
+                _respond(conn, req, _import_material(req))
             elif op == "environment":
-                _send(conn, _import_environment(req.get("file", "")))
+                _respond(conn, req, _import_environment(req.get("file", "")))
             else:
                 raise RuntimeError("Unsupported operation: " + str(op))
         except Exception as exc:
             traceback.print_exc()
-            _send(conn, {"ok": False, "error": str(exc)})
+            _respond(conn, req, {"ok": False, "error": str(exc)})
+        finally:
+            # 浏览器上传的临时目录到此为止，别在用户盘上越攒越多。
+            temp = req.get("_temp")
+            if temp:
+                try:
+                    shutil.rmtree(temp, ignore_errors=True)
+                except Exception:
+                    pass
     return 0.2
 
 
@@ -486,8 +727,14 @@ def _server_thread(sock):
         try:
             # 客户端连上却不发数据时不能把线程卡死。
             conn.settimeout(5.0)
-            req = _read_line(conn)
-            _tasks.put((conn, req))
+            head = _read_head(conn)
+            first = head.split(b"\n", 1)[0].strip()
+            if first.split(b" ", 1)[0] in (b"GET", b"POST", b"OPTIONS", b"HEAD", b"PUT", b"DELETE"):
+                _handle_http(conn, head)
+                continue
+            if not first:
+                raise RuntimeError("Empty request")
+            _tasks.put((conn, json.loads(first.decode("utf-8"))))
         except Exception as exc:
             _send(conn, {"ok": False, "error": str(exc)})
 

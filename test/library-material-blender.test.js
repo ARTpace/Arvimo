@@ -96,8 +96,9 @@ test('ZIP 交付：解包后同样能解析，并且不把解包目录当成交�
   const dir=await folderDelivery(base);
   const zip=await zipFolder(dir,path.join(base,'Wood096.zip'));
   const bundle=findMaterialBundle(zip);
-  assert.equal(bundle.tmpDir,zip,'ZIP 交付要标记来源是压缩包，导入后据此清理解包目录');
+  assert.equal(bundle.tmpDir,null,'贴图解到持久目录，导入后不再清理（清理会让 Blender 里的贴图变成缺失洋红）');
   assert.ok(bundle.dir!==zip,'贴图必须解到真实目录，Blender 读不了压缩包');
+  assert.equal(bundle.dir,zip.replace(/\.zip$/i,'')+'.unpacked','解包目录要落在压缩包旁边，不能是系统临时目录');
   assert.equal(bundle.maps.baseColor,path.join(bundle.dir,'textures','Color.jpg'));
   assert.ok(fsSync.existsSync(bundle.maps.baseColor),'解包后贴图必须真实存在');
  }finally{await fs.rm(base,{recursive:true,force:true});}
@@ -147,13 +148,13 @@ test('Blender 按钮文案按 kind 分：材质说导入材质，模型说发送
  assert.equal(button({job:null}),'','没有本地文件就没有按钮');
 });
 
-test('模型导入仍只认 glb/gltf/fbx —— 材质路径不能放宽这条',async()=>{
+test('模型导入不把纯材质贴图当成模型',async()=>{
  const base=await temp();
  try{
   const dir=await folderDelivery(base);
   // findBlenderImportFile 只在 launchBlenderImport 内部用，这里直接验证它拒绝材质目录。
   // launchBlenderImport 是 async 的（桥接走进程内 socket），失败表现为 rejected promise。
-  await assert.rejects(()=>launchBlenderImport(dir,{blender:()=>null}),/没有可导入 Blender 的 GLB、glTF 或 FBX 文件/);
+  await assert.rejects(()=>launchBlenderImport(dir,{blender:()=>null}),/没有可导入 Blender 的 GLB、glTF、FBX 或 OBJ 文件/);
  }finally{await fs.rm(base,{recursive:true,force:true});}
 });
 test('桥接请求不得靠派生子进程发 —— 同步 spawn 在部分 Windows 上直接 EBUSY',()=>{

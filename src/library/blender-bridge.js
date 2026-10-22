@@ -7,44 +7,14 @@
  * 判定顺序很重要：端口能应答才算「连上」；装了脚本但 Blender 是启动前装的，
  * 只能提示重启，不能谎报成功。
  *
- * 安装按钮走的是后端的分步任务：点下去先把按钮锁住，再按 id 轮询进度，
- * 每一步（读源文件 / 找版本目录 / 逐个写入 / 回读校验 / 探活端口）都照实显示；
- * 失败时把后端给的原因留在面板里，而不是只弹一条几秒就消失的提示。
+ * 流程本体（检测 → 安装任务 → 轮询 → 分步进度 → 收尾横幅）住在 install-panel.js，
+ * 与「运行环境 · 后台浏览器」共用同一份；这里只负责说 Blender 自己的话。
  */
-const ROUTE = '/api/downloads/blender-bridge';
-/** 轮询间隔：后端每步停留 260ms，140ms 足够跟上，又不会把事件循环压满。 */
-const POLL_MS = 140;
-/** 安装任务最多等这么久，超时按失败处理，免得按钮永远卡在「安装中」。 */
-const INSTALL_TIMEOUT_MS = 90000;
-/** 成功动效保留多久再收起来。 */
-const SUCCESS_HOLD_MS = 5600;
-/** 勾 / 叉自己画，为的是能配合描边动画（内置图标集里没有可动画的版本）。 */
-const MARK = {
-  check: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7"/></svg>',
-  cross: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7l10 10M17 7 7 17"/></svg>',
-};
+import {createInstallPanel, MARK} from './install-panel.js';
 
-async function request(route = '', body) {
-  const get = body === undefined;
-  const response = await fetch(ROUTE + route, {
-    method: get ? 'GET' : 'POST',
-    cache: 'no-store',
-    headers: { 'X-SFX-Local': '1', ...(get ? {} : { 'Content-Type': 'application/json' }) },
-    ...(get ? {} : { body: JSON.stringify(body || {}) }),
-  });
-  const data = await response.json().catch(() => null);
-  if (!response.ok) throw Error((data && data.error) || 'Blender 连接请求失败');
-  return data || {};
-}
+const ROUTE = '/api/downloads/blender-bridge';
 
 export function createBlenderBridgePanel({ $, esc, icon, toast }) {
-  const statusBox = $('#blender-bridge-status');
-  const versionsBox = $('#blender-bridge-versions');
-  const installButton = $('#install-blender-bridge');
-  const progressBox = $('#blender-bridge-progress');
-  let busy = false, holdTimer = null, token = 0, shownState = '';
-  const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
-
   /** 把后端状态翻译成一句人话 + 一个颜色。 */
   function describe(data) {
     const targets = data.targets || [];
@@ -97,34 +67,18 @@ export function createBlenderBridgePanel({ $, esc, icon, toast }) {
     };
   }
 
-  function renderVersions(data) {
-    if (!versionsBox) return;
-    const targets = data.targets || [];
-    if (!targets.length) { versionsBox.innerHTML = ''; return; }
-    versionsBox.innerHTML = targets.map(t => {
+  /** 每个版本目录一枚小标签：当前 / 待更新 / 未安装。 */
+  function renderChips(data) {
+    const targets = data?.targets || [];
+    if (!targets.length) return '';
+    return targets.map(t => {
       const label = t.state === 'current' ? t.version : t.state === 'stale' ? `${t.version} 待更新` : `${t.version} 未安装`;
       return `<span class="bridge-chip ${t.state}" title="${esc(t.path)}">${esc(label)}</span>`;
     }).join('');
   }
 
-  function paint(state) {
-    if (!statusBox) return;
-    statusBox.dataset.tone = state.tone;
-    statusBox.innerHTML = `<span class="bridge-dot ${state.tone}"></span><div class="bridge-copy"><strong>${esc(state.title)}</strong><small>${esc(state.detail)}</small></div>`;
-  }
-
-  /** 一个步骤前面的标记：待办是空心点，进行中是转圈，完成打勾，失败打叉。 */
-  function stepMark(state) {
-    if (state === 'done') return `<i class="bridge-step-ok">${MARK.check}</i>`;
-    if (state === 'error') return `<i class="bridge-step-bad">${MARK.cross}</i>`;
-    if (state === 'active') return '<i class="spinner"></i>';
-    return '<i class="bridge-step-idle"></i>';
-  }
-
-  const HEAD_TITLE = { running: '正在安装桥接脚本', ok: '安装完成', partial: '部分完成', failed: '安装失败' };
-
-  /** 收尾横幅：成功给动效 + 装到哪儿；失败把原因原文摆出来。 */
-  function renderResult(job) {
+  /** 收尾横幅：成功给装到哪儿，失败把原因原文摆出来。 */
+  function renderBanner(job) {
     const status = job.status || {};
     if (job.state === 'ok') {
       const written = status.written || [];
@@ -144,120 +98,49 @@ export function createBlenderBridgePanel({ $, esc, icon, toast }) {
       + '</div></div>';
   }
 
-  function renderProgress(job) {
-    if (!progressBox) return;
-    const steps = job.steps || [];
-    const percent = Math.max(2, Math.min(100, Math.round(job.percent || 0)));
-    const active = steps.find(s => s.state === 'active');
-    progressBox.hidden = false;
-    progressBox.classList.remove('closing');
-    progressBox.dataset.state = job.state;
-    progressBox.innerHTML = `<div class="bridge-progress-head"><span>${esc(HEAD_TITLE[job.state] || '安装中')}</span><b>${percent}%</b></div>`
-      + `<div class="bridge-progress-track"><span class="bridge-progress-fill" style="width:${percent}%"></span></div>`
-      + (job.state === 'running' && active ? `<p class="bridge-progress-now"><i class="spinner"></i>${esc(active.label)}…</p>` : '')
-      + `<ul class="bridge-steps">${steps.map(step => `<li class="${step.state}">${stepMark(step.state)}<div>`
-        + `<span>${esc(step.label)}</span>`
-        + (step.detail ? `<small>${esc(step.detail)}</small>` : '')
-        + (step.notes && step.notes.length ? `<ul class="bridge-step-notes">${step.notes.map(n => `<li>${esc(n)}</li>`).join('')}</ul>` : '')
-        + `</div></li>`).join('')}</ul>`
-      + (job.state === 'running' ? '' : renderResult(job));
-    // 结果横幅可能落在对话框可视区外：刚跑完时把它带进视野，否则用户会以为点了没反应。
-    if (job.state !== 'running' && shownState === 'running') {
-      const banner = progressBox.querySelector('.bridge-result');
-      const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches;
-      banner?.scrollIntoView?.({block: 'nearest', behavior: reduce ? 'auto' : 'smooth'});
-    }
-    shownState = job.state;
+  /** 一步可能带多条备注（例如某个版本目录被占用时给出的替代路径）。 */
+  function renderStepExtra(step) {
+    if (!step.notes || !step.notes.length) return '';
+    return `<ul class="bridge-step-notes">${step.notes.map(n => `<li>${esc(n)}</li>`).join('')}</ul>`;
   }
 
-  /** 安装失败且连任务都没起来时，也要在面板里留下一句原因。 */
-  function renderLocalFailure(reason) {
-    if (!progressBox) return;
-    progressBox.hidden = false;
-    progressBox.classList.remove('closing');
-    progressBox.dataset.state = 'failed';
-    progressBox.innerHTML = `<div class="bridge-progress-head"><span>安装失败</span><b>—</b></div>`
-      + `<div class="bridge-result failed"><span class="bridge-result-mark">${MARK.cross}</span><div>`
-      + `<strong>没有装上</strong><small class="reason">原因：${esc(reason)}</small>`
-      + '<small>确认本地服务还在运行；若刚换过电脑，请先打开一次 Blender 让它生成配置目录。</small></div></div>';
-  }
-
-  function collapseProgress(owner) {
-    if (!progressBox || busy || owner !== token) return;
-    progressBox.classList.add('closing');
-    setTimeout(() => {
-      if (!progressBox || busy || owner !== token) return;
-      progressBox.hidden = true;
-      progressBox.innerHTML = '';
-      progressBox.dataset.state = '';
-      progressBox.classList.remove('closing');
-    }, 260);
-  }
-
-  /** 按 id 轮询安装任务，直到它不再是 running。 */
-  async function follow(jobId) {
-    const deadline = Date.now() + INSTALL_TIMEOUT_MS;
-    for (;;) {
-      const job = await request(`/install?id=${encodeURIComponent(jobId)}`);
-      renderProgress(job);
-      if (job.state !== 'running') return job;
-      if (Date.now() > deadline) throw Error('安装任务超时，后端一直没给出结果');
-      await sleep(POLL_MS);
-    }
-  }
-
-  async function refresh() {
-    if (!busy) {
-      clearTimeout(holdTimer);
-      if (progressBox) { progressBox.hidden = true; progressBox.innerHTML = ''; progressBox.dataset.state = ''; progressBox.classList.remove('closing'); }
-    }
-    paint({ tone: 'idle', title: '正在检测…', detail: '读取桥接脚本与端口状态' });
-    if (versionsBox) versionsBox.innerHTML = '';
-    try {
-      const data = await request();
-      paint(describe(data));
-      renderVersions(data);
-    } catch (e) {
-      paint({ tone: 'warn', title: '无法读取 Blender 状态', detail: String(e.message || e) });
-    }
-  }
-
-  async function install() {
-    if (busy) return;
-    busy = true;
-    clearTimeout(holdTimer);
-    const owner = ++token;
-    const original = installButton ? installButton.innerHTML : '';
-    if (installButton) { installButton.disabled = true; installButton.innerHTML = '<i class="spinner"></i>正在安装…'; }
-    paint({ tone: 'busy', title: '正在安装桥接脚本', detail: '准备把启动脚本写进 Blender 配置目录' });
-    try {
-      const { jobId } = await request('/install', {});
-      if (!jobId) throw Error('后端没有返回安装任务编号');
-      const job = await follow(jobId);
-      const status = job.status;
-      if (status) { paint(describe(status)); renderVersions(status); }
-      if (job.state === 'ok') {
-        toast(job.message || '桥接脚本安装完成');
-        holdTimer = setTimeout(() => collapseProgress(owner), SUCCESS_HOLD_MS);
-      } else {
-        toast(`${job.state === 'partial' ? '部分位置写入失败' : '安装失败'}：${job.error || job.message || '原因未知'}`);
-      }
-      if (installButton) installButton.innerHTML = job.state === 'ok' ? original : `${icon('rotate')}重试安装`;
-    } catch (e) {
-      const reason = String(e.message || e);
-      renderLocalFailure(reason);
-      paint({ tone: 'warn', title: '安装失败', detail: reason });
-      toast('安装失败：' + reason);
-      if (installButton) installButton.innerHTML = `${icon('rotate')}重试安装`;
-    } finally {
-      busy = false;
-      if (installButton) installButton.disabled = false;
-    }
-  }
-
-  function setup() {
-    if (installButton) installButton.onclick = install;
-  }
-
-  return { setup, refresh };
+  return createInstallPanel({
+    $, esc, icon, toast,
+    route: ROUTE,
+    // 后端每步停留 260ms，140ms 足够跟上，又不会把事件循环压满。
+    pollMs: 140,
+    // 装几个小文件而已，超过一分半就是卡住了，不能永远显示「安装中」。
+    timeoutMs: 90000,
+    ids: {
+      status: '#blender-bridge-status',
+      chips: '#blender-bridge-versions',
+      button: '#install-blender-bridge',
+      progress: '#blender-bridge-progress',
+    },
+    describe,
+    renderChips,
+    renderBanner,
+    renderStepExtra,
+    headTitles: { running: '正在安装桥接脚本', ok: '安装完成', partial: '部分完成', failed: '安装失败' },
+    buttonFor: ({ phase }) => phase === 'retry'
+      ? { icon: 'rotate', text: '重试安装' }
+      : { icon: 'cube', text: '安装 / 更新' },
+    copy: {
+      errDefault: 'Blender 连接请求失败',
+      detecting: '读取桥接脚本与端口状态',
+      detectError: '无法读取 Blender 状态',
+      busy: { title: '正在安装桥接脚本', detail: '准备把启动脚本写进 Blender 配置目录' },
+      busyButton: '正在安装…',
+      timeout: '安装任务超时，后端一直没给出结果',
+      noJobId: '后端没有返回安装任务编号',
+      failure: {
+        head: '安装失败',
+        title: '没有装上',
+        toast: '安装失败',
+        hint: '确认本地服务还在运行；若刚换过电脑，请先打开一次 Blender 让它生成配置目录。',
+      },
+      okToast: job => job.message || '桥接脚本安装完成',
+      failToast: job => `${job.state === 'partial' ? '部分位置写入失败' : '安装失败'}：${job.error || job.message || '原因未知'}`,
+    },
+  });
 }

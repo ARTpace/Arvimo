@@ -13,6 +13,14 @@ import {RoomEnvironment} from 'three/examples/jsm/environments/RoomEnvironment.j
 import {RGBELoader} from 'three/examples/jsm/loaders/RGBELoader.js';
 // FreeStylized 的模型包里只有 FBX（没有 glTF），所以除了 glTF 还得会读 FBX。
 import {FBXLoader} from 'three/examples/jsm/loaders/FBXLoader.js';
+// 资源包里的模型格式很杂：ambientCG 地形是 OBJ，打印/扫描类资产常见 STL / PLY / 3MF。
+// 每个格式一个官方 loader，按扩展名分派（见 showPackModel 的格式表）。
+import {OBJLoader} from 'three/examples/jsm/loaders/OBJLoader.js';
+import {STLLoader} from 'three/examples/jsm/loaders/STLLoader.js';
+import {PLYLoader} from 'three/examples/jsm/loaders/PLYLoader.js';
+import {ThreeMFLoader} from 'three/examples/jsm/loaders/3MFLoader.js';
+// 环境贴图除了 Radiance .hdr，还有 ambientCG / Poly Haven 出的 EXR 全景。
+import {EXRLoader} from 'three/examples/jsm/loaders/EXRLoader.js';
 
 const FILE_API='https://api.polyhaven.com/files';
 const CDN='https://dl.polyhaven.org/file/ph-assets';
@@ -727,12 +735,15 @@ window.addEventListener('resize',onResize);
   if(!prepareStage('左键旋转 · 右键缩放 · 中键平移 · 从 Poly Haven 官方 CDN 取 1K HDR 本地渲染','正在加载 Poly Haven 环境贴图…'))return false;
   try{
    const files=await fetchList(assetId,'hdris');
-   const hdrUrl=files?.hdri?.['1k']?.hdr?.url;
-   if(!hdrUrl)throw new Error('该资产没有 1k HDR');
+   // 1k 档优先 .hdr，没有就退 .exr（两张数据等价，只是容器不同）。
+   const tier1k=files?.hdri?.['1k'];
+   const hdrUrl=tier1k?.hdr?.url||tier1k?.exr?.url;
+   if(!hdrUrl)throw new Error('该资产没有 1k HDR / EXR');
    revokeBlobs();
    const blobUrl=await toBlob(hdrUrl,blobs);
    if(token!==loadToken)return false;
-   const tex=await new Promise((res,rej)=>new RGBELoader().load(blobUrl,res,undefined,rej));
+   const loader=/\.exr$/i.test(hdrUrl)?new EXRLoader():new RGBELoader();
+   const tex=await new Promise((res,rej)=>loader.load(blobUrl,res,undefined,rej));
    if(token!==loadToken){tex.dispose();return false;}
    tex.mapping=THREE.EquirectangularReflectionMapping;
    // 先复位旧 HDRI 再挂新的：同一时刻场景里只保留一张全景贴图，旧的必须 dispose。
@@ -856,7 +867,79 @@ function applyPackTextures(object,bySlot){
   renderer.render(scene,camera);
  }
 
- async function showPackModel(manifest,token){
+ /** 按扩展名把字节解析成 Object3D。资源包预览与本地文件预览共用这一张格式表——
+ *  两处各写一份必然走偏（改了这边忘了那边），所以格式判断只有这一处。 */
+async function parseModelBuffer(buf,fileName,manager){
+ if(/\.fbx$/i.test(fileName))return new FBXLoader(manager).parse(buf,'');
+ if(/\.(glb|gltf)$/i.test(fileName)){
+  const isBinary=/\.glb$/i.test(fileName);
+  const source=isBinary?buf:JSON.parse(new TextDecoder().decode(buf));
+  const parsed=await new Promise((resolve,reject)=>new GLTFLoader(manager).parse(source,'',g=>resolve(g),err=>reject(new Error(err?.message||'glTF 解析失败'))));
+  return parsed?.scene||null;
+ }
+ if(/\.obj$/i.test(fileName)){
+  const object=new OBJLoader(manager).parse(new TextDecoder().decode(buf));
+  upgradePackMaterials(object);
+  return object;
+ }
+ if(/\.stl$/i.test(fileName))return meshFromGeometry(new STLLoader().parse(buf));
+ if(/\.ply$/i.test(fileName))return meshFromGeometry(new PLYLoader().parse(buf));
+ if(/\.3mf$/i.test(fileName))return new ThreeMFLoader(manager).parse(buf);
+ throw new Error(`暂不支持预览 ${fileName||'这种模型格式'}（支持 GLB / glTF / FBX / OBJ / STL / PLY / 3MF）`);
+}
+
+/** 全景环境贴图：EXR / HDR 各用各的 loader，普通的等距 PNG/JPG 走 sRGB 纹理。
+ *  统一设成 Equirectangular 映射，调用方直接挂 scene.background / environment。 */
+async function loadEnvironmentTexture(url,name){
+ let tex;
+ if(/\.exr$/i.test(name))tex=await new Promise((res,rej)=>new EXRLoader().load(url,res,undefined,rej));
+ else if(/\.hdr$/i.test(name))tex=await new Promise((res,rej)=>new RGBELoader().load(url,res,undefined,rej));
+ else tex=await new Promise((res,rej)=>new THREE.TextureLoader().load(url,t=>{t.colorSpace=THREE.SRGBColorSpace;res(t);},undefined,rej));
+ tex.mapping=THREE.EquirectangularReflectionMapping;
+ return tex;
+}
+
+/** STL / PLY 只有几何、没有材质与 UV：包成 Mesh 并给一层中性标准材质，
+ *  否则 three 默认材质在 PBR 灯光下会灰得看不出体积。 */
+function meshFromGeometry(geometry){
+ geometry.computeVertexNormals();
+ const mesh=new THREE.Mesh(geometry,new THREE.MeshStandardMaterial({color:0xb9bcc2,roughness:0.62,metalness:0.04}));
+ mesh.castShadow=true;mesh.receiveShadow=true;
+ return mesh;
+}
+/** OBJLoader 产的是 Phong / Lambert 材质，换成 Standard 才和场景里其它资产同一套光照。
+ *  贴图槽能搬的都搬过去（包内贴图随后由 applyPackTextures 按槽位补）。 */
+function upgradePackMaterials(root){
+ const cache=new Map();
+ root.traverse(node=>{
+  if(!node.isMesh)return;
+  const list=Array.isArray(node.material)?node.material:[node.material];
+  const next=list.map(material=>{
+   if(!material||material.isMeshStandardMaterial)return material;
+   if(cache.has(material))return cache.get(material);
+   const standard=new THREE.MeshStandardMaterial({
+    name:material.name,
+    color:material.color?material.color.clone():new THREE.Color(0xb9bcc2),
+    map:material.map||null,
+    normalMap:material.normalMap||null,
+    alphaMap:material.alphaMap||null,
+    bumpMap:material.bumpMap||null,
+    specularMap:material.specularMap||null,
+    emissive:material.emissive?material.emissive.clone():new THREE.Color(0x000000),
+    emissiveMap:material.emissiveMap||null,
+    transparent:!!material.transparent,
+    opacity:material.opacity??1,
+    side:material.side,
+    roughness:0.72,
+    metalness:0.04,
+   });
+   cache.set(material,standard);
+   return standard;
+  });
+  node.material=Array.isArray(node.material)?next:next[0];
+ });
+}
+async function showPackModel(manifest,token){
   const modelEntry=manifest.entries.find(e=>e.role==='model');
   if(!modelEntry)throw new Error('资源包里没有模型文件');
   revokeBlobs();
@@ -884,19 +967,15 @@ function applyPackTextures(object,bySlot){
    const slot=packSlotOf(base);
    return (slot&&bySlot.get(slot))||url;
   });
-  let object=null;
-  if(/\.fbx$/i.test(modelEntry.name)){
-   object=new FBXLoader(manager).parse(buf,'');
-  }else{
-   const isBinary=/\.glb$/i.test(modelEntry.name);
-   const source=isBinary?buf:JSON.parse(new TextDecoder().decode(buf));
-   const parsed=await new Promise((resolve,reject)=>new GLTFLoader(manager).parse(source,'',g=>resolve(g),err=>reject(new Error(err?.message||'glTF 解析失败'))));
-   object=parsed?.scene;
-  }
+  // 格式分派在 parseModelBuffer 里（资源包与本地文件共用同一张表）。
+  const fileName=String(modelEntry.name||'');
+  const object=await parseModelBuffer(buf,fileName,manager);
   if(!object)throw new Error('模型解析结果为空');
   if(token!==loadToken){disposeObject(object);return false;}
-  // FBX 不带贴图引用时材质是默认白膜，这里按槽位把包里的贴图补上（见 applyPackTextures）。
-  applyPackTextures(object,bySlot);
+  // FBX 不带贴图引用时材质是默认白膜，OBJ 也常常只有 MTL 名字、纹理由包内提供；
+  // 这两类按槽位把包里的贴图补上（见 applyPackTextures）。
+  // STL/PLY/3MF 的几何没有 UV，挂贴图只会渲染成一片单色，跳过。
+  if(/\.(fbx|obj|glb|gltf)$/i.test(fileName))applyPackTextures(object,bySlot);
   frameObject(object);
   return true;
  }
@@ -978,15 +1057,8 @@ function applyPackTextures(object,bySlot){
   if(!entry)throw new Error('资源包里没有环境贴图');
   revokeBlobs();
   const url=await toLocalBlobUrl(entry.url);
-  let tex;
-  if(/\.exr$/i.test(entry.name))throw new Error('这个天空盒是 EXR 格式，暂不支持在线预览');
-  if(/\.hdr$/i.test(entry.name)){
-   tex=await new Promise((res,rej)=>new RGBELoader().load(url,res,undefined,rej));
-  }else{
-   tex=await new Promise((res,rej)=>new THREE.TextureLoader().load(url,t=>{t.colorSpace=THREE.SRGBColorSpace;res(t);},undefined,rej));
-  }
+  const tex=await loadEnvironmentTexture(url,entry.name);
   if(token!==loadToken){tex.dispose();return false;}
-  tex.mapping=THREE.EquirectangularReflectionMapping;
   showEnvironmentStage(tex);
   return true;
  }
@@ -1013,6 +1085,48 @@ function applyPackTextures(object,bySlot){
   }
  }
 
+ /** 本地文件预览：磁盘上的单个模型文件，复用资源包那套格式表与取景逻辑。
+  *  url 由调用方拼好（/api/local/file?root=…&rel=…），这里只管取字节、解析、取景。 */
+ async function loadLocalModel({url,name='模型'}){
+  const token=++loadToken;
+  if(!prepareStage('左键旋转 · 右键缩放 · 中键平移 · 双击重置视角 · 本地文件',`正在加载 ${name}…`))return false;
+  resetEnvironment();
+  try{
+   const res=await fetch(url,{cache:'no-store'});
+   if(!res.ok)throw new Error(`取文件失败 HTTP ${res.status}`);
+   const buf=await res.arrayBuffer();
+   if(token!==loadToken)return false;
+   clearRoot();setHint('');
+   const object=await parseModelBuffer(buf,name,new THREE.LoadingManager());
+   if(!object)throw new Error('模型解析结果为空');
+   if(token!==loadToken){disposeObject(object);return false;}
+   frameObject(object);
+   return true;
+  }catch(err){
+   if(token!==loadToken)return false;
+   fail(`无法预览 ${name}：${err.message}`,err);
+   return false;
+  }
+ }
+
+ /** 本地全景环境贴图（.hdr / .exr / 等距 PNG·JPG）：拖动能环视整个环境。 */
+ async function loadLocalEnvironment({url,name='环境贴图'}){
+  const token=++loadToken;
+  if(!prepareStage('左键旋转 · 右键缩放 · 中键平移 · 本地全景预览',`正在加载 ${name}…`))return false;
+  resetEnvironment();
+  setChannelAvailable(false);
+  try{
+   const tex=await loadEnvironmentTexture(url,name);
+   if(token!==loadToken){tex.dispose();return false;}
+   showEnvironmentStage(tex);
+   return true;
+  }catch(err){
+   if(token!==loadToken)return false;
+   fail(`无法预览 ${name}：${err.message}`,err);
+   return false;
+  }
+ }
+
  function close(){
   disposed=true;loadToken++;
   revokeBlobs();
@@ -1030,7 +1144,41 @@ function applyPackTextures(object,bySlot){
  }
  function resizeIfLive(){if(ready||renderer)resize();}
 
- return {load,loadFreestylized,close,resize:resizeIfLive,canPreview:type=>true};
+ /** SBSAR 预览：引擎按当前参数渲出的 basecolor / normal / roughness，贴到球体上。 */
+ async function loadSubstance(urls){
+  const token=++loadToken;
+  if(!prepareStage('左键旋转 · 滚轮缩放 · Substance 引擎按参数重渲','正在用 Substance 引擎渲染…'))return false;
+  resetEnvironment();
+  try{
+   if(token!==loadToken)return false;
+   clearRoot();
+   const loader=new THREE.TextureLoader();
+   const tex=async(url,srgb)=>{
+    if(!url)return null;
+    const local=await toLocalBlobUrl(url);
+    return new Promise((res,rej)=>loader.load(local,t=>{t.wrapS=t.wrapT=THREE.RepeatWrapping;t.colorSpace=srgb?THREE.SRGBColorSpace:(THREE.NoColorSpace||THREE.LinearSRGBColorSpace);res(t);},undefined,rej));
+   };
+   const map=await tex(urls.basecolor,true);
+   const normalMap=await tex(urls.normal,false);
+   const roughnessMap=await tex(urls.roughness,false);
+   const metalnessMap=await tex(urls.metalness,false);
+   if(token!==loadToken)return false;
+   const ball=new THREE.Mesh(new THREE.SphereGeometry(1.2,80,56),new THREE.MeshStandardMaterial({map,normalMap,roughnessMap,roughness:roughnessMap?1:0.55,metalnessMap,metalness:metalnessMap?1:0}));
+   root.add(ball);
+   camera.position.set(2.4,1.1,2.4);
+   controls.target.set(0,0,0);
+   controls.update();
+   setHint('');
+   renderer.render(scene,camera);
+   return true;
+  }catch(err){
+   if(token!==loadToken)return false;
+   fail(`无法显示 Substance 预览：${err.message}`,err);
+   return false;
+  }
+ }
+
+ return {load,loadFreestylized,loadSubstance,loadLocalModel,loadLocalEnvironment,close,resize:resizeIfLive,canPreview:type=>true};
 }
 function polyhavenAssetType(value){return value==='textures'||value==='hdris'?value:'models';}
 /** 换资产时释放上一帧的 GPU 资源。只 remove 不 dispose 的话，纹理与几何会一直挂在

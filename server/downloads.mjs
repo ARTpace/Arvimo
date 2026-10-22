@@ -3,7 +3,7 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import {randomUUID} from 'node:crypto';
 import {execFile} from 'node:child_process';
-import {processIdentity,lockOwnerAlive} from './process-lock.mjs';
+import {processIdentity,lockOwnerAlive,replaceLibraryOwner} from './process-lock.mjs';
 import {runExportWorker,browserPath} from './export-worker.mjs';
 import {runArtstationWorker} from './artstation-worker.mjs';
 import {runPolyhavenJob} from './polyhaven.mjs';
@@ -14,6 +14,8 @@ import {runAmbientcgJob} from './ambientcg.mjs';
 import {runImageJob} from './image-bundle.mjs';
 import {inspectFolder,nativeFolderPicker} from './folder-dialog.mjs';
 import {commitFolder,commitArchive} from './local-commit.mjs';
+import {assetStorageCategory,storageRoot} from './asset-storage.mjs';
+import {canonicalPath,recoverDownloads,recoveredOptionsMatch} from './download-recovery.mjs';
 import {TransferProgress} from './transfer-progress.mjs';
 import {verifyArchive} from './archive.mjs';
 import {verifyFolder,packFolder,findStagedGlb} from './folder-archive.mjs';
@@ -75,7 +77,7 @@ export function imageOptions(o={}){
  *  bundle is delivered. Keeping it disjoint from exportOptions means the dedupe key can never
  *  mistake "the 2K material of asset X" for "the model export of asset X". */
 export const MATERIAL_RESOLUTIONS=new Set(['1K','2K','4K','8K']);
-export const MATERIAL_FORMATS=new Set(['JPG','PNG']);
+export const MATERIAL_FORMATS=new Set(['JPG','PNG','SBSAR']);
 export function materialOptions(o={}){
   return {
     output:OUTPUT_MODES.has(o.output)?o.output:'folder',
@@ -136,7 +138,7 @@ export function modelSnapshot(m,kind){
  // 恢复队列时才能正确重派给材质 runner。材质没有可另存的原始文件，downloadable 记 false。
  if(kind==='ambientcg'){
   if(!m.assetId)throw Error('ambientCG 资产 ID 缺失');
-  return {...common,kind:'ambientcg',platform:'ambientcg',downloadable:false,url:String(m.url||`https://ambientcg.com/a/${m.assetId}`),assetId:String(m.assetId).slice(0,120)};
+  return {...common,kind:'ambientcg',platform:'ambientcg',assetType:['hdris','models'].includes(m.assetType)?m.assetType:'textures',sourceType:String(m.sourceType||'material'),downloadable:false,url:String(m.url||`https://ambientcg.com/a/${m.assetId}`),assetId:String(m.assetId).slice(0,120)};
  }
  return {...common,kind:'sketchfab',downloadable:m.downloadable===true,url:`https://sketchfab.com/models/${m.uid}`};
 }
@@ -149,15 +151,16 @@ function optionKey(value){
  if(value&&typeof value==='object')return JSON.stringify(Object.fromEntries(Object.keys(value).sort().filter(key=>value[key]!==undefined).map(key=>[key,JSON.parse(optionKey(value[key]))])));
  return JSON.stringify(value);
 }
-const sameFolder=(a,b)=>process.platform==='win32'?path.resolve(a).toLowerCase()===path.resolve(b).toLowerCase():path.resolve(a)===path.resolve(b);
+const sameFolder=(a,b)=>canonicalPath(a)===canonicalPath(b);
 export class DownloadManager{
  constructor({dataDir,defaultFolder,runner=runExportWorker,artRunner=runArtstationWorker,imageRunner=runImageJob,polyRunner=runPolyhavenJob,pizzaRunner=runPolypizzaJob,kenneyRunner=runKenneyJob,freestyleRunner=runFreestylizedJob,materialRunner=runAmbientcgJob,verify=verifyArchive,browser=browserPath,blender=blenderPath,fbxConverter=convertGlbToFbx,blenderImporter=launchBlenderImport,materialImporter=launchBlenderMaterialImport,hdriImporter=launchBlenderHdriImport,folderPicker=nativeFolderPicker,autoStart=true}={}){
   this.instanceId=randomUUID();this.dataDir=path.resolve(dataDir);this.defaultFolder=path.resolve(defaultFolder);this.runner=runner;this.artRunner=artRunner;this.imageRunner=imageRunner;this.polyRunner=polyRunner;this.pizzaRunner=pizzaRunner;this.kenneyRunner=kenneyRunner;this.freestyleRunner=freestyleRunner;this.materialRunner=materialRunner;this.verify=verify;this.browser=browser;this.blender=blender;this.fbxConverter=fbxConverter;this.blenderImporter=blenderImporter;this.materialImporter=materialImporter;this.hdriImporter=hdriImporter;this.folderPicker=folderPicker;this.autoStart=autoStart;this.jobs=[];this.workers=new Map();this.transfers=new Map();this.closed=false;this.baseUrl=null;this.revision=0;this.timer=null;this.persistTimer=null;this.warning='';
   this.settings={folder:this.defaultFolder,concurrency:1,retryLimit:1,paused:false};
+  this.dismissedDownloads=new Set();
  }
  async init(){
   await fsp.mkdir(this.dataDir,{recursive:true});this.lockPath=path.join(this.dataDir,'manager.lock');
-  try{const fd=fs.openSync(this.lockPath,'wx');fs.writeFileSync(fd,JSON.stringify(processIdentity()));fs.closeSync(fd);}catch(e){if(e.code!=='EEXIST')throw e;let owner;try{owner=JSON.parse(fs.readFileSync(this.lockPath));}catch{throw Error('下载记录目录锁无效，请检查 manager.lock');}if(lockOwnerAlive(owner))throw Error('此下载记录目录已由另一个服务使用');fs.unlinkSync(this.lockPath);return this.init();}
+  try{const fd=fs.openSync(this.lockPath,'wx');fs.writeFileSync(fd,JSON.stringify(processIdentity()));fs.closeSync(fd);}catch(e){if(e.code!=='EEXIST')throw e;let owner;try{owner=JSON.parse(fs.readFileSync(this.lockPath));}catch{throw Error('下载记录目录锁无效，请检查 manager.lock');}if(lockOwnerAlive(owner)&&!(process.env.SFX_REPLACE_LIBRARY_OWNER==='1'&&replaceLibraryOwner(owner)))throw Error('此下载记录目录已由另一个服务使用');fs.unlinkSync(this.lockPath);return this.init();}
   try{
    this.store=path.join(this.dataDir,'tasks.json');let saved;
    if(fs.existsSync(this.store)){try{saved=JSON.parse(fs.readFileSync(this.store,'utf8'));}catch{try{saved=JSON.parse(fs.readFileSync(this.store+'.bak','utf8'));this.warning='任务记录损坏，已从上次备份恢复；原损坏文件已保留。';fs.copyFileSync(this.store,this.store+'.damaged-'+Date.now());fs.copyFileSync(this.store+'.bak',this.store);}catch{throw Error('任务记录损坏，已停止启动，未覆盖原文件');}}}
@@ -166,11 +169,16 @@ export class DownloadManager{
    }
    // Delete only known interrupted-task scratch paths, never arbitrary user directories.
    for(const j of this.jobs){if(j.state==='interrupted'&&/^[a-f0-9-]{36}$/.test(j.id)&&Number.isSafeInteger(j.attempts)&&j.attempts>0){const key=`${j.id}-${j.attempts}`;await fsp.rm(path.join(this.dataDir,'workers',key),{recursive:true,force:true,maxRetries:5,retryDelay:150}).catch(()=>{});await fsp.rm(path.join(this.dataDir,'staging',key+'.zip.part'),{force:true}).catch(()=>{});await fsp.rm(path.join(this.dataDir,'staging',key+'.dir'),{recursive:true,force:true}).catch(()=>{});}}
+   this.dismissedDownloads=new Set((Array.isArray(saved?.dismissedDownloads)?saved.dismissedDownloads:[]).filter(value=>typeof value==='string').map(canonicalPath));
+   const skipped=[];
+   const recovered=await recoverDownloads(this.jobs,[...new Set([this.settings.folder,...this.jobs.map(storageRoot).filter(Boolean)])],{dismissed:this.dismissedDownloads,onSkipped:(file,error)=>skipped.push(`${path.basename(file)}：${error}`)});
+   if(recovered&&fs.existsSync(this.store))fs.copyFileSync(this.store,this.store+'.before-recovery-'+Date.now());
+   if(skipped.length)this.warning=[this.warning,`${skipped.length} 个本地文件未通过恢复校验：${skipped.slice(0,3).join('；')}`].filter(Boolean).join('；');
    await fsp.mkdir(path.join(this.dataDir,'staging'),{recursive:true});this.save();return this;
   }catch(e){fs.unlinkSync(this.lockPath);throw e;}
  }
  start(baseUrl){this.baseUrl=baseUrl;if(this.autoStart)this.pump();}
- save(){clearTimeout(this.persistTimer);this.persistTimer=null;const next=this.store+'.next';try{fs.writeFileSync(next,JSON.stringify({version:1,settings:this.settings,jobs:this.jobs}));const fd=fs.openSync(next,'r+');fs.fsyncSync(fd);fs.closeSync(fd);if(fs.existsSync(this.store))fs.copyFileSync(this.store,this.store+'.bak');fs.renameSync(next,this.store);this.storageError=null;}catch(e){this.storageError='任务记录写入失败：'+e.message;throw e;}this.revision++;}
+ save(){clearTimeout(this.persistTimer);this.persistTimer=null;const next=this.store+'.next';try{fs.writeFileSync(next,JSON.stringify({version:1,settings:this.settings,jobs:this.jobs,dismissedDownloads:[...this.dismissedDownloads]}));const fd=fs.openSync(next,'r+');fs.fsyncSync(fd);fs.closeSync(fd);if(fs.existsSync(this.store))fs.copyFileSync(this.store,this.store+'.bak');fs.renameSync(next,this.store);this.storageError=null;}catch(e){this.storageError='任务记录写入失败：'+e.message;throw e;}this.revision++;}
  update(job,patch,{lazy=false}={}){Object.assign(job,patch,{updatedAt:Date.now()});this.revision++;if(lazy){clearTimeout(this.persistTimer);this.persistTimer=setTimeout(()=>{try{this.save();}catch{}},180);}else this.save();}
  log(job,message){job.logs??=[];job.logs.push(`[${new Date().toLocaleTimeString('zh-CN',{hour12:false})}] ${String(message).slice(0,1500)}`);job.logs=job.logs.slice(-160);}
  folderStatus(){return inspectFolder(this.settings.folder);}
@@ -179,8 +187,8 @@ export class DownloadManager{
   // 材质交付物里没有网格，走建材质这条路；HDRI/天空盒走设世界环境；其余一律按模型导入
   //（Kenney / FreeStylized 的 pack.zip 由 resolveBlenderImport 解包后挑模型；
   //  FreeStylized 的天空盒是等距全景图、贴图/智能材质是 PBR 贴图包，各走对应路线）。
-  const materialJob=job.kind==='ambientcg'||job.kind==='polyhaven'&&job.assetType==='textures'||job.kind==='freestylized'&&(job.assetType==='textures'||job.assetType==='smart');
-  const hdriJob=job.kind==='polyhaven'&&job.assetType==='hdris'||job.kind==='freestylized'&&job.assetType==='skybox';
+  const materialJob=job.kind==='ambientcg'&&(!job.assetType||job.assetType==='textures')||job.kind==='polyhaven'&&job.assetType==='textures'||job.kind==='freestylized'&&(job.assetType==='textures'||job.assetType==='smart');
+  const hdriJob=['polyhaven','ambientcg'].includes(job.kind)&&job.assetType==='hdris'||job.kind==='freestylized'&&job.assetType==='skybox';
   const result=await (materialJob?this.materialImporter(filePath,{blender:this.blender}):hdriJob?this.hdriImporter(filePath,{blender:this.blender}):this.blenderImporter(filePath,{blender:this.blender}));
   this.log(job,materialJob?`已把材质导入已打开的 Blender：${result.name||''}`:hdriJob?'已把 HDRI 设为已打开 Blender 的世界环境':`已发送到已打开的 Blender：${result.file}`);
   return result;
@@ -191,8 +199,8 @@ export class DownloadManager{
   if(!job)throw Error('任务不存在');
   if(job.state!=='saved'||!exists(job.filePath||''))throw Error('这个资产还没有保存到本地，请先导出到本地再发送到 Blender。');
   // 与 sendToBlender 用同一条判定，否则材质任务的消息会写成「已发送模型文件」。
-  const materialJob=job.kind==='ambientcg'||job.kind==='polyhaven'&&job.assetType==='textures'||job.kind==='freestylized'&&(job.assetType==='textures'||job.assetType==='smart');
-  const hdriJob=job.kind==='polyhaven'&&job.assetType==='hdris'||job.kind==='freestylized'&&job.assetType==='skybox';
+  const materialJob=job.kind==='ambientcg'&&(!job.assetType||job.assetType==='textures')||job.kind==='polyhaven'&&job.assetType==='textures'||job.kind==='freestylized'&&(job.assetType==='textures'||job.assetType==='smart');
+  const hdriJob=['polyhaven','ambientcg'].includes(job.kind)&&job.assetType==='hdris'||job.kind==='freestylized'&&job.assetType==='skybox';
   try{
    const result=await this.sendToBlender(job);
    const label=materialJob?`已导入材质到 Blender：${result.name||''}`:hdriJob?'已把 HDRI 设为 Blender 世界环境':`已发送到 Blender：${path.basename(result.file||job.filePath||'')}`;
@@ -226,6 +234,12 @@ export class DownloadManager{
   this.settings=next;this.save();this.pump();return this.snapshot();
  }
  async enqueue(input,{folder=this.settings.folder}={}){
+  if(input.authorized===true){
+   // Recover missing records, respecting explicit removals; serialize concurrent scans.
+   while(this.recovery)await this.recovery;
+   this.recovery=recoverDownloads(this.jobs,[folder],{dismissed:this.dismissedDownloads});
+   try{if(await this.recovery)this.save();}finally{this.recovery=null;}
+  }
   if(input.authorized!==true)throw Error('请先确认拥有模型下载和使用授权');
   const kind=input.kind===undefined?'sketchfab':String(input.kind);
   if(!JOB_KINDS.has(kind))throw Error('不支持的任务类型');
@@ -237,20 +251,24 @@ export class DownloadManager{
   if(polyMixed)throw Error('Poly Haven 的模型、材质和 HDRI 请分批下载');
   const noun=kind==='artstation'?' ArtStation 作品':kind==='images'?'资产图片':polyHdri?' Poly Haven HDRI':polyMaterial?' Poly Haven 材质':kind==='polyhaven'?' Poly Haven 模型':kind==='ambientcg'?' ambientCG 材质':kind==='polypizza'?' Poly Pizza 模型':kind==='kenney'?' Kenney 资源包':kind==='freestylized'?' FreeStylized 资产':'模型';
   if(!Array.isArray(input.models)||!input.models.length||input.models.length>batch)throw Error(`每批最多添加 ${batch} 个${noun}`);
+  if(kind==='ambientcg'&&new Set(input.models.map(m=>m.sourceType||'material')).size>1)throw Error('ambientCG 不同类型的资产请分批下载');
   if(this.storageError)throw Error(this.storageError);if(this.jobs.length>=500)throw Error('任务记录已达 500 条，请清理已结束记录');
   const requestedOptions=openInBlender?{...input.options,output:'folder',format:'fbx'}:input.options;
   const options=kind==='images'?imageOptions(requestedOptions):kind==='ambientcg'||polyMaterial?materialOptions(requestedOptions):polyHdri?{output:'folder',resolution:MATERIAL_RESOLUTIONS.has(requestedOptions?.resolution)?requestedOptions.resolution:'2K',textureFormat:'HDR'}:kind==='polypizza'||kind==='kenney'?{output:'folder',format:'glb'}:kind==='freestylized'?{output:'folder',format:'glb',resolution:MATERIAL_RESOLUTIONS.has(requestedOptions?.resolution)?requestedOptions.resolution:'2K'}:exportOptions(kind==='artstation'?{...requestedOptions,packMode:'glb'}:requestedOptions);
+  if(kind==='ambientcg'&&input.models.every(m=>m.sourceType==='substance'))options.textureFormat='SBSAR';
   const models=input.models.map(m=>modelSnapshot(m,kind)),added=[],duplicates=[],opened=[];
   // 已下载的重复项要「顺手送进 Blender」时，导入可能要几十秒，不能在循环里串行等：
   // 先把请求排进队列，循环结束后统一收结果，避免一个卡住把整批入队都拖住。
   const reopen=[];
   if(this.jobs.length+models.length>500)throw Error('任务记录将超过 500 条，请清理历史后重试');
-  for(const m of models){const same=j=>j.kind===m.kind&&j.uid===m.uid&&optionKey(j.options)===optionKey(options)&&sameFolder(j.downloadDir,folder);const previous=this.jobs.find(j=>same(j)&&(ACTIVE.has(j.state)||WAITING.has(j.state)))||this.jobs.findLast(j=>same(j)&&j.state==='saved'&&exists(j.filePath||''))||this.jobs.findLast(same);
+  for(const m of models){const same=j=>j.kind===m.kind&&j.uid===m.uid&&(optionKey(j.options)===optionKey(options)||recoveredOptionsMatch(j,options))&&sameFolder(storageRoot(j),folder);const previous=this.jobs.find(j=>same(j)&&(ACTIVE.has(j.state)||WAITING.has(j.state)))||this.jobs.findLast(j=>same(j)&&j.state==='saved'&&exists(j.filePath||''))||this.jobs.findLast(same);
    if(previous&&(ACTIVE.has(previous.state)||WAITING.has(previous.state)||previous.state==='saved'&&exists(previous.filePath||'')&&!input.force)){
     if(openInBlender&&previous.state==='saved'&&exists(previous.filePath||''))reopen.push({uid:m.uid,job:previous});
     duplicates.push({uid:m.uid,name:m.name,state:previous.state});continue;
    }
-   const job={...m,id:randomUUID(),state:'queued',stage:'queued',message:openInBlender?'等待下载并发送到 Blender':'等待后台处理',options,downloadDir:folder,retryLimit:this.settings.retryLimit,attempts:0,retryCount:0,authorizedAt:Date.now(),createdAt:Date.now(),openInBlender,logs:[]};this.jobs.push(job);added.push(job.id);
+   const source=input.models.find(model=>model.uid===m.uid)||m;
+   const storageCategory=assetStorageCategory({...source,...m});
+   const job={...m,id:randomUUID(),state:'queued',stage:'queued',message:openInBlender?'等待下载并发送到 Blender':'等待后台处理',options,downloadRoot:folder,storageCategory,downloadDir:path.join(folder,storageCategory),retryLimit:this.settings.retryLimit,attempts:0,retryCount:0,authorizedAt:Date.now(),createdAt:Date.now(),openInBlender,logs:[]};this.jobs.push(job);added.push(job.id);
   }
   for(const {uid,job} of reopen){
    try{opened.push({uid,id:job.id,...await this.sendToBlender(job)});}
@@ -268,10 +286,12 @@ export class DownloadManager{
    else if(WAITING.has(j.state))this.update(j,{state:'cancelled',finishedAt:Date.now(),message:'已取消排队'});else throw Error('此任务已结束');
   }else if(action==='hold'){if(!['queued','retry_wait'].includes(j.state))throw Error('只能暂停尚未开始的任务；转换中请使用取消');this.update(j,{state:'held',message:'已暂停排队'});
   }else if(action==='resume'){if(j.state!=='held')throw Error('任务不是暂停排队状态');this.update(j,{state:'queued',message:'等待后台处理'});
-  }else if(action==='retry'){if(!['failed','cancelled','interrupted'].includes(j.state))throw Error('此任务不能重试');if(this.jobs.some(x=>x.id!==id&&x.kind===j.kind&&x.uid===j.uid&&sameFolder(x.downloadDir,j.downloadDir)&&optionKey(x.options)===optionKey(j.options)&&(ACTIVE.has(x.state)||WAITING.has(x.state))))throw Error('已有相同模型的任务正在处理或等待');if(this.jobs.some(x=>x.id!==id&&x.kind===j.kind&&x.uid===j.uid&&sameFolder(x.downloadDir,j.downloadDir)&&optionKey(x.options)===optionKey(j.options)&&x.state==='saved'&&exists(x.filePath||'')))throw Error('此资产已下载且文件仍存在，无需重试');this.log(j,'手动重试：从头下载，沿用任务原目录和导出设置');this.update(j,{state:'queued',message:'等待重新下载',retryCount:0,nextAttemptAt:null,finishedAt:null,warning:null,bytesWritten:0,totalBytes:null,verification:null});
+  }else if(action==='retry'){if(!['failed','cancelled','interrupted'].includes(j.state))throw Error('此任务不能重试');const same=x=>x.id!==id&&x.kind===j.kind&&x.uid===j.uid&&sameFolder(storageRoot(x),storageRoot(j))&&(optionKey(x.options)===optionKey(j.options)||recoveredOptionsMatch(x,j.options));if(this.jobs.some(x=>same(x)&&(ACTIVE.has(x.state)||WAITING.has(x.state))))throw Error('已有相同模型的任务正在处理或等待');if(this.jobs.some(x=>same(x)&&x.state==='saved'&&exists(x.filePath||'')))throw Error('此资产已下载且文件仍存在，无需重试');this.log(j,'手动重试：从头下载，沿用任务原目录和导出设置');this.update(j,{state:'queued',message:'等待重新下载',retryCount:0,nextAttemptAt:null,finishedAt:null,warning:null,bytesWritten:0,totalBytes:null,verification:null});
   }else if(action==='remove'){// Terminal state is the real guard: run() never writes state again afterwards,
    // and the worker entry can still linger for a tick after a job finishes.
-   if(!terminal.has(j.state))throw Error('请先取消任务再移除记录');this.jobs=this.jobs.filter(x=>x.id!==id);this.save();
+   if(!terminal.has(j.state))throw Error('请先取消任务再移除记录');
+   if(j.filePath)this.dismissedDownloads.add(canonicalPath(j.filePath));
+   this.jobs=this.jobs.filter(x=>x.id!==id);this.save();
   }else throw Error('不支持的任务操作');this.pump();return this.snapshot();
  }
  batch(action,ids){if(!['cancel','retry','hold','resume','remove'].includes(action)||!Array.isArray(ids)||ids.length>500)throw Error('批量操作参数无效');const errors=[];for(const id of ids){try{this.action(id,action);}catch(e){errors.push({id,error:e.message});}}return {errors,...this.snapshot()};}
@@ -286,9 +306,9 @@ export class DownloadManager{
   // An artwork with no embedded Marmoset scene has no mesh to convert: its runner downloads the
   // author's images instead. That changes two things downstream — there is no GLB to turn into an
   // FBX, and there is no scene to send to Blender — so both are decided once, here.
-   const materialJob=j.kind==='ambientcg'||j.kind==='polyhaven'&&j.assetType==='textures'||j.kind==='freestylized'&&(j.assetType==='textures'||j.assetType==='smart');
-   const hdriJob=j.kind==='polyhaven'&&j.assetType==='hdris'||j.kind==='freestylized'&&j.assetType==='skybox';
-   const bundleJob=materialJob||hdriJob||j.kind==='kenney'||j.kind==='freestylized';
+   const materialJob=j.kind==='ambientcg'&&(!j.assetType||j.assetType==='textures')||j.kind==='polyhaven'&&j.assetType==='textures'||j.kind==='freestylized'&&(j.assetType==='textures'||j.assetType==='smart');
+   const hdriJob=['polyhaven','ambientcg'].includes(j.kind)&&j.assetType==='hdris'||j.kind==='freestylized'&&j.assetType==='skybox';
+   const bundleJob=j.kind==='ambientcg'||materialJob||hdriJob||j.kind==='kenney'||j.kind==='freestylized';
    const imageBundle=j.kind==='images'||j.kind==='artstation'&&j.hasMarmoset===false||bundleJob;
   const folderOutput=j.options.output==='folder',wantFbx=!imageBundle&&j.options.format==='fbx';
   // Both folder delivery and FBX conversion need the loose files, so the staging tree is a

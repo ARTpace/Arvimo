@@ -161,9 +161,9 @@ export const UNIFIED_SORTS=[
 ];
 /** 全部平台的范围按资产类型收，不复用 Sketchfab 的「可下载 / 有动画 / 精选」。空选 = 不限类型。 */
 export const ASSET_KINDS=[
- {id:'models',label:'模型',feeds:['search','art','polypizza'],polyhaven:'models',freestylized:'models'},
- {id:'textures',label:'材质',feeds:['ambientcg'],polyhaven:'textures',freestylized:'textures'},
- {id:'hdris',label:'HDRI',feeds:[],polyhaven:'hdris',freestylized:'skybox'},
+ {id:'models',label:'模型',feeds:['search','art','polypizza','ambientcg'],ambientcg:'3d-model,terrain',polyhaven:'models',freestylized:'models'},
+ {id:'textures',label:'材质',feeds:['ambientcg'],ambientcg:'material,substance',polyhaven:'textures',freestylized:'textures'},
+ {id:'hdris',label:'HDRI',feeds:['ambientcg'],ambientcg:'hdri,hdri-element',polyhaven:'hdris',freestylized:'skybox'},
  {id:'packs',label:'资源包',feeds:['kenney'],polyhaven:'',freestylized:'packs'},
 ];
 export function kindAllows(kinds,mode,type){
@@ -178,5 +178,6 @@ export function kindAllows(kinds,mode,type){
 export function kindType(kinds,field){
  const picked=ASSET_KINDS.filter(item=>(kinds||[]).includes(item.id)&&item[field]);
  const types=[...new Set(picked.map(item=>item[field]))];
+ if(field==='ambientcg')return types.join(',');
  return types.length===1?types[0]:'';
 }

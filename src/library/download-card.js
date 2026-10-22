@@ -29,7 +29,7 @@ export const formatBadge=t=>{
  return `${content} · ${format} ${delivery}`;
 };
 
-export function createTaskCard({esc,icon}){
+export function createTaskCard({esc,icon,visitor=false}){
  const bar=view=>view.percent!==null
   ?`<progress max="100" value="${view.percent}" aria-label="${esc(view.label)}"></progress>`
   :view.active?`<progress aria-label="${esc(view.label)}"></progress>`:'<div class="progress-rest"></div>';
@@ -57,7 +57,7 @@ export function createTaskCard({esc,icon}){
   out.push('<p class="progress-hint">资源按需获取，接收与转换阶段可能交替。</p>');
   return out;
  };
- const pathLine=t=>t.state==='saved'
+ const pathLine=t=>visitor?'<p class="job-path">任务由主机处理，完成后自动取回到此电脑的保存位置。</p>':t.state==='saved'
   ?`<p class="job-path" title="${esc(t.filePath)}">${icon('folder')}${esc(t.filePath)}</p>`
   :`<p class="job-path" title="${esc(t.downloadDir)}">${icon('folder')}保存到：${esc(t.downloadDir)}</p>`;
  // An image bundle is verified against its own manifest, so the shield line names images, not meshes.
@@ -79,13 +79,14 @@ export function createTaskCard({esc,icon}){
   return parts.join('');
  };
  const actions=(t,{busy,done,canCancel})=>[
-  done&&t.fileExists?`<button data-dm-action="reveal" data-id="${t.id}">${icon('folder')}文件夹</button>`:'',
-  done&&t.fileExists&&!t.verification?.folder?`<a href="/api/downloads/tasks/${t.id}/file" class="task-link">另存</a>`:'',
+  !visitor&&done&&t.fileExists?`<button data-dm-action="reveal" data-id="${t.id}">${icon('folder')}文件夹</button>`:'',
+  done&&t.fileExists?`<button data-dm-action="download-local" data-id="${t.id}" title="保存到当前浏览器所在电脑；文件夹会打包为 ZIP（最大 2GB）">下载到我的电脑</button>`:'',
   canCancel?`<button data-dm-action="cancel" data-id="${t.id}">取消</button>`:'',
   ['queued','retry_wait'].includes(t.state)?`<button data-dm-action="hold" data-id="${t.id}">暂停</button>`:'',
   t.state==='held'?`<button data-dm-action="resume" data-id="${t.id}">继续</button>`:'',
   TERMINAL.has(t.state)&&!done?`<button data-dm-action="retry" data-id="${t.id}">重试</button>`:'',
-  !busy&&!WAITING.has(t.state)?`<button data-dm-action="remove" data-id="${t.id}" title="只删除记录，不删除文件">移除</button>`:''
+  // 记录存在主机上，访客删了主机那边也没了 —— 同「清理记录」一起收掉，只留取消/暂停这类本机动作。
+  !visitor&&!busy&&!WAITING.has(t.state)?`<button data-dm-action="remove" data-id="${t.id}" title="只删除记录，不删除文件">移除</button>`:''
  ].join('');
  return (t,{selected,openDetails,openLog}={})=>{
   const busy=ACTIVE.has(t.state),done=t.state==='saved';

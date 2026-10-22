@@ -3,6 +3,15 @@ import {createLibraryStorage} from './library-storage.mjs';
 import fs from 'node:fs/promises';
 import {createReadStream,writeSync} from 'node:fs';
 import {DownloadManager} from './downloads.mjs';
+import {browseFolders} from './folder-dialog.mjs';
+import {listLocalFolder,resolveLocalFile,localMime,parseRange} from './local-browse.mjs';
+import {scanLibraryPackages} from './local-assets.mjs';
+import {registerPackage,patchPackageMeta} from './asset-meta.mjs';
+import {findFfmpeg,probeMedia,transcodePlan,streamMp4} from './video-transcode.mjs';
+import {thumbFor} from './thumb-cache.mjs';
+import {streamFolderZip} from './zip-stream.mjs';
+import {createLanSharing} from './lan-sharing.mjs';
+import {packFolderDownload} from './folder-archive.mjs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { tmpdir } from 'node:os';
@@ -18,6 +27,7 @@ import {polypizzaSearch} from './polypizza.mjs';
 import {kenneySearch,kenneyCategories} from './kenney.mjs';
 import {freestylizedSearch,freestylizedCategories,freestylizedType} from './freestylized.mjs';
 import {freestylizedPreview,freestylizedPreviewFile} from './freestylized-preview.mjs';
+import {createSubstanceBridge} from './substance-engine.mjs';
 import {ambientcgSearch,ambientcgViewer,ambientcgCategories} from './ambientcg.mjs';
 import { curlImpersonateInfo } from './curl-impersonate.mjs';
 import {browserStatus,startBrowserInstallJob,browserInstallJob} from './browser-runtime.mjs';
@@ -89,13 +99,32 @@ const types={'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=
 // releases.pbr.one is ambientCG's official embeddable PBR material viewer — the same one their
 // asset pages embed; the texture URLs ride in the URL fragment, so nothing else to allow.
 const FRAME_HOSTS=['https://sketchfab.com','https://*.artstation.com','https://artstation.com','https://releases.pbr.one'];
-const CONTENT_SECURITY_POLICY=`default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' blob: data:; frame-src ${FRAME_HOSTS.join(' ')}; object-src 'none'; base-uri 'none'; frame-ancestors 'none'`;
+const CONTENT_SECURITY_POLICY=`default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' blob: data:; frame-src 'self' ${FRAME_HOSTS.join(' ')}; object-src 'none'; base-uri 'none'; frame-ancestors 'none'`;
 const assets=new Set(['/','/index.html','/app.js','/app.css','/engine.js','/favicon.svg','/worker.html','/splash.html','/splash.js','/mascot.png']);
 function json(res,status,data){res.writeHead(status,{'Content-Type':'application/json; charset=utf-8'});res.end(JSON.stringify(data));}
 /** 预览条目是解出来的原始字节（FBX / PNG / HDR），不是 JSON，也不该每次回源。 */
 function binary(res,status,data,type){res.writeHead(status,{'Content-Type':type,'Content-Length':data.length,'Cache-Control':'private, max-age=3600'});res.end(data);}
-const PREVIEW_MIMES={'.png':'image/png','.jpg':'image/jpeg','.jpeg':'image/jpeg','.webp':'image/webp','.hdr':'image/vnd.radiance','.exr':'image/x-exr','.gltf':'model/gltf+json','.glb':'model/gltf-binary'};
+const PREVIEW_MIMES={'.png':'image/png','.jpg':'image/jpeg','.jpeg':'image/jpeg','.webp':'image/webp','.hdr':'image/vnd.radiance','.exr':'image/x-exr','.gltf':'model/gltf+json','.glb':'model/gltf-binary','.fbx':'model/fbx','.obj':'model/obj','.mtl':'text/plain; charset=utf-8','.stl':'model/stl','.ply':'model/ply','.3mf':'model/3mf'};
 const previewMime=name=>PREVIEW_MIMES[path.extname(String(name||'')).toLowerCase()]||'application/octet-stream';
+/** 本地文件流只认「这个进程里真的被索引过」的根目录。
+ *  <img>/<video>/<iframe> 直接请求这个地址，带不了自定义头，所以不能靠 x-sfx-local 鉴权；
+ *  改成白名单：没在前端点过「索引这个文件夹」，就别想读到这台机器上的任意路径。 */
+const localRoots=new Set();
+const allowLocalRoot=folder=>{if(folder)localRoots.add(path.resolve(folder));};
+const isLocalRootAllowed=folder=>{try{return localRoots.has(path.resolve(String(folder||'')));}catch{return false;}};
+/** 预览用的读文件接口。支持 Range —— 视频/音频拖进度需要 206，否则只能从头播。 */
+async function streamLocalFile(req,res,target){
+ const headers={'Content-Type':localMime(target.file),'Accept-Ranges':'bytes','Cache-Control':'private, max-age=60'};
+ const range=parseRange(req.headers.range,target.bytes);
+ if(range?.invalid){res.writeHead(416,{...headers,'Content-Range':`bytes */${target.bytes}`});return res.end();}
+ if(range){
+  const {start,end}=range;
+  res.writeHead(206,{...headers,'Content-Range':`bytes ${start}-${end}/${target.bytes}`,'Content-Length':end-start+1});
+  return pipeline(createReadStream(target.file,{start,end}),res);
+ }
+ res.writeHead(200,{...headers,'Content-Length':target.bytes});
+ return pipeline(createReadStream(target.file),res);
+}
 async function body(req){let text='';for await(const chunk of req){text+=chunk;if(Buffer.byteLength(text)>65536)throw new Error('请求过大');}try{return JSON.parse(text);}catch{throw new Error('无效的 JSON 请求');}}
 /** Ask for each candidate in order and keep the first response that is not a failure. When every
  *  candidate fails the last attempt is handed back, so the caller still reports the real status. */
@@ -113,16 +142,15 @@ export function createLibraryServer({scan=scanPage,search=searchPage,open=openPu
   // 一个进程同时只会跑一个服务端实例，所以这里直接换掉模块级那一份。
   if(cacheDir)httpCache=createResponseCache(cacheDir);
   const ai=createAIService({file:path.join(resolveDataDir(root).dir,'ai-settings.json')});
+  const substance=createSubstanceBridge();
   const libraryStorage=createLibraryStorage(downloads?.dataDir||resolveDataDir(root).dir,downloads);
+  const lan=createLanSharing({file:path.join(downloads?.dataDir||resolveDataDir(root).dir,'lan-sharing.json')});
   return http.createServer(async(req,res)=>{
     res.setHeader('X-Content-Type-Options','nosniff');res.setHeader('Referrer-Policy','no-referrer');
     res.setHeader('Cache-Control','no-store');
-    const allowedHosts=new Set([`127.0.0.1:${req.socket.localPort}`,`localhost:${req.socket.localPort}`]);
-    if(!allowedHosts.has(req.headers.host))return json(res,403,{error:'仅允许从本机地址访问此工作台'});
-    const origin=req.headers.origin;
-    if((origin&&!Array.from(allowedHosts).some(host=>origin===`http://${host}`))||req.headers['sec-fetch-site']==='cross-site')return json(res,403,{error:'禁止跨站请求'});
     const controller=new AbortController();req.on('aborted',()=>controller.abort());res.on('close',()=>{if(!res.writableEnded)controller.abort();});
     try {
+      if(await lan.handle(req,res))return;
       const u=new URL(req.url,`http://${req.headers.host}`);
       if(u.pathname==='/api/library-state'){
         if(req.headers['x-sfx-local']!=='1')return json(res,403,{error:'缺少本地请求标识'});
@@ -189,16 +217,184 @@ export function createLibraryServer({scan=scanPage,search=searchPage,open=openPu
         }
         return json(res,404,{error:'依赖接口不存在'});
       }
+      // 资产库自己的目录里有什么，就是资产库里有什么：这些根是后台服务自己的下载目录与
+      // 各任务的下载根，不是用户随手传进来的路径，所以不需要「本地请求标识」；取文件那条
+      // 仍然只认扫描时登记过的根，别的路径一律 403。
+      if(u.pathname==='/api/library/scan'){
+        if(req.method!=='POST')return json(res,405,{error:'只支持 POST'});
+        if(!downloads)return json(res,503,{error:'后台下载服务未启动'});
+        const roots=[...new Set([downloads.defaultFolder,...downloads.jobs.map(job=>job.downloadRoot)].filter(Boolean))];
+        // 已经登记成下载任务的条目有自己的卡片，这里只补「资产库原本看不见的那部分」。
+        const claimed=downloads.jobs.map(job=>job.filePath).filter(Boolean).map(file=>path.resolve(file));
+        // 以包为单位扫描：目录里有 info.json 就算一个资产，整棵子树归它，不再逐文件出卡片。
+        const scanned=await scanLibraryPackages({roots});
+        for(const root of roots)allowLocalRoot(root);
+        const files=scanned.files.filter(file=>{
+          // 只收素材：readme、日志、脚本、LICENSE 这些是目录里的附带文件，不是资产。
+          if(file.kind==='other'||file.kind==='document')return false;
+          const absolute=path.resolve(file.root,file.rel);
+          return !claimed.some(entry=>absolute===entry||absolute.startsWith(entry+path.sep));
+        });
+        return json(res,200,{roots,packages:scanned.packages,files,truncated:scanned.truncated});
+      }
+      // 登记：给「用户自己拷进来的素材包」补一个 info.json（uid + 事实字段 + 包统计）。
+      // 只认扫描结果里真实存在的包根，前端传不了任意路径；已有 info.json 的包一律不改写。
+      if(u.pathname==='/api/library/register'){
+        if(req.method!=='POST')return json(res,405,{error:'只支持 POST'});
+        if(!downloads)return json(res,503,{error:'后台下载服务未启动'});
+        const input=await body(req);
+        const root=String(input?.root||''),rel=String(input?.rel||'');
+        if(!root||!isLocalRootAllowed(root))return json(res,403,{error:'请先索引这个文件夹，再登记里面的资产'});
+        const scanned=await scanLibraryPackages({roots:[root]});
+        const pkg=scanned.packages.find(item=>item.root===root&&item.rel===rel);
+        if(!pkg)return json(res,404,{error:'没找到这个资产包，先刷新一下资产库'});
+        if(pkg.type==='zip')return json(res,400,{error:'ZIP 包内部写不进 info.json，先解压成文件夹再登记'});
+        try{
+          const result=await registerPackage(path.join(root,...rel.split('/')),pkg);
+          return json(res,200,{ok:true,skipped:result.skipped,uid:result.uid,meta:result.meta});
+        }catch(error){
+          const code=String(error?.code||'');
+          const message=/EACCES|EPERM/.test(code)?'这个文件夹没有写入权限（只读或被占用），info.json 写不进去'
+           :/ENOSPC/.test(code)?'磁盘空间不足，info.json 写不进去'
+           :`登记失败：${error.message}`;
+          return json(res,500,{error:message});
+        }
+      }
+      // 资产信息补写：AI 标签与用户评分/备注异步落进 info.json（包即真相，浏览器状态仍是主存储）。
+      // 与登记同一条校验链：只认扫描结果里的包根、拒绝 ZIP、已有 info.json 才准写。
+      if(u.pathname==='/api/local/meta-patch'){
+        if(req.method!=='POST')return json(res,405,{error:'只支持 POST'});
+        if(!downloads)return json(res,503,{error:'后台下载服务未启动'});
+        const input=await body(req);
+        const root=String(input?.root||''),rel=String(input?.rel||'');
+        if(!root||!isLocalRootAllowed(root))return json(res,403,{error:'请先索引这个文件夹，再写入资产信息'});
+        const scanned=await scanLibraryPackages({roots:[root]});
+        const pkg=scanned.packages.find(item=>item.root===root&&item.rel===rel);
+        if(!pkg)return json(res,404,{error:'没找到这个资产包，先刷新一下资产库'});
+        if(pkg.type==='zip')return json(res,400,{error:'ZIP 包内部写不进 info.json，先解压成文件夹'});
+        try{
+          const meta=await patchPackageMeta(path.join(root,...rel.split('/')),{ai:input?.ai,user:input?.user});
+          if(!meta)return json(res,409,{error:'这个资产还没有登记（缺 info.json），先登记再写信息'});
+          return json(res,200,{ok:true,meta});
+        }catch(error){
+          const code=String(error?.code||'');
+          const message=/EACCES|EPERM/.test(code)?'这个文件夹没有写入权限（只读或被占用），info.json 写不进去'
+           :/ENOSPC/.test(code)?'磁盘空间不足，info.json 写不进去'
+           :`写入失败：${error.message}`;
+          return json(res,500,{error:message});
+        }
+      }
+      // 资产包整包下载：点卡片上的下载键，把整个素材文件夹现场打包成 ZIP 推给浏览器。
+      // 不落临时文件（320MB 的 PSD 包落一份再删等于白写一次盘），也不改磁盘上的任何东西。
+      if(u.pathname==='/api/local/package-zip'&&req.method==='GET'){
+        const root=u.searchParams.get('root'),rel=String(u.searchParams.get('rel')||'');
+        if(!root||!isLocalRootAllowed(root))return json(res,403,{error:'请先索引这个文件夹，再下载里面的资产'});
+        let pkg=null;
+        try{
+          const scanned=await scanLibraryPackages({roots:[root]});
+          pkg=scanned.packages.find(item=>item.root===root&&item.rel===rel);
+        }catch(error){
+          return json(res,500,{error:`读目录失败：${error.message}`});
+        }
+        if(!pkg)return json(res,404,{error:'没找到这个资产包，先刷新一下资产库'});
+        // ZIP 包本身就是压缩包，直接发原文件，没必要再套一层。
+        if(pkg.type==='zip'){
+          let target=null;
+          try{target=resolveLocalFile({root,rel});}
+          catch(e){return json(res,400,{error:e.message});}
+          const zipName=target.file.split(/[\\/]/).pop()||'asset.zip';
+          // 不用 streamLocalFile：它只给预览头（inline + octet-stream），下载要 attachment 才有文件名。
+          res.writeHead(200,{
+            'Content-Type':'application/zip',
+            'Content-Length':target.bytes,
+            'Content-Disposition':`attachment; filename="asset.zip"; filename*=UTF-8''${encodeURIComponent(zipName)}`,
+            'Cache-Control':'no-store',
+          });
+          return pipeline(createReadStream(target.file),res).catch(()=>{try{res.destroy();}catch{/* 已经断了 */}});
+        }
+        const dir=path.resolve(root,...rel.split('/').filter(Boolean));
+        const base=path.resolve(root);
+        if(dir!==base&&!dir.startsWith(base+path.sep))return json(res,400,{error:'路径不合法'});
+        const fileName=`${(pkg.title||rel.split('/').pop()||'asset').replace(/[\\/:*?"<>|]/g,'_')}.zip`;
+        try{
+          await streamFolderZip(res,{dir,name:fileName});
+        }catch(error){
+          // 头已经发出去了就只能截断，浏览器会把它当失败下载；没发出去才回 JSON。
+          if(!res.headersSent)return json(res,500,{error:`打包失败：${error.message}`});
+          try{res.destroy();}catch{/* 已经断了 */ }
+        }
+        return;
+      }
+      if(u.pathname==='/api/local/file'&&req.method==='GET'){
+        const root=u.searchParams.get('root');
+        if(!isLocalRootAllowed(root))return json(res,403,{error:'请先索引这个文件夹，再预览里面的文件'});
+        let target=null;
+        try{target=resolveLocalFile({root,rel:u.searchParams.get('rel')});}
+        catch(e){return json(res,400,{error:e.message});}
+        return streamLocalFile(req,res,target);
+      }
+      // 浏览器放不了的视频容器在这里转成 fMP4 再发：先拷流（换容器不换编码，近乎瞬时），
+      // 编码也不认才重编码。没有 ffmpeg 就明确回 501，让前端能说出「装个 ffmpeg」而不是空屏。
+      // 浏览器显示不了的图片格式（PSD）在这里转成 PNG 再发：素材包里常是几十张 2048 的
+      // .psd，让前端逐张下载再解码等于搬几百 MB，缩略图这一层就转了才合理。其它格式原样透传。
+      if(u.pathname==='/api/local/thumb'&&req.method==='GET'){
+        const root=u.searchParams.get('root');
+        if(!isLocalRootAllowed(root))return json(res,403,{error:'请先索引这个文件夹，再预览里面的文件'});
+        let target=null;
+        try{target=resolveLocalFile({root,rel:u.searchParams.get('rel')});}
+        catch(e){return json(res,400,{error:e.message});}
+        const width=Math.min(2048,Math.max(64,Number(u.searchParams.get('w'))||512));
+        try{
+          const out=await thumbFor(target.file,{width});
+          res.writeHead(200,{'Content-Type':'image/png','Content-Length':out.buffer.length,'Cache-Control':'private,max-age=604800'});
+          return res.end(out.buffer);
+        }catch(error){
+          // PSD 生成不了就是生成不了，直接说清楚，退回原文件只会得到一张破图；
+          // 其它格式（SVG / 没装 ffmpeg 的 jpg）退回原文件，缩略图位置上显示原图，功能不断。
+          if(/\.psd$/i.test(target.file))return json(res,415,{error:`缩略图生成失败：${error.message}`});
+          return streamLocalFile(req,res,target);
+        }
+      }
+      if(u.pathname==='/api/local/play'&&req.method==='GET'){
+        const root=u.searchParams.get('root');
+        if(!isLocalRootAllowed(root))return json(res,403,{error:'请先索引这个文件夹，再预览里面的文件'});
+        let file=null;
+        // resolveLocalFile 返回的是 {file,bytes,rel}，交给 ffmpeg 的必须是 file 这个绝对路径。
+        try{file=resolveLocalFile({root,rel:u.searchParams.get('rel')}).file;}
+        catch(e){return json(res,400,{error:e.message});}
+        const ffmpeg=findFfmpeg();
+        if(!ffmpeg)return json(res,501,{error:'没找到 ffmpeg，装一个或把它放进 vendor/ffmpeg/bin 才能播这个容器'});
+        const probe=probeMedia(ffmpeg,file);
+        const plan=transcodePlan(probe);
+        if(u.searchParams.get('probe')==='1'){
+          return json(res,200,{available:true,plan,codecs:{video:probe?.video?.codec_name||null,audio:probe?.audio?.codec_name||null}});
+        }
+        return streamMp4({res,file,ffmpeg,plan});
+      }
+      // 桥接插件本体：主机装过的那份只对主机的 Blender 生效，局域网访客要装到自己电脑上，
+      // 所以这份文件得能被访客下载（登录态由 lan-sharing 把关，这里只管发文件）。
+      if(u.pathname==='/api/lan/blender-addon'&&req.method==='GET'){
+        const bytes=await fs.readFile(path.join(root,'server/blender-bridge.py'));
+        res.writeHead(200,{'Content-Type':'text/x-python; charset=utf-8','Content-Length':bytes.length,'Content-Disposition':'attachment; filename="assetvault_blender_bridge.py"','Cache-Control':'no-store'});
+        res.end(bytes);return;
+      }
       if(u.pathname.startsWith('/api/downloads')){
         if(!downloads)return json(res,503,{error:'后台下载服务未启动'});
         const match=u.pathname.match(/^\/api\/downloads\/tasks\/([a-f0-9-]{36})\/(action|file|reveal|send-blender)$/);
         if(match?.[2]==='file'&&req.method==='GET'){
-          const {job,path:file}=downloads.file(match[1]);const stat=await fs.stat(file);
-          // Folder exports are already loose files on disk — there is nothing to stream as a single
-          // download, and re-zipping a multi-GB tree in memory is not worth the risk.
-          if(!stat.isFile())return json(res,400,{error:'这是导出文件夹，请用“所在文件夹”打开'});
-          res.writeHead(200,{'Content-Type':'application/zip','Content-Length':stat.size,'Content-Disposition':`attachment; filename="model.zip"; filename*=UTF-8''${encodeURIComponent(job.filename)}`});
-          await pipeline(createReadStream(file),res);return;
+          const {job,path:file}=downloads.file(match[1]);let target=file,temp;
+          try{
+            const stat=await fs.lstat(file);
+            if(stat.isSymbolicLink())throw Error('不支持下载符号链接');
+            if(stat.isDirectory()){
+              temp=await fs.mkdtemp(path.join(tmpdir(),'assetvault-delivery-'));target=path.join(temp,'asset.zip');
+              await packFolderDownload(file,target,{signal:controller.signal});
+            }else if(!stat.isFile())throw Error('不支持下载此文件类型');
+            const size=(await fs.stat(target)).size,name=job.filename+(temp?'.zip':'');
+            res.writeHead(200,{'Content-Type':'application/zip','Content-Length':size,'Content-Disposition':`attachment; filename="model.zip"; filename*=UTF-8''${encodeURIComponent(name)}`});
+            await pipeline(createReadStream(target),res);
+          }finally{if(temp)await fs.rm(temp,{recursive:true,force:true});}
+          return;
         }
         if(req.headers['x-sfx-local']!=='1')return json(res,403,{error:'缺少本地请求标识'});
         // 启动器靠这份回答判断「正在跑的进程是不是这一版」——所以它必须原样来自能力契约，
@@ -211,8 +407,12 @@ export function createLibraryServer({scan=scanPage,search=searchPage,open=openPu
         if(req.method==='GET'&&u.pathname==='/api/downloads'){const snapshot=downloads.snapshot(),folderFlag=`${snapshot.folderStatus?.ok?1:0}:${snapshot.folderStatus?.code||''}`,etag=`"${downloads.instanceId}-${snapshot.revision}-${snapshot.jobs.map(j=>j.fileExists?1:0).join('')}-${snapshot.browserAvailable?1:0}-${snapshot.storageError?1:0}-${folderFlag}"`;res.setHeader('ETag',etag);if(req.headers['if-none-match']===etag){res.writeHead(304,{'Cache-Control':'no-store'});return res.end();}return json(res,200,snapshot);}
         if(req.method==='POST'){
           const input=await body(req);
-          if(u.pathname==='/api/downloads/tasks')return json(res,200,await downloads.enqueueWithFolder(input));
+          if(u.pathname==='/api/downloads/tasks'){
+            if(req.lanVisitor&&input.folder!==undefined)return json(res,403,{error:'访客不能指定主机下载目录'});
+            return json(res,200,await downloads.enqueueWithFolder(input));
+          }
           if(u.pathname==='/api/downloads/pick-folder')return json(res,200,await downloads.pickFolder(input));
+          if(u.pathname==='/api/downloads/browse-folders')return json(res,200,await browseFolders(input));
           if(u.pathname==='/api/downloads/settings')return json(res,200,await downloads.configure(input));
           if(u.pathname==='/api/downloads/blender-bridge/install')return json(res,200,downloads.startBlenderBridgeInstall());
           if(u.pathname==='/api/downloads/actions')return json(res,200,downloads.batch(input.action,input.ids));
@@ -318,9 +518,24 @@ export function createLibraryServer({scan=scanPage,search=searchPage,open=openPu
         if(req.method!=='POST')return json(res,405,{error:'方法不允许'});
         if(req.headers['x-sfx-local']!=='1')return json(res,403,{error:'缺少本地请求标识'});
         const input=await body(req);
-        return cachedJson(res,`ambientcg:${JSON.stringify(input)}`,SEARCH_CACHE_MS,()=>ambientcg(input,{signal:controller.signal,open}));
+        return cachedJson(res,`ambientcg:v2-types:${JSON.stringify(input)}`,SEARCH_CACHE_MS,()=>ambientcg(input,{signal:controller.signal,open}));
       }
       // 旧收藏卡片没有 viewerUrl：前端开预览时按 assetId 现取一次（ArtStation embedUrl 同款懒加载）。
+      if(req.method==='GET'&&u.pathname==='/api/substance/status'){
+        if(req.headers['x-sfx-local']!=='1')return json(res,403,{error:'缺少本地请求标识'});
+        return json(res,200,await substance.status());
+      }
+      if(req.method==='POST'&&(u.pathname==='/api/substance/open'||u.pathname==='/api/substance/input')){
+        if(req.headers['x-sfx-local']!=='1')return json(res,403,{error:'缺少本地请求标识'});
+        const input=await body(req);
+        const data=u.pathname.endsWith('/open')?await substance.open(input.file):await substance.setInput(input);
+        return json(res,200,data);
+      }
+      if(req.method==='GET'&&u.pathname==='/api/substance/image'){
+        if(req.headers['x-sfx-local']!=='1')return json(res,403,{error:'缺少本地请求标识'});
+        const {data,name}=await substance.readImage(u.searchParams.get('name'));
+        return binary(res,200,data,/\.jpe?g$/i.test(name)?'image/jpeg':'image/png');
+      }
       if(req.method==='GET'&&u.pathname==='/api/ambientcg/preview'){
         if(req.headers['x-sfx-local']!=='1')return json(res,403,{error:'缺少本地请求标识'});
         return json(res,200,{viewerUrl:await ambientcgPreview(u.searchParams.get('id'),{signal:controller.signal,open})});
@@ -328,7 +543,8 @@ export function createLibraryServer({scan=scanPage,search=searchPage,open=openPu
       // 材质分类侧栏：官方 facets 按资产数排序，前端只做一次缓存。
       if(req.method==='GET'&&u.pathname==='/api/ambientcg/categories'){
         if(req.headers['x-sfx-local']!=='1')return json(res,403,{error:'缺少本地请求标识'});
-        return cachedCategories(res,`ambientcg-cats:v2`,async()=>({categories:await ambientcgCats({signal:controller.signal,open})}));
+        const type=u.searchParams.get('type')||'material';
+        return cachedCategories(res,`ambientcg-cats:v3:${type}`,async()=>({categories:await ambientcgCats({signal:controller.signal,open,type})}));
       }
       if(['/api/scan','/api/search'].includes(u.pathname)&&req.method==='POST'){
         if(req.headers['x-sfx-local']!=='1')return json(res,403,{error:'缺少本地请求标识'});
@@ -403,8 +619,8 @@ if(process.argv[1]&&import.meta.url===pathToFileURL(path.resolve(process.argv[1]
   // 留痕：服务自己退出会写下这一行；日志里没有这一行却断了，就说明进程是被外部强杀的
   // （控制台被关闭、进程树被回收等），两种情况排查方向完全不同。
   process.on('exit',code=>{try{writeSync(1,`\n  [服务进程退出 code=${code}] ${new Date().toLocaleString()}\n`);}catch{}});
-  server.listen(port,'127.0.0.1',()=>{
-    const url=`http://127.0.0.1:${port}`;downloads.start(url);console.log(`\n  ASSETVAULT · 本地 3D 模型库\n  ${url}\n  仅本机访问。关闭此窗口将停止服务。\n`);
+  server.listen(port,'0.0.0.0',()=>{
+    const url=`http://127.0.0.1:${port}`;downloads.start(url);console.log(`\n  ASSETVAULT · 本地 3D 模型库\n  ${url}\n  局域网共享默认关闭，可在设置中开启。关闭此窗口将停止服务。\n`);
     // 打开的是启动画面而不是工作台：这个页面由本服务自己提供，跳转时端口一定在监听，
     // 不会出现「跳到打不开的地址」那种情况。
     if(process.argv.includes('--open')&&process.platform==='win32')execFile('cmd.exe',['/c','start','',`${url}/splash.html`],{windowsHide:true});

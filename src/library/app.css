@@ -542,13 +542,18 @@
    判断用类名而不是 :empty——#panel-filters 就是栽在 :empty 上的（标签之间的空白文本节点让 :empty 永不匹配）。 */
 .scan-status.idle{display:none}
 /* 卡片 meta 分两段：上行资产信息（标题 + 可选作者 + 许可），下行动作行（精度/下载/Blender/移除）。
-   许可与作者都可压缩省略，宽度全让给标题，标题永远优先完整显示。 */
-.card-meta{display:flex;align-items:center;gap:8px;padding:10px 13px;flex-wrap:nowrap}
+   许可收成一枚 ? 键：全称文案会把标题和作者一起挤成省略号，两样都读不全。 */
+.card-meta{display:flex;align-items:center;gap:9px;padding:10px 13px;flex-wrap:nowrap}
 .card-meta .card-title{flex:1 1 auto;min-width:0;width:auto;overflow:hidden}
-.card-byline{flex:0 1 auto;max-width:24%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#788696;font-size:9px}
-.card-meta .card-license{flex:0 1 auto;min-width:0;padding:0;justify-content:flex-end;gap:6px}
+/* 作者常带 .asset-author（继承字体），这条要压过 `.asset-author{font:inherit}`，
+   否则作者名会跟标题同号同色，两段文字糊成一串。 */
+.card-meta .card-byline{flex:0 1 auto;min-width:0;max-width:42%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#768798;font-size:10px;font-weight:400;line-height:1.5;letter-spacing:0}
+.card-meta .card-license{flex:0 0 auto;min-width:0;padding:0;justify-content:flex-end;gap:6px}
 .card-meta .license-tag{flex-shrink:0}
 .card-meta .license-brief{max-width:92px}
+.card-meta .license-hint{display:grid;place-items:center;width:15px;height:15px;padding:0;border-radius:50%;color:#6c7c8e;cursor:help}
+.card-meta .license-hint i{width:13px;height:13px}
+.card-meta .license-hint:hover:not(:disabled),.card-meta .license-hint:focus-visible{color:var(--accent)}
 /* ambientCG 材质/模型预览图完整显示：等比缩放不裁切 */
 /* 动作行与信息行左右对齐（原 padding 只有上下，按键贴边会被卡片圆角裁掉） */
 .card-bottom{padding-left:13px;padding-right:13px}
@@ -578,6 +583,58 @@
    第一次打开工作台时自己弹出来。三张卡片各自说明「缺了会怎样 / 点这里能补上」，
    进度条与步骤清单直接复用「Blender 连接」那一套，只有外框布局是这里新增的。 */
 .setup-dialog{width:min(660px,calc(100vw - 32px))}
+.lan-sharing-toggle{display:flex;align-items:center;gap:10px;margin:18px 0;font-size:14px}
+.lan-sharing-toggle input{width:18px;height:18px;accent-color:#c9f581}
+.lan-sharing-addresses>div{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:10px 12px;margin:8px 0;border:1px solid #30414f;border-radius:8px;background:#101820}
+.lan-sharing-addresses a{color:#c9dcac;overflow-wrap:anywhere;font-size:13px;flex:1}
+/* 访问设备：一行只说三件事（IP / 名字 / 最近访问），状态用一个小圆点表示，禁用键收成图标。
+   等宽数字让多行 IP 与时间纵向对齐，扫起来不用左右跳。 */
+.lan-client{display:flex;align-items:center;gap:10px;padding:7px 2px;border-bottom:1px solid #1d2733;font-size:11px;color:#8fa1b3}
+.lan-client:last-child{border-bottom:0}
+.lan-client-dot{width:6px;height:6px;border-radius:50%;background:#3d4b5c;flex-shrink:0}
+.lan-client[data-state=online] .lan-client-dot{background:var(--accent);box-shadow:0 0 0 3px #c9f58120}
+.lan-client[data-state=blocked] .lan-client-dot{background:#e0806a}
+.lan-client-ip{width:104px;flex-shrink:0;color:#c5cfdc;font-variant-numeric:tabular-nums}
+.lan-client-name{flex:1;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;color:#dce5ee}
+.lan-client-name[data-empty=true]{color:#66727f}
+.lan-client-time{flex-shrink:0;font-variant-numeric:tabular-nums}
+.lan-client-block{flex-shrink:0;width:24px;height:24px;padding:0;border-radius:6px;color:#c4614f}
+.lan-client-block i{width:15px;height:15px}
+.lan-client-block:hover:not(:disabled){background:#2b1d1b;color:#ff8f78}
+.lan-client-block[data-unblock=true]{color:#7f91a4}
+.lan-client-block[data-unblock=true]:hover:not(:disabled){background:#1e2a19;color:var(--accent)}
+/* 局域网面板收成「控件 + ? 按钮」：所有说明文字搬到 .lan-hint 的悬浮气泡里，行高只留给能操作的东西。 */
+.lan-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.lan-row .lan-sharing-toggle{margin:0;font-size:13px}
+.lan-status{margin-left:auto;font-size:11px;color:#7f91a4}
+.lan-form{display:flex;align-items:center;gap:8px;margin:13px 0 4px}
+.lan-form input{flex:1;padding:9px 11px;font-size:12px}
+.lan-form .secondary{margin:0;padding:9px 14px;font-size:11px;flex-shrink:0}
+.lan-section{font-size:12px;font-weight:600;color:#c5cfdc;letter-spacing:.2px}
+.lan-devices{margin:16px 0 4px;padding-top:14px;border-top:1px solid #25333e}
+.lan-summary{margin-left:auto;font-size:11px;color:#7f91a4;font-variant-numeric:tabular-nums}
+.lan-icon{width:24px;height:24px;padding:0;border-radius:6px;color:#7f91a4;flex-shrink:0}
+.lan-icon i{width:14px;height:14px}
+.lan-icon:hover:not(:disabled){background:#22303d;color:var(--accent)}
+.lan-hint{position:relative;display:inline-flex;align-items:center;justify-content:center;gap:0;width:15px;height:15px;padding:0;border:1px solid #3a4a5c;border-radius:50%;font-size:9px;font-weight:700;line-height:1;color:#7f91a4;flex-shrink:0;cursor:help}
+.lan-hint:hover:not(:disabled),.lan-hint:focus-visible{color:var(--accent);border-color:#63798d}
+/* 气泡固定在视口坐标系里（JS 算好位置后写 left/top），父容器的 overflow 裁不到它。 */
+.lan-tip{position:fixed;left:0;top:0;width:max-content;max-width:280px;padding:8px 10px;border:1px solid #35465a;border-radius:8px;background:#0c141c;box-shadow:0 10px 24px #0009;color:#b9c6d4;font-size:10px;line-height:1.7;text-align:left;opacity:0;pointer-events:none;transition:opacity .12s ease;z-index:9999}
+.lan-tip[data-open=true]{opacity:1}
+.folder-picker-dialog{width:min(720px,calc(100vw - 24px));max-height:calc(100dvh - 24px)}
+.folder-picker-body{display:flex;flex-direction:column;gap:12px;min-height:0;padding:18px}
+.folder-picker-toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.folder-picker-toolbar input{flex:1 1 220px;min-width:0;padding:10px 12px;font-size:13px}
+.folder-picker-toolbar .secondary{padding:10px 13px;flex-shrink:0}
+.folder-picker-status{margin:0;min-height:36px;font-size:12px;line-height:1.6;color:#9eafbd;overflow-wrap:anywhere}
+.folder-picker-entries{height:clamp(120px,40dvh,360px);overflow:auto;border:1px solid #2b3b48;border-radius:10px;background:#101820;padding:6px;scrollbar-width:thin}
+.folder-picker-entry{display:flex;align-items:center;gap:12px;width:100%;text-align:left;padding:11px 12px;border:0;border-radius:7px;background:transparent;color:#cbd8e3;font-size:13px;cursor:pointer}
+.folder-picker-entry:hover,.folder-picker-entry:focus-visible{background:#263747;color:#e5efdb}
+.folder-picker-entry span{flex:1;min-width:0;overflow-wrap:anywhere}
+.folder-picker-entry svg{width:18px;height:18px;flex-shrink:0;color:#b9cf95}
+.folder-picker-entry svg:last-child{width:14px;color:#758b9e}
+.folder-picker-body footer{display:flex;justify-content:flex-end;gap:10px;border-top:1px solid #2b3b48;padding-top:14px}
+.folder-picker-body footer button{padding:11px 16px}
 .setup-body{padding:20px 22px 18px}
 .setup-lead{margin:0 0 12px;font-size:11px;line-height:1.9;color:#8b98a8}
 .setup-note{margin:0 0 14px;font-size:10px;color:#9db08a}
@@ -593,8 +650,23 @@
 .setup-path{display:flex;gap:8px;margin-top:10px}
 .setup-path input{flex:1;min-width:0;padding:9px 11px;font-size:10px}
 .setup-path button{flex-shrink:0;padding:9px 13px;font-size:11px}
+.setup-storage label{font-weight:600;font-size:13px}
+.setup-storage .setup-path{flex-wrap:wrap}
+.setup-storage .setup-path input{flex:1 1 240px;font-size:12px}
 .setup-hint{margin:7px 0 0;font-size:9px;line-height:1.8;color:#d3b17d;overflow-wrap:anywhere;min-height:12px}
 .setup-item .bridge-progress{margin-top:12px}
+.setup-blender-title{font-size:14px;color:#d7e2ec}
+.setup-blender-part{margin-top:14px;min-width:0}
+.setup-blender-part+.setup-blender-part{border-top:1px solid #293846;padding-top:13px}
+.setup-blender-part .bridge-copy strong{font-size:12px}
+.setup-blender-part .setup-path{flex-wrap:wrap}
+.setup-blender-part .setup-path input{flex:1 1 220px;font-size:12px}
+.setup-blender-part .setup-hint:empty{display:none}
+.setup-blender-part[data-id="bridge"]{display:grid;grid-template-columns:minmax(0,1fr) auto;column-gap:12px;align-items:center}
+.setup-blender-part[data-id="bridge"] .bridge-status{grid-column:1 / -1}
+.setup-blender-part[data-id="bridge"] .setup-item-actions{margin-top:9px}
+.setup-blender-part[data-id="bridge"] .bridge-progress{grid-column:1 / -1}
+@media(max-width:480px){.setup-blender-part[data-id="bridge"]{grid-template-columns:minmax(0,1fr)}.setup-blender-part[data-id="bridge"] .setup-item-actions{justify-self:start}}
 .setup-actions{display:flex;align-items:center;gap:10px;margin-top:18px;padding-top:15px;border-top:1px solid #26333f}
 .setup-actions-spacer{flex:1}
 .settings-intro{display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap}
@@ -695,21 +767,13 @@ body:is([data-route="library"],[data-route="favorites"]) #library-subtitle{font-
 #local-toolbar .model-search{min-width:190px;max-width:320px;flex:1 1 220px;height:34px}
 #local-toolbar .model-search input{width:100%;font-size:13px}
 #local-toolbar .display-tools{flex-shrink:0;margin-left:4px;align-self:center}
-body:is([data-route="library"],[data-route="favorites"]) .model-grid:not(.compact){grid-template-columns:repeat(auto-fill,minmax(235px,1fr));gap:20px}
-body:is([data-route="library"],[data-route="favorites"]) .card-meta{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px 12px;padding:14px}
-body:is([data-route="library"],[data-route="favorites"]) .card-meta .card-title{grid-column:1/-1;width:100%;justify-content:flex-start;text-align:left;font-size:13px;line-height:1.5;color:#e7edf5}
-body:is([data-route="library"],[data-route="favorites"]) .card-byline{max-width:100%;font-size:11px;color:#9aa9ba}
-body:is([data-route="library"],[data-route="favorites"]) .card-license{grid-column:2;font-size:10px;color:#b0bea0}
-body:is([data-route="library"],[data-route="favorites"]) .card-bottom{padding:10px 14px;min-height:46px}
-body:is([data-route="library"],[data-route="favorites"]) .card-download{min-height:30px;font-size:11px}
+/* 卡片一律走发现页那一套（网格列宽、1:1 缩略图、单行「标题 · 作者 · 许可」、同尺寸按键）：
+   资产库/收藏只额外让收藏状态与多选框常显，其余不再分叉，否则同一个资源在两个页面长得不一样。 */
 body:is([data-route="library"],[data-route="favorites"]) .collect-badge.collected{opacity:1;color:#c5d3b8;background:#152019e8}
 body:is([data-route="library"],[data-route="favorites"]) .card-select{opacity:1}
-body:is([data-route="library"],[data-route="favorites"]) .remove-model{width:auto;padding:5px 7px;font-size:10px;color:#9ca8b8}
-body:is([data-route="library"],[data-route="favorites"]) .remove-model::after{content:'移出库'}
 @media(max-width:780px){
  #local-toolbar .model-search{min-width:0;max-width:none;flex-basis:100%}
  #local-toolbar .local-facets{flex-wrap:wrap}
- body:is([data-route="library"],[data-route="favorites"]) .model-grid:not(.compact){grid-template-columns:repeat(auto-fill,minmax(185px,1fr));gap:12px}
 }
 .app-update-banner{position:fixed;right:24px;bottom:24px;z-index:10000;display:flex;align-items:center;gap:16px;padding:16px 20px;border:1px solid #536747;border-radius:14px;background:#17231c;color:#e5eddf;box-shadow:0 12px 35px #0005}.app-update-banner button{padding:7px 12px;border:1px solid #6b8159;border-radius:8px;background:#c9f581;color:#25331d;cursor:pointer}.app-update-banner button:last-child{background:transparent;color:#b6c5af}@media(max-width:600px){.app-update-banner{left:12px;right:12px;bottom:12px;gap:8px;flex-wrap:wrap}}
 .asset-tags-dialog{width:min(520px,90vw);padding:24px;border:1px solid #34404e;border-radius:16px;background:#151d27;color:#dce5ee}.asset-tags-dialog::backdrop{background:#080d16b3}.asset-tags-dialog header{display:flex;align-items:center;justify-content:space-between;gap:16px}.asset-tags-dialog h2{margin:0;font-size:18px}.asset-tags-dialog p{font-size:12px;line-height:1.7;color:#92a1b3}.asset-tags{display:grid;gap:16px}.asset-tag-group small{display:block;margin-bottom:8px;color:#92a1b3}.asset-tags .tag-list{display:flex;flex-wrap:wrap;gap:6px}.asset-tags .muted{font-size:12px;color:#7f8e9f}.asset-tags .secondary{justify-self:start}.asset-tags button:disabled{opacity:.55;cursor:wait}
@@ -751,6 +815,16 @@ body:is([data-route="library"],[data-route="favorites"]) .remove-model::after{co
 .similar-asset-info small{font-size:10px;color:#b2c5a4}
 .similar-asset:hover .similar-asset-info,.similar-asset:focus-visible .similar-asset-info{opacity:1}
 .similar-status{font-size:11px;color:#7f91a4}
+.sidebar .side-footer{align-items:center;gap:12px;padding:12px 10px 0;min-height:45px}
+.side-footer #app-version{line-height:32px;font-variant-numeric:tabular-nums;color:#7e90a3}
+.side-footer #sidebar-update{width:32px;height:32px;flex:0 0 32px;padding:7px;border:0;border-radius:7px;background:transparent;color:#8195a7;line-height:1;animation:none}
+.side-footer #sidebar-update i{width:18px;height:18px}
+.side-footer #sidebar-update:hover{background:#ffffff08;color:#c9f581}
+.side-footer #sidebar-update.checking{animation:none}
+.side-footer #sidebar-update.checking i{animation:spin 1.2s linear infinite}
+.side-footer #sidebar-update.has-update{background:#c9f58117;color:#c9f581;box-shadow:none}
+.side-footer #sidebar-update.has-update:after{right:3px;top:3px;width:6px;height:6px;background:#c9f581;border:1px solid #111821}
+@media(prefers-reduced-motion:reduce){.side-footer #sidebar-update.checking i{animation:none}}
 #side-filters>.side-label{display:none}
 .filter-category-row{display:flex;align-items:center;gap:4px;min-width:0}
 .filter-category-row>.ftree-branch{flex:1;min-width:0;width:auto}
@@ -784,3 +858,116 @@ body:is([data-route="library"],[data-route="favorites"]) .remove-model::after{co
 @media(max-width:780px){.sidebar .nav{font-size:0;padding:12px 8px;gap:0}.sidebar .nav>span{display:none}}
 @media(max-width:780px){.similar-assets{padding:8px 10px}.similar-asset{flex-basis:184px}}
 @media(max-height:650px){.similar-assets{padding:6px 10px}.similar-asset{flex-basis:172px;aspect-ratio:16/9}}
+.sbsar-params{display:grid;gap:8px;margin:10px 0;max-height:280px;overflow:auto}
+.sbsar-input{display:flex;justify-content:space-between;gap:8px;align-items:center;font-size:12px}
+.sbsar-input input{width:96px}
+/* 资产库文件夹里没登记成下载任务的文件（2026-10-21）：卡片只放类型徽标 + 文件名 + 体积/时间。
+   不生成缩略图——一个目录几千个文件，逐个解码会拖死首屏；点开按扩展名走对应渲染器反而更快。
+   这些卡片和模型卡片同处 #grid，列宽跟着 .model-grid 走，不再单独一套栅格。 */
+.local-file-card{display:flex;gap:12px;align-items:center;border:1px solid #27303b;border-radius:10px;background:#151c25;padding:13px;cursor:pointer;transition:border-color .18s,transform .18s,background .18s;min-width:0}
+.local-file-card:hover,.local-file-card:focus-visible{border-color:#506049;background:#1a2430;transform:translateY(-2px)}
+.local-file-badge{width:44px;height:44px;flex:none;border-radius:9px;background:#1f2a36;display:grid;place-items:center;gap:1px;color:#a8bccd}
+.local-file-badge i{width:18px;height:18px}
+.local-file-badge span{font-size:7px;letter-spacing:.5px;color:#7f94a8;text-transform:uppercase}
+.local-file-copy{min-width:0;display:flex;flex-direction:column;gap:3px}
+.local-file-copy strong{font-size:12px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.local-file-copy small{font-size:9px;color:#7d8fa3}
+.local-file-path{font:10px/1.7 Consolas,monospace;color:#8fa4b8;overflow-wrap:anywhere;background:#111821;border:1px solid #26313d;border-radius:6px;padding:8px;margin:0}
+#local-file-status{font-size:10px;color:#7f92a6;white-space:nowrap}
+.file-preview-stage{flex:1;min-height:0;display:flex;align-items:center;justify-content:center;padding:18px;overflow:auto;overscroll-behavior:contain}
+.file-preview-image,.file-preview-canvas{max-width:100%;max-height:100%;object-fit:contain;border-radius:6px;background:#0b1119}
+.file-preview-video{max-width:100%;max-height:100%;border-radius:6px;background:#000}
+.file-preview-audio{width:min(520px,90%)}
+.file-preview-frame{width:100%;height:100%;border:0;background:#fff;border-radius:6px}
+.file-preview-text{margin:0;width:100%;height:100%;overflow:auto;font:11px/1.7 Consolas,monospace;color:#a9c0d2;background:#0c131c;border-radius:6px;padding:16px;white-space:pre-wrap;overflow-wrap:anywhere}
+.file-preview-note{max-width:520px;font-size:12px;line-height:1.9;color:#93a7ba;text-align:center}
+.file-font-sample{width:100%;max-width:640px;color:#dbe6f0;text-align:left}
+.file-font-title{font-size:12px;color:#8ea3b6;margin:0 0 14px}
+.file-font-large{font-size:44px;line-height:1.3;margin:0 0 12px}
+.file-font-body{font-size:17px;line-height:1.8;margin:0 0 8px;color:#c3d2df}
+@media(max-width:780px){.file-preview-stage{padding:12px}.file-font-large{font-size:30px}.local-file-card{padding:10px;gap:9px}.local-file-badge{width:34px;height:34px}}
+
+.visitor-download-note{display:none}
+html[data-lan-visitor="true"] :is(#settings-button,#ai-settings-button,#download-settings,#settings-dialog,#ai-dialog,#download-path-dialog,#setup-dialog,#open-download-folder,#queue-pause,#clear-tasks,#sidebar-update,.app-update-dialog,.task-log-head>span){display:none!important}
+/* 「新任务完成后自动下载到我的电脑」是访客侧的默认行为：主机自己下载走主机目录，不需要这条开关。 */
+html[data-lan-visitor="true"] .visitor-download-note{display:block}
+
+/* 访客在自己电脑上装桥接的引导（client-blender.js 动态建的 dialog）。 */
+.client-blender-dialog{width:min(560px,calc(100vw - 24px))}
+.client-blender-steps{margin:8px 0 10px;padding-left:18px;font-size:11px;line-height:1.95;color:#9badbc}
+.client-blender-steps a{color:var(--accent);text-decoration:underline;text-underline-offset:2px}
+.client-blender-steps b{color:#dce5ee;font-weight:600}
+.client-blender-actions{display:flex;gap:8px;margin-top:10px}
+
+/* 资产包卡片直接用资产卡那套 DOM（card-shell）：封面 / 标题行 / 底部操作区，
+   所以这里不再有一整套 .local-package-* 样式，只留下面「包内文件清单」这一块。
+   本地零散文件仍然是行卡（.local-file-card），那是列表不是卡片。 */
+.local-package-list ul{list-style:none;margin:8px 0 0;padding:0;display:flex;flex-direction:column;gap:2px;max-height:46vh;overflow:auto;font-size:11px}
+/* 打包中的下载键：ZIP 是流式生成的，按钮先灰掉几秒，避免连点重复打包。 */
+.card-download.is-busy{opacity:.5;pointer-events:none}
+.local-package-list li{display:flex;justify-content:space-between;gap:12px;padding:4px 6px;border-radius:5px;color:#b9c6d4}
+.local-package-list li:nth-child(odd){background:#ffffff06}
+.local-package-list li em{font-style:normal;color:#7d8fa3;flex-shrink:0}
+
+/* 图片素材包预览（2026-10-21 二改）：上面左大图 + 右侧素材包信息，下面一条通栏缩略图横滑。
+   大图区滚轮缩放、按住拖动；缩略图文件名默认不显示，悬停才浮出。 */
+html.file-preview-open{overflow:hidden}
+.preview-dialog.is-gallery,.preview-dialog.is-gallery[open]{grid-template-rows:auto minmax(0,1fr) auto}
+.file-preview-stage.is-gallery{padding:0;overflow:hidden;align-items:stretch;justify-content:stretch}
+.local-gallery-main{position:relative;flex:1;min-width:0;min-height:0;width:100%;height:100%;display:flex;align-items:center;justify-content:center;overflow:hidden;background:#080d14;cursor:grab;touch-action:none}
+.local-gallery-main.is-dragging{cursor:grabbing}
+.local-gallery-photo{max-width:100%;max-height:100%;object-fit:contain;transform-origin:center center;will-change:transform;user-select:none;-webkit-user-drag:none;transition:transform .08s linear}
+.local-gallery-main.is-dragging .local-gallery-photo{transition:none}
+/* 转码失败（坏 PSD / 不认识的压缩）时不留破图，直接说明原因。 */
+.local-gallery-photo.is-broken{display:none}
+.local-gallery-error{margin:0;font-size:12px;color:#8f9fae}
+.local-gallery-hud{position:absolute;right:14px;bottom:14px;display:flex;align-items:center;gap:2px;padding:4px;border:1px solid #33445499;border-radius:9px;background:#0d151fdd;backdrop-filter:blur(6px);opacity:0;transition:opacity .15s}
+.local-gallery-main:hover .local-gallery-hud{opacity:1}
+.local-gallery-hud button{width:26px;height:24px;padding:0;border:0;background:transparent;color:#b6c6d6;font-size:12px;border-radius:6px;cursor:pointer}
+.local-gallery-hud button:hover{background:#26333f;color:var(--accent)}
+.local-gallery-hud span{min-width:40px;text-align:center;font-size:10px;color:#93a6b8;font-variant-numeric:tabular-nums}
+/* 横滑缩略图条：通栏，贴在弹窗底部 */
+.local-gallery-strip{display:flex;gap:8px;padding:10px 14px;border-top:1px solid #293646;background:#0e151d;overflow-x:auto;overflow-y:hidden;overscroll-behavior-x:contain;scrollbar-width:thin;scrollbar-color:#33454f transparent}
+.local-gallery-strip .local-gallery-thumb{position:relative;flex:none;width:clamp(76px,7vw,104px);padding:0;aspect-ratio:1;border:1px solid #2a3745;border-radius:7px;background:#0b1119;overflow:hidden;cursor:pointer}
+.local-gallery-thumb img{width:100%;height:100%;display:block;object-fit:contain;background:#101820}
+.local-gallery-thumb span{position:absolute;left:0;right:0;bottom:0;padding:3px 5px;font-size:9px;line-height:1.35;color:#dfe8f1;background:#080e16d9;opacity:0;transition:opacity .12s;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;pointer-events:none}
+.local-gallery-strip .local-gallery-thumb:hover{border-color:#55663f}
+.local-gallery-strip .local-gallery-thumb:hover span{opacity:1}
+.local-gallery-strip .local-gallery-thumb.is-active{border-color:var(--accent);box-shadow:0 0 0 1px #c9f58155}
+/* 右侧信息栏里的「当前图片」块 */
+.local-gallery-current{border-top:1px solid #2d3a49;border-bottom:1px solid #2d3a49;padding:12px 0;display:flex;flex-direction:column;gap:5px}
+.local-gallery-label{font-size:9px;letter-spacing:.5px;color:#7b8ea4;text-transform:uppercase}
+.local-gallery-name{margin:0;font-size:12px;line-height:1.5;color:#dbe5ef;overflow-wrap:anywhere}
+.local-gallery-size{margin:0;font-size:10px;color:#8296a9}
+
+/* 「我的标签」层：可增删，× 悬停才显眼；AI 层带 ✦ 前缀已由模板表达，这里只给色相区分。 */
+.tag-chip.mine{background:#c9f58114;color:#d8e8b8;border:1px solid #4a5e3c}
+.tag-chip.ai{background:#263443;color:#b8c4d4}
+.tag-chip .tag-x{margin-left:5px;padding:0 2px;border-radius:3px;color:#7f8e9f;font-size:11px}
+.tag-chip .tag-x:hover{color:#ff8f8f;background:#ff8f8f1a}
+.tag-add-row{display:flex;gap:8px;align-items:center}
+.tag-add-input{flex:1;min-width:0;font-size:12px;padding:7px 10px;border:1px solid #34404e;border-radius:8px;background:#101720;color:#dce5ee}
+.tag-add-input:focus{outline:none;border-color:var(--accent)}
+/* 评分与备注：评分点选即存，备注失焦保存，都不需要额外保存键。 */
+.asset-rate-row{display:flex;align-items:center;gap:10px}
+.rate-label{font-size:11px;color:#92a1b3}
+.rate-stars{display:inline-flex;gap:2px}
+.rate-stars .star{padding:2px 3px;font-size:15px;line-height:1;color:#3d4c5e;background:none;border:none;cursor:pointer}
+.rate-stars .star:hover{color:#e8d48b}
+.rate-stars .star.on{color:#e8c47a}
+.rate-clear{font-size:10px}
+.asset-note{width:100%;resize:vertical;font-size:12px;line-height:1.6;padding:8px 10px;border:1px solid #34404e;border-radius:8px;background:#101720;color:#dce5ee;font-family:inherit}
+.asset-note:focus{outline:none;border-color:var(--accent)}
+/* 卡片上的评分：有分才渲染，星星+数字一起，悬停带备注摘要。 */
+.card-rating{display:flex;align-items:center;padding:0 6px 0 0;font-size:10px;color:#e8c47a;white-space:nowrap;cursor:help}
+.card-rating .stars{letter-spacing:1px}
+.restore-model:hover{color:var(--accent)}
+.purge-model:hover{color:#ff8f8f}
+/* 标签管理面板 */
+.tm-row{display:flex;align-items:center;gap:10px;padding:9px 2px;border-bottom:1px solid #222d3a}
+.tm-row:last-child{border-bottom:none}
+.tm-name{flex:1;min-width:0;font-size:13px;color:#dce5ee;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tm-count{font-size:10px;color:#7f8e9f;white-space:nowrap}
+.tm-ops{display:flex;gap:4px;white-space:nowrap}
+.tm-del:hover{color:#ff8f8f}
+.tm-footer{margin-top:14px;padding-top:12px;border-top:1px solid #222d3a}

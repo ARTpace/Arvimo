@@ -13,11 +13,11 @@ const bridgeScript=path.join(here,'blender-bridge.py');
 /** 桥接脚本在 Blender 那边的文件名。改它要同步改 README 和安装器里的提示文案。 */
 const BRIDGE_NAME='assetvault_bridge_startup.py';
 const legacyScript=path.join(here,'blender-import.py');
-const EXT=/\.(glb|gltf|fbx)$/i;
+const EXT=/\.(glb|gltf|fbx|obj)$/i;
 const HDRI_EXT=/\.(hdr|exr)$/i;
 /** 世界环境能吃的格式：Poly Haven 给 .hdr/.exr，FreeStylized 天空盒给等距全景 PNG/JPG。 */
 const ENV_IMAGE_EXT=/\.(hdr|exr|png|jpe?g)$/i;
-const priority=file=>/\.glb$/i.test(file)?0:/\.gltf$/i.test(file)?1:2;
+const priority=file=>/\.glb$/i.test(file)?0:/\.gltf$/i.test(file)?1:/\.fbx$/i.test(file)?2:3;
 export const BRIDGE_PORT=Number(process.env.SFX_BLENDER_BRIDGE_PORT||47752);
 /** 探活超时：够判断「桥接是否在跑」，又不让用户干等。 */
 const BRIDGE_TIMEOUT=Number(process.env.SFX_BLENDER_BRIDGE_TIMEOUT_MS||1800);
@@ -59,23 +59,55 @@ function* zipEntries(buf){
  }
 }
 
+/** 把 ZIP 解到指定目录（不建目录、不清理），已经有同名文件就跳过。 */
+function extractZipTo(zipPath,dir){
+ const buf=fs.readFileSync(zipPath);
+ for(const {name,data} of zipEntries(buf)){
+  const target=path.resolve(dir,name);
+  if(!target.startsWith(path.resolve(dir)))continue;
+  fs.mkdirSync(path.dirname(target),{recursive:true});
+  if(!existsFile(target))fs.writeFileSync(target,data);
+ }
+ return dir;
+}
+
 /** 把整个 ZIP 解到临时目录。Blender 读不了压缩包，而资源包平台的交付目录里
  *  只有一个原始 pack.zip，真正的 glTF/FBX 在压缩包里，必须先落地。 */
 function extractZip(zipPath){
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'sfx-pack-'));
  try{
-  const buf=fs.readFileSync(zipPath);
-  for(const {name,data} of zipEntries(buf)){
-   const target=path.resolve(dir,name);
-   if(!target.startsWith(path.resolve(dir)))continue;
-   fs.mkdirSync(path.dirname(target),{recursive:true});
-   fs.writeFileSync(target,data);
-  }
-  return dir;
+  return extractZipTo(zipPath,dir);
  }catch(e){
   fs.rmSync(dir,{recursive:true,force:true});
   throw e;
  }
+}
+
+/** 压缩包配套的持久解包目录，落在压缩包旁边而不是系统临时目录。
+ *  Blender 的 Image 数据块只记文件路径、像素是懒加载的，临时目录一删贴图整片变洋红
+ *  （视口里就是「爆粉」），所以解出来的贴图/环境图必须长期留在交付物目录里。
+ *  同一压缩包重复导入会复用这个目录，不重复落盘。 */
+function unpackDirFor(container){
+ const src=path.resolve(container);
+ const target=path.join(path.dirname(src),path.basename(src).replace(/\.zip$/i,'')+'.unpacked');
+ fs.mkdirSync(target,{recursive:true});
+ return target;
+}
+
+/** 递归收集目录下匹配的文件，按「路径短优先」排序。 */
+function collectFiles(dir,re){
+ const out=[];
+ const walk=d=>{
+  let entries=[];
+  try{entries=fs.readdirSync(d,{withFileTypes:true});}catch{return;}
+  for(const entry of entries){
+   const full=path.join(d,entry.name);
+   if(entry.isDirectory())walk(full);
+   else if(entry.isFile()&&re.test(entry.name))out.push(full);
+  }
+ };
+ walk(dir);
+ return out.sort((a,b)=>a.length-b.length||a.localeCompare(b));
 }
 
 /** 在目录树里按「glb > gltf > fbx、路径短优先」挑最合适的模型文件。 */
@@ -96,6 +128,15 @@ function pickModel(root){
 /** 解析交付物里真正能喂给 Blender 的模型文件，返回 {file, tmpDir}。
  *  tmpDir 非 null 表示模型是从 ZIP 解出来的，调用方在导入完成后必须清理。
  *  glTF 带 .bin/贴图的相对引用在解包目录里原样保留，Blender 导入器能按相对路径找到。 */
+function resolvedPackModel(file,tmp,zip){
+ if(!/\.obj$/i.test(file))return {file,tmpDir:tmp};
+ // OBJ materials retain relative texture paths after import; keep the unpacked payload beside its ZIP.
+ const target=unpackDirFor(zip),relative=path.relative(tmp,file);
+ extractZipTo(zip,target);
+ fs.rmSync(tmp,{recursive:true,force:true});
+ return {file:path.join(target,relative),tmpDir:null};
+}
+
 export function resolveBlenderImport(location){
  const root=path.resolve(location||'');
  const stat=fs.statSync(root);
@@ -104,14 +145,14 @@ export function resolveBlenderImport(location){
    const tmp=extractZip(root);
    try{
     const file=pickModel(tmp);
-    if(!file)throw Error('资源包里没有可导入 Blender 的 GLB、glTF 或 FBX 模型');
-    return {file,tmpDir:tmp};
+    if(!file)throw Error('资源包里没有可导入 Blender 的 GLB、glTF、FBX 或 OBJ 模型');
+    return resolvedPackModel(file,tmp,root);
    }catch(e){
     fs.rmSync(tmp,{recursive:true,force:true});
     throw e;
    }
   }
-  if(!EXT.test(root))throw Error('Blender 只能自动导入 GLB、glTF 或 FBX 文件');
+  if(!EXT.test(root))throw Error('Blender 只能自动导入 GLB、glTF、FBX 或 OBJ 文件');
   return {file:root,tmpDir:null};
  }
  if(!stat.isDirectory())throw Error('保存位置不是可导入的文件或文件夹');
@@ -125,12 +166,12 @@ export function resolveBlenderImport(location){
  for(const zip of zips){
   const tmp=extractZip(zip);
   const file=(()=>{try{return pickModel(tmp);}catch{return null;}})();
-  if(file)return {file,tmpDir:tmp};
+  if(file)return resolvedPackModel(file,tmp,zip);
   fs.rmSync(tmp,{recursive:true,force:true});
  }
  // 有资源包却挑不出模型（FreeStylized 贴图包 / 天空盒）与真的什么都没有，要说两种话。
- if(zips.length)throw Error('资源包里没有可导入 Blender 的 GLB、glTF 或 FBX 模型');
- throw Error('导出结果中没有可导入 Blender 的 GLB、glTF 或 FBX 文件');
+ if(zips.length)throw Error('资源包里没有可导入 Blender 的 GLB、glTF、FBX 或 OBJ 模型');
+ throw Error('导出结果中没有可导入 Blender 的 GLB、glTF、FBX 或 OBJ 文件');
 }
 
 /* ── 材质导入 ──────────────────────────────────────────────────────────────
@@ -246,46 +287,43 @@ function materialFromFolder(dir){
   if(existsFile(full))maps[slot]=full;
  }
  if(!Object.keys(maps).length)Object.assign(maps,scanImagesForMaps(dir));
- let tmpDir=null;
+ let workDir=dir;
  if(!Object.keys(maps).length){
   const pack=findPackZip(dir);
   if(pack){
-   const tmp=extractZip(pack);
-   tmpDir=tmp;
-   Object.assign(maps,scanImagesForMaps(tmp));
+   // 贴图包解到压缩包旁的持久目录：Blender 材质只记文件路径，临时目录一删贴图就废。
+   workDir=extractZipTo(pack,unpackDirFor(pack));
+   Object.assign(maps,scanImagesForMaps(workDir));
   }
  }
  if(!Object.keys(maps).length)throw Error('这个材质文件夹里没有识别到可用的 PBR 贴图');
- return {name:String(info?.title||path.basename(dir)).slice(0,120),dir:tmpDir||dir,maps,tmpDir};
+ return {name:String(info?.title||path.basename(dir)).slice(0,120),dir:workDir,maps,tmpDir:null};
 }
 
-/** ZIP 交付：Blender 不能读压缩包，所以解到临时目录再导入。
- *  只解 textures/ 下的贴图与 info.json，不做通用解包，避免路径穿越。 */
+/** ZIP 交付：Blender 不能读压缩包，所以解到压缩包旁边的持久目录再导入。
+ *  只解 textures/ 下的贴图与 info.json，不做通用解包，避免路径穿越。
+ *  用的是持久目录（unpackDirFor），因为 Blender 材质贴图只记住路径、像素懒加载，
+ *  临时目录一删，材质球上的贴图就全丢——视口里正是用户看到的「爆粉」。 */
 function materialFromZip(zip){
- const dir=fs.mkdtempSync(path.join(os.tmpdir(),'sfx-material-'));
- try{
-  const buf=fs.readFileSync(zip);
-  const wanted=/^(?:textures\/[^/]+|info\.json)$/i;
-  for(const {name,data} of zipEntries(buf)){
-   if(!wanted.test(name))continue;
-   const target=path.resolve(dir,name);
-   if(!target.startsWith(path.resolve(dir)))continue;
-   fs.mkdirSync(path.dirname(target),{recursive:true});
-   fs.writeFileSync(target,data);
-  }
-  return materialFromFolder(dir);
- }catch(e){
-  fs.rmSync(dir,{recursive:true,force:true});
-  throw e;
+ const dir=unpackDirFor(zip);
+ const buf=fs.readFileSync(zip);
+ const wanted=/^(?:textures\/[^/]+|info\.json)$/i;
+ for(const {name,data} of zipEntries(buf)){
+  if(!wanted.test(name))continue;
+  const target=path.resolve(dir,name);
+  if(!target.startsWith(path.resolve(dir)))continue;
+  fs.mkdirSync(path.dirname(target),{recursive:true});
+  if(!existsFile(target))fs.writeFileSync(target,data);
  }
+ return materialFromFolder(dir);
 }
 
-/** 材质交付物 →贴图映射。ZIP 会解到临时目录（调用方负责在导入后清理 returned.tmpDir）。 */
+/** 材质交付物 →贴图映射。ZIP 会解到压缩包旁的持久目录，导入后不清理。 */
 export function findMaterialBundle(location){
  const root=path.resolve(location||'');
  const stat=fs.statSync(root);
  if(stat.isDirectory())return materialFromFolder(root);
- if(stat.isFile()&&/\.zip$/i.test(root))return {...materialFromZip(root),tmpDir:root};
+ if(stat.isFile()&&/\.zip$/i.test(root))return materialFromZip(root);
  throw Error('材质交付物不是文件夹或 ZIP');
 }
 
@@ -625,6 +663,7 @@ export async function launchBlenderImport(location,{blender=blenderPath}={}){
    const result=await bridgeRequest({op:'import',file:asset.file,frame:true},{timeout:BRIDGE_IMPORT_TIMEOUT});
    return {ok:true,mode:'existing-blender',bridgePort:BRIDGE_PORT,file:asset.file,imported:result.imported??null,receivedAt:Date.now()};
   }catch(e){
+   if(/\.obj$/i.test(asset.file)&&/Unsupported model format/i.test(e.message))throw Error('Blender 当前加载的是旧版桥接。新版 OBJ 支持已安装，请保存场景并重启 Blender 后重新发送。');
    throw Error(`已连上 Blender，但导入失败：${e.message}`);
   }
  }finally{
@@ -653,21 +692,16 @@ async function prepareBridge(blender){
 }
 
 /** 材质导入：在已打开的 Blender 里建一个接好贴图的材质球。
- *  ZIP 交付会先解包，导入完成后清掉临时目录（贴图已读进 Blender，不再依赖磁盘）。 */
+ *  ZIP 交付解到压缩包旁的持久目录，贴图路径长期有效，导入后不做清理。 */
 export async function launchBlenderMaterialImport(location,{blender=blenderPath}={}){
  const bundle=findMaterialBundle(location);
- try{
-  await prepareBridge(blender);
-  const result=await bridgeRequest({op:'material',name:bundle.name,maps:bundle.maps,preview:true,assignSelection:true},{timeout:BRIDGE_IMPORT_TIMEOUT});
-  return {ok:true,mode:'existing-blender',kind:'material',bridgePort:BRIDGE_PORT,name:bundle.name,dir:bundle.dir,maps:Object.keys(bundle.maps),material:result.material??null,applied:result.applied??null,receivedAt:Date.now()};
- }finally{
-  if(bundle.tmpDir)fs.rmSync(bundle.dir,{recursive:true,force:true});
- }
+ await prepareBridge(blender);
+ const result=await bridgeRequest({op:'material',name:bundle.name,maps:bundle.maps,preview:true,assignSelection:true},{timeout:BRIDGE_IMPORT_TIMEOUT});
+ return {ok:true,mode:'existing-blender',kind:'material',bridgePort:BRIDGE_PORT,name:bundle.name,dir:bundle.dir,maps:Object.keys(bundle.maps),material:result.material??null,applied:result.applied??null,receivedAt:Date.now()};
 }
 
-/** HDRI 交付物 → 环境贴图文件路径与临时目录（解包产生时非 null）。
- *  优先信 info.json 的 files 清单，退回按扩展名扫；Poly Haven 是 .hdr/.exr，
- *  FreeStylized 天空盒是等距全景 PNG/JPG（在 pack.zip 里也要解包找）。 */
+/** HDRI 交付物 → 环境贴图文件路径。贴图一律落在持久位置（解包时也不会产生临时目录），
+ *  tmpDir 恒为 null，只为兼容老调用方签名。 */
 export function findHdriFile(location){
  const root=path.resolve(location||'');
  const stat=fs.statSync(root);
@@ -682,37 +716,42 @@ export function findHdriFile(location){
   const full=path.resolve(root,file);
   if(existsFile(full))return {file:full,tmpDir:null};
  }
- for(const name of fs.readdirSync(root).sort()){
-  const full=path.join(root,name);
-  if(existsFile(full)&&HDRI_EXT.test(name))return {file:full,tmpDir:null};
- }
- // 资源包平台（FreeStylized 天空盒）：环境图在 pack.zip 里，解包再找等距全景图。
+ // 目录里散着的 .hdr/.exr（含上面解出来的 .unpacked 子目录）都算，路径短的优先。
+ const loose=collectFiles(root,HDRI_EXT);
+ if(loose.length)return {file:loose[0],tmpDir:null};
+ // 交付目录里只有一个整包 ZIP（ambientCG / FreeStylized 天空盒）：解到压缩包旁边的
+ // 持久目录再挑图。绝不能解到 os.tmpdir 再删，Blender 那边贴图会直接失效变洋红。
  const pack=findPackZip(root);
- let tmp=null,searchRoot=root;
- if(pack){tmp=extractZip(pack);searchRoot=tmp;}
- const images=[];
- for(const name of fs.readdirSync(searchRoot).sort()){
-  const full=path.join(searchRoot,name);
-  if(existsFile(full)&&ENV_IMAGE_EXT.test(name))images.push(full);
+ if(pack){
+  const dir=unpackDirFor(pack);
+  const entries=zipEntries(fs.readFileSync(pack));
+  const hdri=entries.filter(e=>HDRI_EXT.test(e.name));
+  const images=hdri.length?hdri:entries.filter(e=>ENV_IMAGE_EXT.test(e.name));
+  for(const {name,data} of images){
+   const target=path.resolve(dir,name);
+   if(!target.startsWith(path.resolve(dir)))continue;
+   fs.mkdirSync(path.dirname(target),{recursive:true});
+   if(!existsFile(target))fs.writeFileSync(target,data);
+  }
+  // 真 HDRI（.hdr/.exr）优先，别把 TONEMAPPED 的 LDR 全景图当环境图喂给 Blender。
+  const wide=collectFiles(dir,HDRI_EXT);
+  if(wide.length)return {file:wide[0],tmpDir:null};
+  const equirect=pickEquirectImage(collectFiles(dir,ENV_IMAGE_EXT));
+  if(equirect)return {file:equirect,tmpDir:null};
  }
- const equirect=pickEquirectImage(images);
- if(equirect)return {file:equirect,tmpDir:tmp};
- if(tmp)fs.rmSync(tmp,{recursive:true,force:true});
  throw Error('这个文件夹里没有可用于世界环境的 .hdr/.exr 或等距全景图（.png/.jpg）');
 }
 
-/** 把已下载的 HDRI / 天空盒设为已打开 Blender 场景的世界环境。 */
+/** 把已下载的 HDRI / 天空盒设为已打开 Blender 场景的世界环境。
+ *  环境图始终落在持久位置（交付目录或旁边的 .unpacked），导入后不清理。 */
 export async function launchBlenderHdriImport(location,{blender=blenderPath}={}){
- const {file,tmpDir}=findHdriFile(location);
+ const {file}=findHdriFile(location);
  try{
   await prepareBridge(blender);
   const result=await bridgeRequest({op:'environment',file},{timeout:BRIDGE_IMPORT_TIMEOUT});
   return {ok:true,mode:'existing-blender',kind:'hdri',bridgePort:BRIDGE_PORT,file,world:result.world??null,image:result.image??null,receivedAt:Date.now()};
  }catch(e){
   throw Error(`已连上 Blender，但设置环境贴图失败：${e.message}`);
- }finally{
-  // 环境图是从资源包 ZIP 解出来的：桥接应答成功即代表 Blender 已读入文件，失败也不该留临时目录。
-  if(tmpDir)fs.rmSync(tmpDir,{recursive:true,force:true});
  }
 }
 

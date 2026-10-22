@@ -41,3 +41,9 @@ sketchfab-exporter-tauri/src/worker.html
 sketchfab-exporter-tauri/src/splash.html
 sketchfab-exporter-tauri/src/splash.js
 sketchfab-exporter-tauri/src/splash.css
+
+# 构建期产物与缓存（不进版本库）
+# chrome-headless-shell 改为安装后按需下载，不再随仓库分发（281MB+）。
+vendor/browser/
+**/__pycache__/
+*.pyc
