@@ -35,8 +35,9 @@ test('原始和 AI 标签紧凑合并并安全转义，重复标签不重复显�
 });
 test('所有平台卡片都有统一标签入口，包括只有官方页面的资产',()=>{
  const state={favorites:new Set(),models:[],selected:new Set(),tasks:[]};
+ // card-view 现在要的是 sendControl（两步式导出控件），旧名 blenderSendButton 传进来它拿不到。
  const cards=createCardView({state,icon:()=>'',esc,fmt:String,queuePulse:new Map(),
-  imageDownload:{},blenderSendButton:()=>'',platformLabel:String,
+  imageDownload:{},sendControl:()=>'',platformLabel:String,
   artstationUI:()=>({has3dScene:()=>false}),downloadsUI:()=>({jobs:[]})});
  for(const platform of ['sketchfab','artstation','polyhaven','ambientcg','polypizza','kenney','freestylized']){
   const html=cards.card({uid,platform,name:'Asset',license:'CC0',assetType:'packs'});

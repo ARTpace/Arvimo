@@ -1,6 +1,6 @@
 # AssetVault
 
-本地 3D 资产工作台：搜索 Sketchfab 与 ArtStation Marmoset 资产，后台下载并转成 GLB / FBX，统一收进本地模型库。
+本地 3D 资产工作台：统一搜索 8 个 3D 资产平台（Sketchfab、ArtStation、Poly Haven、ambientCG、Poly Pizza、Kenney、FreeStylized、Polyfork），后台下载并转成 GLB / FBX，统一收进本地模型库；另有 13 个图站可批量抓参考图。完整清单（名称 / 简介 / 官网 / 分类）见 [`docs/platforms.md`](docs/platforms.md)。
 同时保留一个 **Tampermonkey 单文件脚本**（`dist/sketchfab-exporter.user.js`，只处理 Sketchfab）。
 
 > 自 3.4.0 起品牌由 Sketchvault 改为 **AssetVault**。旧数据目录 `.sketchvault` 首次启动会自动迁移为 `.assetvault`。
@@ -8,7 +8,9 @@
 
 ## 快速开始
 
-Windows 双击 **`AssetVault.lnk`** 或 **`Start-Library-Silent.vbs`** → 服务后台运行 → 浏览器自动打开工作台 **http://127.0.0.1:4178**。
+Windows 双击 **`AssetVault.lnk`** 或 **`Start-Library-Silent.vbs`** → 服务后台运行 → 浏览器自动打开工作台 **http://127.0.0.1:4179**。
+本机入口仅监听回环地址，端口冲突时自动回退。局域网分享使用独立固定端口（默认 4178），在设置中启用；分享端口冲突只暂停分享，不影响本机。手动更改分享端口后需重新分享链接。
+
 首次使用需 Node.js 22+ 并 `npm install`；FBX 转换需已安装 Chrome / Edge。停止服务双击 `Stop-Library.cmd`。
 
 ## 启用 Blender 导入（AssetVault Bridge）
@@ -19,8 +21,8 @@ Windows 双击 **`AssetVault.lnk`** 或 **`Start-Library-Silent.vbs`** → 服�
 
 ## 核心功能
 
-- **统一搜索**：Sketchfab + ArtStation Marmoset，「全部平台」并行检索并交错合并结果。
-- **一键下载队列**：两平台共用同一套队列，支持暂停 / 重试 / 取消 / ZIP·GLB 校验 / SHA-256。
+- **统一搜索**：8 个 3D 资产平台 + 13 个图站，「全部平台」并行检索并交错合并结果；平台清单见 [`docs/platforms.md`](docs/platforms.md)。
+- **一键下载队列**：各平台共用同一套队列，支持暂停 / 重试 / 取消 / ZIP·GLB 校验 / SHA-256。
 - **导出选项**：GLB 或 FBX；ZIP 压缩包或直接输出文件夹（可直接拖进 Unity）；贴图尺寸可选。
 - **本地模型库**：收藏、分类筛选、可旋转 3D 预览。
 - **Blender 直送**：已下载到本地的资产一键导入当前场景。
@@ -60,3 +62,5 @@ npm run fetch:blender          # 下载便携版 Blender（FBX 导出可选）
 ## License
 
 GPL-3.0-only（上游 GPL-3.0，本仓库为衍生作品，见 `LICENSE`）。
+
+平台模块：在「设置 → 平台模块」按需启用或关闭在线平台，默认全部启用。保存后页面自动刷新；关闭的平台不参与搜索、分类初始化、在线解析和新下载，已下载文件及已有任务保留。配置由主机统一保存，局域网访客刷新后同步，不能修改开关。

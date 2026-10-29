@@ -17,7 +17,7 @@ const build=(state={favorites:new Set(),models:[],selected:new Set(),tasks:[]},d
  state,
  queuePulse:new Map(),
  imageDownload:{button:()=>'<button class="card-icon-action download-images" data-action="download-images">img</button>'},
- blenderSendButton:()=>'',
+ sendControl:()=>'',
  platformLabel,
  artstationUI:()=>({has3dScene:()=>false}),
  downloadsUI,
@@ -26,16 +26,30 @@ const build=(state={favorites:new Set(),models:[],selected:new Set(),tasks:[]},d
 
 const render=model=>build().card(model);
 
+test('image discovery cards preview locally without model-library actions in every layout',()=>{
+ const state={route:'discover',platform:'artstation',modelOnly:false,favorites:new Set(),models:[],selected:new Set(),tasks:[]};
+ const model={uid:'a'.repeat(32),platform:'artstation',name:'Picture',thumbnail:'https://example.com/image.jpg'};
+ for(const options of [{},{gallery:true},{compact:true}]){
+  state.compact=!!options.compact;
+  const html=build(state).card(model,options);
+  assert.doesNotMatch(html,/data-action="collect"|data-action="favorite"/);
+  assert.match(html,/查看作品图片/);
+  assert.match(html,/data-action="preview"/);
+ }
+ state.modelOnly=true;
+ assert.match(build(state).card(model),/data-action="collect"/);
+});
+
 test('ambientCG models hide texture tiers and recognise existing model files at any resolution',()=>{
  for(const sourceType of ['terrain','3d-model']){
   const model={uid:'a'.repeat(32),name:'Model',platform:'ambientcg',assetType:'models',sourceType,materialResolution:'2K',materialFormat:'PNG'};
   const job={id:'local',uid:model.uid,state:'saved',fileExists:true,options:{resolution:'1K',textureFormat:'JPG'}};
   const html=build(undefined,()=>({jobs:[job]})).card(model);
   assert.doesNotMatch(html,/data-material-resolution/);
-  assert.match(html,/aria-label="已下载到本地"/);
+  assert.doesNotMatch(html,/data-action="download"/,'已下载的模型卡不再显示下载键，只留发送到');
   assert.match(html,/data-action="reveal-download"/);
   const missing=build(undefined,()=>({jobs:[{...job,fileExists:false}]})).card(model);
-  assert.doesNotMatch(missing,/aria-label="已下载到本地"/);
+  assert.match(missing,/data-action="download"/,'文件不在时应能重新下载');
  }
 });
 
@@ -44,9 +58,9 @@ test('SBSAR has no resolution selector but is distinct from baked texture downlo
  const job={id:'sbsar',uid:model.uid,state:'saved',fileExists:true,options:{resolution:'2K',textureFormat:'SBSAR'}};
  const html=build(undefined,()=>({jobs:[job]})).card(model);
  assert.doesNotMatch(html,/data-material-resolution/);
- assert.match(html,/aria-label="已下载到本地"/);
+ assert.doesNotMatch(html,/data-action="download"/,'SBSAR 已下载 → 不显示下载键');
  const baked=build(undefined,()=>({jobs:[{...job,options:{textureFormat:'JPG'}}]})).card(model);
- assert.doesNotMatch(baked,/aria-label="已下载到本地"/);
+ assert.match(baked,/data-action="download"/,'烘焙贴图未下过 → 仍有下载键');
  assert.doesNotMatch(render({...model,sourceType:'material',materialFormat:'SBSAR'}),/data-material-resolution/);
 });
 
@@ -64,8 +78,8 @@ test('downloaded state follows the selected resolution, not just the asset',()=>
  const jobs2k=[{id:'j2',uid:skybox.uid,kind:'freestylized',state:'saved',fileExists:true,options:{output:'folder',format:'glb',resolution:'2K'}}];
  const jobsLegacy=[{id:'jl',uid:skybox.uid,kind:'freestylized',state:'saved',fileExists:true,options:{output:'folder',format:'glb'}}];
  const withJobs=jobs=>build(undefined,()=>({jobs}));
- // 「已下载」的判据看下载键（disabled + 文案），typeLabel 已不再显示导出状态。
- const downloadedKey=html=>(/<button class="card-download"[^>]*\sdisabled/.test(html))&&html.includes('>已下载<');
+ // 「已下载」的判据改成「没有下载键」：2026-10-29 起已下载的卡片直接不显示下载键，只留「发送到」。
+ const downloadedKey=html=>!html.includes('data-action="download"');
  // 8K 任务在手，但卡片选的是 2K → 不算已下载。
  assert.equal(downloadedKey(withJobs(jobs8k).card(skybox)),false,'8K 已下载 ≠ 2K 已下载');
  // 精度对上才算。
@@ -204,19 +218,19 @@ test('the gallery view keeps overlays on the thumbnail even when compact was tog
  assert.ok(media.includes('preview-hit')&&media.includes('favorite'),'画廊视图控件仍叠在缩略图上');
 });
 
-test('an already downloaded card cannot be downloaded again',()=>{
+test('an already downloaded card shows no download button, only the export one',()=>{
+ // 2026-10-29 用户要求：已下载的资产不再显示那个不能点的「✓ 已下载」键，卡片上只留「发送到」。
  const model={uid:'i'.repeat(32),name:'Wood 096',author:'ambientCG',platform:'ambientcg',assetId:'Wood096',thumbnail:'',license:'CC0',downloadable:true};
  const saved=build(undefined,()=>({jobs:[{uid:model.uid,state:'saved',fileExists:true,id:'job-1'}]}));
  const html=saved.card(model);
- assert.match(html,/<button class="card-download"[^>]*\sdisabled/,'已有导出记录时下载键必须禁用，防重复下载');
- assert.ok(html.includes('已下载'),'下载键文案要改成已下载');
- assert.ok(html.includes('无需重复下载'),'禁用态要说明原因');
+ assert.doesNotMatch(html,/data-action="download"/,'已下载的卡片不该再出现下载键');
  // 队列任务结束（saved）同样按已下载处理
  const taskDone=build({favorites:new Set(),models:[],selected:new Set(),tasks:[{uid:model.uid,state:'saved'}]});
- assert.match(taskDone.card(model),/<button class="card-download"[^>]*\sdisabled/,'本地任务已 saved 时也要禁用');
+ assert.doesNotMatch(taskDone.card(model),/data-action="download"/,'本地任务已 saved 时也不该有下载键');
  // 没下载过的照常可点
  const fresh=render(model);
- assert.equal(/<button class="card-download"[^>]*\sdisabled/.test(fresh),false,'未下载的卡片下载键必须可点');
+ assert.match(fresh,/data-action="download"/,'未下载的卡片必须有下载键');
+ assert.doesNotMatch(fresh,/data-action="download"[^>]*\sdisabled/,'未下载的卡片下载键必须可点');
 });
 
 test('the meta row drops the downloadable tag and folds the license into a hint key',()=>{
@@ -275,7 +289,8 @@ test('LAN visitors download to their own computer instead of a disabled 已下�
  assert.match(guest,/<span>下载到本机<\/span>/);
  assert.doesNotMatch(guest,/<button class="card-download" data-action="download"[^>]*disabled/);
  assert.doesNotMatch(guest,/data-action="reveal-download"/);
- assert.match(build(undefined,()=>({jobs:[job]})).card(model),/<span>已下载<\/span>/);
+ // 主机用户：已下载 → 不再显示下载键（连「已下载」文案一起撤掉），只留「发送到」。
+ assert.doesNotMatch(build(undefined,()=>({jobs:[job]})).card(model),/data-action="download"/,'已下载的卡片不再显示下载键');
 });
 
 // 入库角标和底部移除键都在改主机的资产库，访客的卡片上不该出现这两个入口。

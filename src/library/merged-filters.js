@@ -71,7 +71,7 @@ export function createMergedFilters({$,icon,state,onReset,onSearch}){
   const body=el('div','ftree-body');const kids=el('div','ftree-kids');body.append(kids);
   section.append(head,body);
   const box={section,head,kids,chip,open:!!open,wideOpen:null};
-  head.addEventListener('click',()=>setOpen(box,!box.open));
+  head.addEventListener('click',()=>setOpen(box,!box.section.classList.contains('open')));
   return box;
  };
  const setOpen=(box,open)=>{box.open=open;box.section.classList.toggle('open',open);box.head.setAttribute('aria-expanded',String(open));};
@@ -195,7 +195,7 @@ export function createMergedFilters({$,icon,state,onReset,onSearch}){
  const release=()=>{};
  return {refresh,release,kinds,clearKinds,setNarrow(next){
   for(const box of [catBox]){
-   if(next){box.wideOpen=box.open;setOpen(box,false);}
+   if(next){box.wideOpen=box.section.classList.contains('open');setOpen(box,false);}
    else setOpen(box,box.wideOpen==null?box.open:box.wideOpen);
   }
  }};

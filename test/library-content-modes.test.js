@@ -1,7 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {ALL} from '../src/library/platforms.js';
+import {ALL,platformsForMode} from '../src/library/platforms.js';
 import {CONTENT_MODES,modeById,activeMode,modeTarget,createContentModes} from '../src/library/content-modes.js';
+
+test('image platform selector offers individual sites without the merged option',()=>{
+ const images=platformsForMode('image').map(item=>item.id);
+ assert.ok(!images.includes(ALL));
+ assert.ok(images.includes('artstation'));
+ assert.ok(images.includes('500px'));
+ assert.ok(platformsForMode('model').some(item=>item.id===ALL));
+ assert.ok(platformsForMode('').some(item=>item.id===ALL));
+});
 
 // 按钮高亮是从 state 推出来的：模型模式=全部平台且只要 3D；图片模式=A 站瀑布流。
 // 状态对不上就都不亮，而不是顺手亮第一个。

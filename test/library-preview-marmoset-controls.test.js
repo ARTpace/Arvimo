@@ -37,9 +37,10 @@ test('双击重置相机回到取景机位',()=>{
  assert.ok(preview.includes("canvas.addEventListener('dblclick',()=>resetCamera());"),'双击要绑重置');
  assert.ok(preview.includes('function resetCamera(){'),'要有 resetCamera 实现');
  assert.ok(preview.includes('function rememberHome(){'),'各分支取景后要记 homeShot');
- // 五个取景分支：Poly Haven models/textures/hdris + FreeStylized 模型/环境舞台
- assert.equal((preview.match(/rememberHome\(\)/g)||[]).length,5,
-  '五个取景分支都要调 rememberHome，漏一个那种资产双击重置就没反应');
+ // 六个取景分支：Poly Haven models/textures/hdris + FreeStylized 模型/环境舞台 + Polyfork 参数化。
+ // Polyfork 那处是 `if(!keepCamera)rememberHome()`：重建几何时保留当前机位，不覆盖 homeShot。
+ assert.equal((preview.match(/rememberHome\(\)/g)||[]).length,6,
+  '六个取景分支都要调 rememberHome，漏一个那种资产双击重置就没反应');
 });
 
 test('灯光 rig 与预览器 UI 到位',()=>{

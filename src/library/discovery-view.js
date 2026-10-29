@@ -4,7 +4,7 @@
 // 于是「多源怎么合并」「状态行怎么说」「分页按钮叫什么」这些规则全部收在这里，
 // 它们不需要 DOM 也不需要网络，可以直接单元测试。
 
-import {FEED_LABELS,feedLabel,ORIGIN_COPY,platformById} from './platforms.js';
+import {FEED_LABELS,feedLabel,ORIGIN_COPY,platformById,isPictureSite} from './platforms.js';
 
 export const SOURCE_LABELS=FEED_LABELS;
 export const DEFAULT_STATUS='关键词直接搜索，不需要先复制官网网址。';
@@ -27,7 +27,7 @@ export function combine({sources,feeds}){
   sources,rows:interleave(list.map(feed=>feed.rows)),request:null,
   pages:Math.max(0,...list.map(feed=>feed.pages)),
   next:list.some(feed=>feed.next||feed.pending.length),pending:list.flatMap(feed=>feed.pending),
-  busy:list.some(feed=>feed.busy),error:list.every(feed=>feed.error),
+  busy:list.some(feed=>feed.busy),error:list.length>0&&list.every(feed=>feed.error),
   warnings:[...new Set(list.flatMap(feed=>feed.warnings))].slice(0,24),status:'',
   controller:{abort:()=>list.forEach(feed=>feed.controller?.abort())},
  };
@@ -35,6 +35,7 @@ export function combine({sources,feeds}){
 
 /** 多平台时逐源报进度，否则第二个平台的失败会被第一个平台的「已加载」盖住。 */
 export function statusText({sources,feeds}){
+ if(!sources.length)return '这个平台按链接解析：把作品页 / 标签页地址粘到搜索框，回车即可。';
  if(sources.length===1)return feeds[sources[0]].status||DEFAULT_STATUS;
  return sources.map(mode=>`${SOURCE_LABELS[mode]}：${feeds[mode].busy?'检索中…':feeds[mode].status||'待检索'}`).join(' · ');
 }
@@ -46,7 +47,7 @@ export function subtitleText({source,platform,feeds,count,pages,request,categori
   const parts=Object.keys(feeds).filter(mode=>feeds[mode].request||feeds[mode].rows.length).map(mode=>`${SOURCE_LABELS[mode]} ${feeds[mode].rows.length} 个`);
   return parts.length?`已加载 ${parts.join(' · ')} · 第 ${pages} 页 · 未自动入库`:`同时检索全部平台的公开资产 · 收藏或加入后才存入模型库`;
  }
- if(!request)return `来自 ${ORIGIN_COPY[platform]||feedLabel(platformById(platform).feeds[0])} · 收藏或加入后才存入模型库`;
+ if(!request)return `来自 ${ORIGIN_COPY[platform]||feedLabel(platformById(platform).feeds[0])||platformById(platform).label} · 收藏或加入后才存入模型库`;
  const category=request.category?` · ${categories.find(([key])=>key===request.category)?.[1]||''}`:'';
  return `已加载 ${count} 个${platform==='artstation'?' Marmoset 作品':'公开模型'} · 第 ${pages} 页${category} · 未自动入库`;
 }
@@ -75,6 +76,8 @@ export function describeRequest({source,platform,feeds,categories,describeArt}){
   return origin?origin:'链接解析结果';
  }
  if(platform==='artstation')return describeArt(feeds.art.request);
+ // 图站没有检索请求，标题直接写站名，别落到「发现好模型」这种和眼前内容不符的说法上。
+ if(isPictureSite(platform))return platformById(platform).label;
  const request=feeds[platformById(platform).feeds[0]]?.request;
  // 浏览态（没有关键词）拿到的是平台的「最新精选」：默认榜单每天都在更新，所以标题不再说
  // 「热门资产」——那是旧行为（固定的历史点赞榜），现在说"精选"才对得上眼前这批卡片。

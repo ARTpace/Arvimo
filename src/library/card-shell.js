@@ -12,7 +12,8 @@
 //   title/titleAttrs  标题文本与它所在 button 的属性
 //   byline            标题右侧的作者或统计
 //   side              标题行最右的提示键（许可以及同类信息）
-//   actions           底部主操作区（标签、下载、Blender、移除…）
+//   metaActions       标题下方常驻的次要控件（标签、材质格式 / 精度选择、导出目标），不叠在封面上
+//   actions           底部主操作区（下载、移除…）；为空时整块不渲染（缩略图右下角不留空壳）
 export function assetCard({
   keyName = 'uid',
   keyValue = '',
@@ -23,10 +24,13 @@ export function assetCard({
   titleAttrs = '',
   byline = '',
   side = '',
+  metaActions = '',
   actions = '',
 } = {}) {
   const classes = ['model-card', className].filter(Boolean).join(' ');
-  return `<article class="${classes}" data-${keyName}="${keyValue}"><div class="card-media">${media}${overlay}</div><div class="card-meta"><button class="card-title" ${titleAttrs}>${title}</button>${byline}${side}</div><div class="card-bottom"><div class="card-primary-actions">${actions}</div></div></article>`;
+  // 底栏是叠在缩略图右下角的一层。没内容时整块不渲染：否则会剩一条空的渐变斜角，看着像坏了。
+  const bottom=actions?`<div class="card-bottom"><div class="card-primary-actions">${actions}</div></div>`:'';
+  return `<article class="${classes}" data-${keyName}="${keyValue}"><div class="card-media">${media}${overlay}</div><div class="card-meta"><button class="card-title" ${titleAttrs}>${title}</button>${byline}${side}${metaActions?`<div class="card-meta-actions">${metaActions}</div>`:''}</div>${bottom}</article>`;
 }
 
 /** 封面：有图给 img，没图给占位块。裁切由卡片上的 thumb-contain 决定，这里不做判断。 */

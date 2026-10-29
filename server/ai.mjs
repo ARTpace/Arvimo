@@ -34,21 +34,21 @@ export function createAIService({file,fetchImpl=fetch,timeoutMs=30000}){
   });
   pending=operation.catch(()=>{});return operation;
  }
- async function request(config,endpoint,payload,signal){
+ async function request(config,endpoint,payload,signal,waitMs=timeoutMs){
   const headers={'Content-Type':'application/json'};
   if(config.apiKey)headers.Authorization=`Bearer ${config.apiKey}`;
   let response;
-  try{response=await fetchImpl(`${config.baseUrl}/${endpoint}`,{method:payload?'POST':'GET',headers,redirect:'error',signal:signal?AbortSignal.any([signal,AbortSignal.timeout(timeoutMs)]):AbortSignal.timeout(timeoutMs),...(payload?{body:JSON.stringify(payload)}:{})});}
+  try{response=await fetchImpl(`${config.baseUrl}/${endpoint}`,{method:payload?'POST':'GET',headers,redirect:'error',signal:signal?AbortSignal.any([signal,AbortSignal.timeout(waitMs)]):AbortSignal.timeout(waitMs),...(payload?{body:JSON.stringify(payload)}:{})});}
   catch{throw Error('AI 请求失败或超时，请检查地址与服务状态');}
   if(!response.ok){await response.body?.cancel();throw Error(`AI 接口返回 HTTP ${response.status}，请检查密钥、模型和服务状态`);}
   const chunks=[];let bytes=0;
   try{for await(const chunk of response.body){bytes+=chunk.length;if(bytes>1024*1024)throw Error();chunks.push(Buffer.from(chunk));}return JSON.parse(Buffer.concat(chunks).toString('utf8'));}
   catch{throw Error('AI 返回内容无效或过大');}
  }
- async function complete(messages,{signal,maxTokens=512}={}){
+ async function complete(messages,{signal,maxTokens=512,timeoutMs:waitMs}={}){
   const config=await read();
   if(!config.enabled)throw Error('请先在 AI 接入中启用并保存设置');
-  const data=await request(config,'chat/completions',{model:config.model,messages,stream:false,max_tokens:maxTokens},signal);
+  const data=await request(config,'chat/completions',{model:config.model,messages,stream:false,max_tokens:maxTokens},signal,waitMs);
   const text=data.choices?.[0]?.message?.content;
   if(typeof text!=='string'||!text.trim())throw Error('AI 没有返回有效文本，请检查模型是否支持文本对话');
   return {text,model:typeof data.model==='string'?data.model:config.model};

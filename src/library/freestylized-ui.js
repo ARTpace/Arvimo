@@ -1,9 +1,10 @@
 import {fetchCategories,fillOptions} from './category-options.js';
 
-export function createFreestylizedUI({$,esc,toast,requestFeed}){
+export function createFreestylizedUI({enabled=()=>true,$,esc,toast,requestFeed}){
  function read(){return {q:$('#asset-query').value.trim().slice(0,200),type:$('#freestylized-type').value||'models',category:$('#freestylized-category').value};}
  function start(){return requestFeed('freestylized',read());}
  async function loadCategories(){
+  if(!enabled())return;
   const type=$('#freestylized-type').value||'models';
   try{
    const rows=await fetchCategories(`/api/freestylized/categories?type=${encodeURIComponent(type)}`);

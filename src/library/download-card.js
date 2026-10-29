@@ -1,4 +1,5 @@
 import {STEPS,STATE_LABELS,progressView,ACTIVE,WAITING,TERMINAL} from './download-progress.js';
+import {chineseError} from './error-message.js';
 
 /**
  * Task card rendering. One rule drives the whole layout: the card face carries only what a
@@ -57,8 +58,8 @@ export function createTaskCard({esc,icon,visitor=false}){
   out.push('<p class="progress-hint">资源按需获取，接收与转换阶段可能交替。</p>');
   return out;
  };
- const pathLine=t=>visitor?'<p class="job-path">任务由主机处理，完成后自动取回到此电脑的保存位置。</p>':t.state==='saved'
-  ?`<p class="job-path" title="${esc(t.filePath)}">${icon('folder')}${esc(t.filePath)}</p>`
+ const pathLine=t=>visitor?'<p class="job-path">任务由主机处理，完成后自动取回到此电脑的保存位置。</p>':t.filePath&&t.fileExists
+  ?`<p class="job-path" title="${esc(t.filePath)}">${icon('folder')}${esc(t.filePath)}${t.state==='saved'?'':'（下载中，可先打开）'}</p>`
   :`<p class="job-path" title="${esc(t.downloadDir)}">${icon('folder')}保存到：${esc(t.downloadDir)}</p>`;
  // An image bundle is verified against its own manifest, so the shield line names images, not meshes.
  const verifiedLine=t=>{
@@ -79,7 +80,8 @@ export function createTaskCard({esc,icon,visitor=false}){
   return parts.join('');
  };
  const actions=(t,{busy,done,canCancel})=>[
-  !visitor&&done&&t.fileExists?`<button data-dm-action="reveal" data-id="${t.id}">${icon('folder')}文件夹</button>`:'',
+  // 图片包是边下边写的：第一张图落地后文件夹就已经存在，不必等任务结束才给入口。
+  !visitor&&t.fileExists?`<button data-dm-action="reveal" data-id="${t.id}">${icon('folder')}文件夹</button>`:'',
   done&&t.fileExists?`<button data-dm-action="download-local" data-id="${t.id}" title="保存到当前浏览器所在电脑；文件夹会打包为 ZIP（最大 2GB）">下载到我的电脑</button>`:'',
   canCancel?`<button data-dm-action="cancel" data-id="${t.id}">取消</button>`:'',
   ['queued','retry_wait'].includes(t.state)?`<button data-dm-action="hold" data-id="${t.id}">暂停</button>`:'',
@@ -89,6 +91,7 @@ export function createTaskCard({esc,icon,visitor=false}){
   !visitor&&!busy&&!WAITING.has(t.state)?`<button data-dm-action="remove" data-id="${t.id}" title="只删除记录，不删除文件">移除</button>`:''
  ].join('');
  return (t,{selected,openDetails,openLog}={})=>{
+  t={...t,warning:chineseError(t.warning)};
   const busy=ACTIVE.has(t.state),done=t.state==='saved';
   const canCancel=WAITING.has(t.state)||busy&&!['saving','cancelling'].includes(t.state);
   const elapsed=Math.max(0,((t.finishedAt||Date.now())-(t.startedAt||t.createdAt))/1000);
@@ -98,7 +101,7 @@ export function createTaskCard({esc,icon,visitor=false}){
   // "尝试 1 次" is the norm; attempts only earn space on the face once a retry actually happened.
   const facts=[sizeText(t.bytes||t.totalBytes),...(t.attempts>1?[`尝试 ${t.attempts} 次`]:[]),`${Math.floor(elapsed)}s`].join(' · ');
   // A completed task is already stated by the status line; "已保存到本机…" repeats it word for word.
-  const message=done?'':`<p class="task-message">${esc(t.message)}</p>`;
+  const message=done?'':`<p class="task-message">${esc(chineseError(t.message,{fallback:error}))}</p>`;
   return `<article class="task ${busy?'task-running':''}" data-job="${t.id}"><div class="task-main"><label class="task-checkbox"><input type="checkbox" data-job-select="${t.id}" aria-label="选择任务 ${esc(t.name)}" ${selected?'checked':''}></label>${t.thumbnail?`<img class="task-image" src="/api/image?url=${encodeURIComponent(t.thumbnail)}" alt="" loading="lazy">`:`<div class="task-image task-cube">${icon('cube')}</div>`}<div class="task-summary"><h3>${esc(t.name)}<span class="job-format">${esc(formatBadge(t))}</span></h3><div class="task-status ${error?'error':''}">${busy?'<span class="spinner"></span>':''}${esc(status)} <span class="job-facts">${facts}</span></div>${message}${t.warning?`<p class="task-warning">${esc(t.warning)}</p>`:''}${busy?liveSection(t,view,n):''}</div><div class="task-actions">${actions(t,{busy,done,canCancel})}<button data-task-disclosure="details" aria-expanded="${!!openDetails}">详情</button><button data-task-disclosure="log" aria-expanded="${!!openLog}">日志</button></div></div><details class="task-details" data-kind="details" data-id="${t.id}" ${openDetails?'open':''}><summary>详情<span>${TERMINAL.has(t.state)?'保存位置 · 校验信息':'保存位置 · 进度明细'}</span></summary><div class="task-details-body">${detailBody(t,view,n)}</div></details><details class="task-log" data-kind="log" data-id="${t.id}" ${openLog?'open':''}><summary>任务日志 · ${t.logs.length} 条 · ${esc(t.author)} <span>${new Date(t.createdAt).toLocaleString()}</span></summary><div class="task-log-head"><button data-dm-action="log" data-id="${t.id}">导出日志</button><span>${esc(t.downloadDir)}</span></div><pre>${esc(t.logs.join('\n')||'任务尚未开始')}</pre></details></article>`;
  };
 }

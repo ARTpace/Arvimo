@@ -12,7 +12,7 @@ import {openExternal} from './open-url.js';
 
 const MAX_BATCH=20;
 
-export function createArtstationUI({$,icon,esc,toast,state,requestFeed}){
+export function createArtstationUI({enabled=()=>true,$,icon,esc,toast,state,requestFeed}){
  const ui={filters:null};
  const isArt=model=>model?.platform==='artstation';
  const artworkUrl=model=>model?.artworkUrl||(model?.artId?`https://www.artstation.com/artwork/${model.artId}`:'');
@@ -59,6 +59,7 @@ export function createArtstationUI({$,icon,esc,toast,state,requestFeed}){
   return data;
  }
  async function loadFilters(){
+  if(!enabled())return;
   try{
    const data=await api('/filters');
    ui.filters=data;
@@ -122,7 +123,7 @@ function setup(){
  $('#art-artist-projects').onclick=()=>browseArtist('projects');
  $('#art-artist-likes').onclick=()=>browseArtist('likes');
  $('#art-artist').onkeydown=event=>{if(event.key==='Enter'){event.preventDefault();browseArtist('projects');}};
- void loadFilters();
+ return loadFilters();
 }
  return Object.assign(ui,{isArt,has3dScene,setup,start,read,write,describe,resolveModel,resolveEmbed,openPreview,openArtwork,artworkUrl,browseArtist,maxBatch:MAX_BATCH});
 }

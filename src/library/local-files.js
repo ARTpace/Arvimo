@@ -193,11 +193,13 @@ export function createLocalFiles({$,icon,esc,gltfPreview,notify,onChanged}){
  /** 缩略图 URL：一律走后端缩略图缓存（PNG 缩放、PSD 转码都在那里，w 是最大边）。
   *  后端遇到做不了的格式（SVG / 没装 ffmpeg）会原样透传，所以这里不必要再按格式分支。 */
  function packageImageUrl(pkg,rel,width){
+  if(pkg.imageUrl)return pkg.imageUrl(rel,true);
   return `/api/local/thumb?root=${encodeURIComponent(pkg.root)}&rel=${encodeURIComponent(packageRel(pkg,rel))}&w=${width||512}`;
  }
  /** 大图 URL：浏览器自己认的格式直接给原文件（保留原分辨率，也不做无谓的 PNG 重编码，
   *  JPG 转 PNG 只会更大）；PSD 这类必须靠后端转码。 */
  function packagePhotoUrl(pkg,rel){
+  if(pkg.imageUrl)return pkg.imageUrl(rel,false);
   const name=String(rel).split('/').pop();
   return SERVER_IMAGE.test(name)?packageImageUrl(pkg,rel,2048):packageFileUrl(pkg,rel);
  }
@@ -244,7 +246,7 @@ function openGallery(pkg,images,index=0){
  const dlg=$('#file-preview-dialog'),stage=$('#file-preview-stage'),aside=$('#file-preview-details');
  if(!dlg||!stage||!aside)return;
  galleryPkg=pkg;
- galleryImages=images.slice(0,MAX_TILES);
+ galleryImages=pkg.imageUrl?images:images.slice(0,MAX_TILES);
  galleryIndex=Math.max(0,Math.min(Number(index)||0,galleryImages.length-1));
  clearStage();
  dlg.classList.add('is-gallery');
@@ -254,6 +256,7 @@ function openGallery(pkg,images,index=0){
  $('#file-preview-hint').textContent='';
  stage.innerHTML=`<div class="local-gallery-main" data-gallery-main>
    <img class="local-gallery-photo" alt="" draggable="false">
+   <iframe data-gallery-viewer title="交互式 3D 预览" allow="fullscreen" allowfullscreen hidden style="position:absolute;inset:0;width:100%;height:100%;border:0"></iframe>
    <p class="local-gallery-error" hidden>这张图生成不了预览</p>
    <div class="local-gallery-hud">
     <button type="button" data-gallery-zoom="out" aria-label="缩小">−</button>
@@ -264,7 +267,7 @@ function openGallery(pkg,images,index=0){
   </div>`;
  // 缩略图条挂在 dialog 上（不是 preview-layout 里面），才能横跨大图和信息栏的整个宽度。
  const strip=ensureStrip(dlg);
- strip.innerHTML=galleryImages.map((item,i)=>`<button type="button" class="local-gallery-thumb" data-gallery-index="${i}" title="${esc(item.name)}"><img src="${esc(packageImageUrl(pkg,item.rel,256))}" alt="${esc(item.name)}" loading="lazy" decoding="async"><span>${esc(item.name)}</span></button>`).join('');
+ strip.innerHTML=galleryImages.map((item,i)=>`<button type="button" class="local-gallery-thumb" data-gallery-index="${i}" title="${esc(item.name)}">${item.type==='3d'?`<strong>3D</strong>`:`<img src="${esc(packageImageUrl(pkg,item.rel,256))}" alt="${esc(item.name)}" loading="lazy" decoding="async">`}<span>${esc(item.name)}</span></button>`).join('');
  galleryZoom=bindZoom(stage.querySelector('[data-gallery-main]'),stage.querySelector('[data-gallery-zoom-label]'));
  showGalleryImage(galleryIndex,{reveal:true});
  if(!dlg.open)dlg.showModal();
@@ -283,6 +286,7 @@ function ensureStrip(dlg){
 
 /** 右侧信息栏：素材包概况 + 当前这张图。换图时整块重写，内容短，不怕重建。 */
 function galleryInfoHtml(pkg,item){
+ if(pkg.details)return '';
  const count=galleryImages.length;
  return `<div class="eyebrow">LOCAL PACKAGE</div>
   <h2>${esc(pkg.title)}</h2>
@@ -301,17 +305,30 @@ function showGalleryImage(index,{reveal=false}={}){
  const item=galleryImages[index];
  if(!item)return;
  galleryIndex=index;
- const img=$('#file-preview-stage')?.querySelector('img');
+ const stage=$('#file-preview-stage'),is3d=item.type==='3d';
+ const viewer=stage?.querySelector('[data-gallery-viewer]');
+ if(viewer){
+  viewer.hidden=!is3d;
+  if(is3d){if(viewer.getAttribute('src')!==item.embedUrl)viewer.src=item.embedUrl;}
+  else viewer.removeAttribute('src');
+ }
+ const hud=stage?.querySelector('.local-gallery-hud');
+ if(hud)hud.hidden=is3d;
+ const img=stage?.querySelector('img');
  if(img){
+  img.hidden=is3d;
   const error=img.parentElement?.querySelector('.local-gallery-error');
+  if(error)error.hidden=true;
   img.onload=()=>{if(error)error.hidden=true;img.classList.remove('is-broken');};
   // PSD 转码失败（坏文件 / 不认识的压缩）时别留一张破图，说清楚为什么。
   img.onerror=()=>{if(error)error.hidden=false;img.classList.add('is-broken');};
-  img.src=packagePhotoUrl(galleryPkg,item.rel);img.alt=item.name;
+  if(is3d){img.onload=null;img.onerror=null;img.removeAttribute('src');}
+  else {img.src=packagePhotoUrl(galleryPkg,item.rel);img.alt=item.name;}
  }
  galleryZoom?.reset();
  const aside=$('#file-preview-details');
  if(aside)aside.innerHTML=galleryInfoHtml(galleryPkg,item);
+ galleryPkg.details?.(item,galleryIndex,galleryImages.length);
  const strip=$('#file-preview-dialog .local-gallery-strip');
  strip?.querySelector('.local-gallery-thumb.is-active')?.classList.remove('is-active');
  const active=strip?.querySelector(`[data-gallery-index="${index}"]`);
@@ -627,5 +644,9 @@ function unlockPageScroll(){document.documentElement.classList.remove('file-prev
   });
  }
 
- return {setup,scan,matches,matchesPackage,card,packageCard,openFile,openPackage,entries:()=>files,packages:()=>packages,count:()=>files.length,truncated:()=>truncated,loading:()=>loading};
+ function openImageGallery({title,images,index=0,onChange}){
+  const items=images.map((item,i)=>({...item,rel:String(i),name:item.title||`图片 ${i+1}`}));
+  openGallery({title,category:'images',imageUrl:(rel,thumb)=>`/api/image?url=${encodeURIComponent(thumb?(items[Number(rel)].thumb||items[Number(rel)].url):items[Number(rel)].url)}`,details:onChange},items,index);
+ }
+ return {setup,scan,matches,matchesPackage,card,packageCard,openFile,openPackage,openImageGallery,entries:()=>files,packages:()=>packages,count:()=>files.length,truncated:()=>truncated,loading:()=>loading};
 }

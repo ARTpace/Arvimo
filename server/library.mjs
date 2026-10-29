@@ -1,11 +1,17 @@
+import {createPlatformSettings,platformForPath} from './platform-settings.mjs';
 import http from 'node:http';
+import {chineseError} from '../src/library/error-message.js';
+import {listenPort} from './listen-port.mjs';
+import {createLanListener} from './lan-listener.mjs';
 import {createLibraryStorage} from './library-storage.mjs';
 import fs from 'node:fs/promises';
 import {createReadStream,writeSync} from 'node:fs';
 import {DownloadManager} from './downloads.mjs';
+import {createExports} from './exports.mjs';
 import {browseFolders} from './folder-dialog.mjs';
 import {listLocalFolder,resolveLocalFile,localMime,parseRange} from './local-browse.mjs';
 import {scanLibraryPackages} from './local-assets.mjs';
+import {cachedScan, invalidateScanCache} from './scan-cache.mjs';
 import {registerPackage,patchPackageMeta} from './asset-meta.mjs';
 import {findFfmpeg,probeMedia,transcodePlan,streamMp4} from './video-transcode.mjs';
 import {thumbFor} from './thumb-cache.mjs';
@@ -26,14 +32,24 @@ import {polyhavenSearch,polyhavenCategories} from './polyhaven.mjs';
 import {polypizzaSearch} from './polypizza.mjs';
 import {kenneySearch,kenneyCategories} from './kenney.mjs';
 import {freestylizedSearch,freestylizedCategories,freestylizedType} from './freestylized.mjs';
+import {polyforkSearch,polyforkCategories,polyforkParams,polyforkVariant,polyforkGenerator,patchGeneratorSource} from './polyfork.mjs';
+import {createPolyforkZh} from './polyfork-zh.mjs';
 import {freestylizedPreview,freestylizedPreviewFile} from './freestylized-preview.mjs';
 import {createSubstanceBridge} from './substance-engine.mjs';
 import {ambientcgSearch,ambientcgViewer,ambientcgCategories} from './ambientcg.mjs';
 import { curlImpersonateInfo } from './curl-impersonate.mjs';
 import {browserStatus,startBrowserInstallJob,browserInstallJob} from './browser-runtime.mjs';
+// 登录态：可见浏览器窗口 → CDP 导出 cookie → 存进 jar → 之后所有纯 HTTP 请求自动带上。
+import {startLogin,loginStatus,closeLogin,syncCookies,sessionStatus,capturePage,harvestCookies,releaseProfile,shutdownBrowser as shutdownBrowserSession} from './browser-session.mjs';
+import {cookieStats,clearCookies,cookieHeaderFor,browserProfileDir,loginStateFor} from './cookie-jar.mjs';
+import {warmStatus,warmHost} from './cookie-warmer.mjs';
+import {renderDom} from './headless-dom.mjs';
 import {dependencyReport,updateSetup,setBlenderPath,applyBlenderOverride} from './setup.mjs';
 import { coverLadder, artstationRenditionUrl, ARTSTATION_COVER_RENDITIONS } from './artstation-cdn.mjs';
 import { openPublic, validateUrl, isSketchfabHost, isArtstationHost } from './public-http.mjs';
+import { collectPictureAssets, isPictureSite, isPictureCdnHost, pictureRefererForHost, PICTURE_SITES, PICTURE_LOGIN_URLS } from './picture-sites.mjs';
+import {collectImageAssets} from './image-sources.mjs';
+import { relatedPinterest } from './pinterest-proxy.mjs';
 
 // 客户端中途关页面/断开时，在途的代理请求会以「任务已取消」被拒绝（public-http.mjs 的
 // AbortSignal 路径）。这条拒绝若没人接住，Node 会把整个服务带崩 —— 实测无头探针一断连就退出。
@@ -47,6 +63,8 @@ const isPolyhavenHost=host=>/(?:^|\.)polyhaven\.(?:com|org)$/i.test(host);
 const isPolypizzaHost=host=>/(?:^|\.)poly\.pizza$/i.test(host);
 const isKenneyHost=host=>/(?:^|\.)kenney\.nl$/i.test(host);
 const isFreestylizedHost=host=>/(?:^|\.)freestylized\.com$/i.test(host);
+// Polyfork 的封面在自家 /files/<id>/renders/*.png，和 API 同一个域。
+const isPolyforkHost=host=>/(?:^|\.)polyfork\.dev$/i.test(host);
 // ambientCG 的缩略图在自家媒体域（acg-media.struffelproductions.com），代理白名单一并放行。
 const isAmbientcgHost=host=>/(?:^|\.)ambientcg\.com$/i.test(host)||/(?:^|\.)struffelproductions\.com$/i.test(host);
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
@@ -64,7 +82,7 @@ let httpCache=createResponseCache(defaultCacheDir());
 // FreeStylized 的预览要把 ZIP 拉下来解包，缓存目录与响应缓存分开：前者是几百 MB 的二进制。
 const previewCacheDir=path.join(resolveDataDir(root).dir,'preview-cache');
 const IMAGE_CACHE_MS=7*24*60*60*1000;
-const SEARCH_CACHE_MS=2*60*60*1000;
+const SEARCH_CACHE_MS=10*60*1000;
 const CATEGORY_CACHE_MS=24*60*60*1000;
 const PREVIEW_CACHE_MS=6*60*60*1000;
 async function cachedJson(res,key,maxAge,produce){
@@ -101,7 +119,7 @@ const types={'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=
 const FRAME_HOSTS=['https://sketchfab.com','https://*.artstation.com','https://artstation.com','https://releases.pbr.one'];
 const CONTENT_SECURITY_POLICY=`default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' blob: data:; frame-src 'self' ${FRAME_HOSTS.join(' ')}; object-src 'none'; base-uri 'none'; frame-ancestors 'none'`;
 const assets=new Set(['/','/index.html','/app.js','/app.css','/engine.js','/favicon.svg','/worker.html','/splash.html','/splash.js','/mascot.png']);
-function json(res,status,data){res.writeHead(status,{'Content-Type':'application/json; charset=utf-8'});res.end(JSON.stringify(data));}
+function json(res,status,data){res.writeHead(status,{'Content-Type':'application/json; charset=utf-8'});res.end(JSON.stringify(data,(key,value)=>key==='error'&&typeof value==='string'?chineseError(value,{fallback:true}):value));}
 /** 预览条目是解出来的原始字节（FBX / PNG / HDR），不是 JSON，也不该每次回源。 */
 function binary(res,status,data,type){res.writeHead(status,{'Content-Type':type,'Content-Length':data.length,'Cache-Control':'private, max-age=3600'});res.end(data);}
 const PREVIEW_MIMES={'.png':'image/png','.jpg':'image/jpeg','.jpeg':'image/jpeg','.webp':'image/webp','.hdr':'image/vnd.radiance','.exr':'image/x-exr','.gltf':'model/gltf+json','.glb':'model/gltf-binary','.fbx':'model/fbx','.obj':'model/obj','.mtl':'text/plain; charset=utf-8','.stl':'model/stl','.ply':'model/ply','.3mf':'model/3mf'};
@@ -137,14 +155,19 @@ async function firstAvailable(candidates,request){
     try{remote.stream.destroy();}catch{}
   }
 }
-export function createLibraryServer({scan=scanPage,search=searchPage,open=openPublic,staticRoot=process.env.SFX_STATIC_ROOT||path.join(root,'dist/library'),downloads=null,artstation={},artsearch=artstationSearch,artfilters=artstationFilterOptions,artartist=artstationArtist,artprofile=artstationArtistProfile,polyhaven=polyhavenSearch,polyhavenCats=polyhavenCategories,polypizza=polypizzaSearch,kenney=kenneySearch,kenneyCats=kenneyCategories,freestylized=freestylizedSearch,freestylizedCats=freestylizedCategories,ambientcg=ambientcgSearch,ambientcgPreview=ambientcgViewer,ambientcgCats=ambientcgCategories,cacheDir=null}={}) {
+export function createLibraryServer({scan=scanPage,search=searchPage,open=openPublic,staticRoot=process.env.SFX_STATIC_ROOT||path.join(root,'dist/library'),downloads=null,artstation={},artsearch=artstationSearch,artfilters=artstationFilterOptions,artartist=artstationArtist,artprofile=artstationArtistProfile,polyhaven=polyhavenSearch,polyhavenCats=polyhavenCategories,polypizza=polypizzaSearch,kenney=kenneySearch,kenneyCats=kenneyCategories,freestylized=freestylizedSearch,freestylizedCats=freestylizedCategories,polyfork=polyforkSearch,polyforkCats=polyforkCategories,polyforkP=polyforkParams,polyforkV=polyforkVariant,polyforkGen=polyforkGenerator,ambientcg=ambientcgSearch,ambientcgPreview=ambientcgViewer,ambientcgCats=ambientcgCategories,cacheDir=null,lanSharing=null,platformSettingsFile=null}={}) {
   // cacheDir：把响应缓存指到别处（测试与脚本传临时目录），免得夹具写进应用数据目录的真缓存。
   // 一个进程同时只会跑一个服务端实例，所以这里直接换掉模块级那一份。
   if(cacheDir)httpCache=createResponseCache(cacheDir);
   const ai=createAIService({file:path.join(resolveDataDir(root).dir,'ai-settings.json')});
+  // 参数译名单独存一目录：它是纯缓存，删掉只会让面板退回规则词表，不影响任何其它数据。
+  const polyforkZh=createPolyforkZh({dir:path.join(resolveDataDir(root).dir,'polyfork-zh'),complete:ai.complete});
   const substance=createSubstanceBridge();
   const libraryStorage=createLibraryStorage(downloads?.dataDir||resolveDataDir(root).dir,downloads);
-  const lan=createLanSharing({file:path.join(downloads?.dataDir||resolveDataDir(root).dir,'lan-sharing.json')});
+  const lan=lanSharing||createLanSharing({file:path.join(downloads?.dataDir||resolveDataDir(root).dir,'lan-sharing.json')});
+  const platforms=createPlatformSettings(platformSettingsFile||path.join(downloads?.dataDir||resolveDataDir(root).dir,'platform-settings.json'));
+  // 多目标「发送到…」：把已下载的成品交付给 Blender（桥接）或引擎 / DCC（复制到工程目录）。
+  const exportsApi=createExports({downloads,dataDir:downloads?.dataDir||resolveDataDir(root).dir});
   return http.createServer(async(req,res)=>{
     res.setHeader('X-Content-Type-Options','nosniff');res.setHeader('Referrer-Policy','no-referrer');
     res.setHeader('Cache-Control','no-store');
@@ -152,6 +175,17 @@ export function createLibraryServer({scan=scanPage,search=searchPage,open=openPu
     try {
       if(await lan.handle(req,res))return;
       const u=new URL(req.url,`http://${req.headers.host}`);
+      if(await exportsApi.handle(req,res,u))return;
+      if(u.pathname==='/api/platforms'){
+        if(req.method==='GET')return json(res,200,platforms.get());
+        if(req.method==='POST'){
+          if(req.lanVisitor||req.headers['x-sfx-local']!=='1')return json(res,403,{error:'仅主机可以修改平台模块'});
+          return json(res,200,await platforms.save(await body(req)));
+        }
+        return json(res,405,{error:'不支持的请求方式'});
+      }
+      const moduleId=platformForPath(u.pathname);
+      if(moduleId&&!platforms.enabled(moduleId))return json(res,403,{error:'该平台已关闭，请在设置 → 平台模块中开启'});
       if(u.pathname==='/api/library-state'){
         if(req.headers['x-sfx-local']!=='1')return json(res,403,{error:'缺少本地请求标识'});
         if(req.method==='GET')return json(res,200,await libraryStorage.load());
@@ -161,6 +195,31 @@ export function createLibraryServer({scan=scanPage,search=searchPage,open=openPu
         }
       }
       if(u.pathname==='/api/health'&&req.method==='GET')return json(res,200,{name:'assetvault-local-library',version:SERVER_VERSION,mode:'local',engine:'existing-exporter'});
+      // 图站抓取（素材下载器整合）：给定图站 URL，返回整站图片清单。复用 collectImageAssets 下游链路。
+      if(req.method==='GET'&&u.pathname==='/api/picture-site/resolve'){
+        if(req.headers['x-sfx-local']!=='1')return json(res,403,{error:'缺少本地请求标识'});
+        const platform=u.searchParams.get('platform'); const url=u.searchParams.get('url');
+        if(!platform||!url)return json(res,400,{error:'需要 platform 与 url 参数'});
+        if(!isPictureSite(platform)&&platform!=='artstation')return json(res,400,{error:'该图站暂不支持抓取'});
+        // 图站开关与 3D 平台同一个设置存储（设置 → 平台模块里那排卡片），关掉就拒绝解析。
+        if(!platforms.enabled(platform))return json(res,403,{error:'该图站已关闭，请在设置 → 平台模块中开启'});
+        // 预览只取前 limit 张（默认 48）：图站动辄上千张，全量解析会让一次点击等十几秒。
+        // 真正下载走 /api/downloads/tasks → runImageJob，不经过这里，仍按整站全量抓取。
+        const limit=Math.min(Math.max(Number(u.searchParams.get('limit'))||48,1),200);
+        try{return json(res,200,await (platform==='artstation'?collectImageAssets:collectPictureAssets)(platform,{url},{open,signal:controller.signal,maxItems:limit}));}
+        catch(e){return json(res,400,{error:e.message||'抓取失败'});}
+      }
+      // Pinterest 相似推荐（pin-grabber 独有 /api/related）：把选中的 pin id 列表丢给 pin-grabber，
+      // 它从当前 STATE.images 取原图、采「更多类似图案」推荐流并追加。需要 STATE.images 已有内容
+      // （即用户先做过一次搜索），否则 pin-grabber 会拒绝。
+      if(u.pathname==='/api/pinterest/related'&&req.method==='POST'){
+        if(req.headers['x-sfx-local']!=='1')return json(res,403,{error:'缺少本地请求标识'});
+        try{
+          const input=await body(req);
+          const items=await relatedPinterest(input.pin_ids,Number(input.count)||24);
+          return json(res,200,{items});
+        }catch(e){return json(res,400,{error:e.message||'相似推荐失败'});}
+      }
       if(u.pathname.startsWith('/api/ai/')){
         if(req.headers['x-sfx-local']!=='1')return json(res,403,{error:'缺少本地请求标识'});
         if(req.method==='GET'&&u.pathname==='/api/ai/settings')return json(res,200,await ai.settings());
@@ -185,6 +244,74 @@ export function createLibraryServer({scan=scanPage,search=searchPage,open=openPu
       if(u.pathname.startsWith('/api/browser')){
         if(req.headers['x-sfx-local']!=='1')return json(res,403,{error:'缺少本地请求标识'});
         if(req.method==='GET'&&u.pathname==='/api/browser')return json(res,200,browserStatus());
+        // ---- 登录态 / cookie ----
+        if(req.method==='GET'&&u.pathname==='/api/browser/session')return json(res,200,sessionStatus());
+        // 带 ?domain= 时额外返回该站的 Cookie 头原文（设置页「复制」按钮用，值只回给本机）。
+        if(req.method==='GET'&&u.pathname==='/api/browser/cookies'){
+          const domain=String(u.searchParams.get('domain')||'').trim();
+          const stats=cookieStats();
+          if(!domain)return json(res,200,stats);
+          const header=cookieHeaderFor(domain);
+          return json(res,200,{...stats,domain,header,cookies:header?header.split('; ').length:0,login:loginStateFor(domain)});
+        }
+        // 挑战 cookie 保活：GET 看各站还活着多久 / 是不是该续了，POST 立刻续一次（排查用）。
+        if(req.method==='GET'&&u.pathname==='/api/browser/warm')return json(res,200,warmStatus());
+        if(req.method==='POST'&&u.pathname==='/api/browser/warm'){
+          const input=await body(req);
+          const host=String(input?.host||'');
+          if(!host)return json(res,400,{error:'需要 host，例如 www.zcool.com.cn'});
+          try{return json(res,200,{...await warmHost(host),warm:warmStatus()});}
+          catch(e){return json(res,500,{error:e.message});}
+        }
+        if(req.method==='DELETE'&&u.pathname==='/api/browser/cookies')return json(res,200,{removed:clearCookies(u.searchParams.get('domain')||''),...cookieStats()});
+        if(u.pathname==='/api/browser/login'&&req.method==='POST'){
+          const input=await body(req);
+          const platform=String(input?.platform||'');
+          const url=String(input?.url||PICTURE_LOGIN_URLS[platform]||'');
+          if(!url)return json(res,400,{error:'这个站点没有登记登录入口，请直接传 url'});
+          try{return json(res,200,{...await startLogin({url,platform}),login:loginStatus()});}
+          catch(e){return json(res,500,{error:e.message});}
+        }
+        if(u.pathname==='/api/browser/login'&&req.method==='GET')return json(res,200,loginStatus());
+        if(u.pathname==='/api/browser/login/close'&&req.method==='POST'){
+          try{return json(res,200,{...await closeLogin(),login:loginStatus(),cookies:cookieStats()});}
+          catch(e){return json(res,500,{error:e.message});}
+        }
+        if(u.pathname==='/api/browser/sync'&&req.method==='POST'){
+          try{return json(res,200,{...await syncCookies(),cookies:cookieStats()});}
+          catch(e){return json(res,500,{error:e.message});}
+        }
+        // 兜底抓图：真浏览器打开页面，把网络里加载过的图片全捞回来（不依赖站点 HTML 结构）。
+        if(u.pathname==='/api/browser/capture'&&req.method==='POST'){
+          const input=await body(req);
+          const url=String(input?.url||'').trim();
+          if(!/^https?:\/\//i.test(url))return json(res,400,{error:'需要 http(s) 地址'});
+          try{
+            const timeout=Math.min(60000,Number(input?.timeout)||30000);
+            const cap=await capturePage(url,{timeout,quiet:1200});
+            let html=cap.html;let imgs=cap.images||[];let via='cdp';
+            // CDP 普通模式跑不完阿里云那类人机验证，会停在 68KB 挑战页（体积不算小，但一张真图都没有）。
+            // 判据取「体量小 + 没有真实图片」两个条件，再换 --dump-dom + virtual-time 试一次；
+            // 它没有网络事件，图片从 DOM 里的 URL 抽。
+            const realImgs=imgs.filter(x=>/^https?:/i.test(String(x.url))&&(x.bytes===0||x.bytes>15000)).length;
+            if(html.length<100000&&realImgs<3){
+              await releaseProfile().catch(()=>{});
+              const dumped=await renderDom(url,{timeout:35000,budget:9000,profileDir:browserProfileDir()}).catch(()=>'');
+              if(dumped&&dumped.length>html.length){
+                html=dumped;via='dump-dom';
+                const flat=html.replace(/&amp;/g,'&').replace(/\\u0026/g,'&').replace(/\\u003d/g,'=').replace(/\\u002f/gi,'/').replace(/\\\//g,'/');
+                const seen=new Set();
+                imgs=[...flat.matchAll(/https?:\/\/[^"'\s<>()\\]+?\.(?:jpg|jpeg|png|webp|avif)(?:\?[^"'\s<>\\]*)?/gi)]
+                  .map(m=>({url:m[0],mime:'image',bytes:0}))
+                  .filter(x=>!seen.has(x.url)&&seen.add(x.url));
+                await harvestCookies({host:new URL(url).hostname}).catch(()=>{});
+              }
+            }
+            const picked=imgs.filter(x=>!String(x.url).startsWith('data:')).filter(x=>x.bytes===0||x.bytes>15000)
+              .map(x=>({url:x.url,thumb:x.url,mime:x.mime,bytes:x.bytes,pageUrl:url}));
+            return json(res,200,{ok:true,url,via,title:(html.match(/<title[^>]*>([^<]*)/i)||[])[1]||'',images:picked,count:picked.length,bytes:html.length});
+          }catch(e){return json(res,500,{error:e.message});}
+        }
         if(u.pathname==='/api/browser/install'){
           if(req.method==='GET'){const job=browserInstallJob(u.searchParams.get('id'));if(!job)return json(res,404,{error:'安装任务不存在或已过期，请重新点击下载'});return json(res,200,job);}
           if(req.method==='POST')return json(res,200,{jobId:startBrowserInstallJob()});
@@ -227,7 +354,8 @@ export function createLibraryServer({scan=scanPage,search=searchPage,open=openPu
         // 已经登记成下载任务的条目有自己的卡片，这里只补「资产库原本看不见的那部分」。
         const claimed=downloads.jobs.map(job=>job.filePath).filter(Boolean).map(file=>path.resolve(file));
         // 以包为单位扫描：目录里有 info.json 就算一个资产，整棵子树归它，不再逐文件出卡片。
-        const scanned=await scanLibraryPackages({roots});
+        // 重复请求不再无条件全量重建：scan-cache 按根目录签名 + TTL 失效，写操作成功后显式清缓存。
+        const scanned=await cachedScan(JSON.stringify(roots),{roots,compute:()=>scanLibraryPackages({roots})});
         for(const root of roots)allowLocalRoot(root);
         const files=scanned.files.filter(file=>{
           // 只收素材：readme、日志、脚本、LICENSE 这些是目录里的附带文件，不是资产。
@@ -235,7 +363,7 @@ export function createLibraryServer({scan=scanPage,search=searchPage,open=openPu
           const absolute=path.resolve(file.root,file.rel);
           return !claimed.some(entry=>absolute===entry||absolute.startsWith(entry+path.sep));
         });
-        return json(res,200,{roots,packages:scanned.packages,files,truncated:scanned.truncated});
+        return json(res,200,{roots,packages:scanned.packages,files,truncated:scanned.truncated,limits:scanned.limits});
       }
       // 登记：给「用户自己拷进来的素材包」补一个 info.json（uid + 事实字段 + 包统计）。
       // 只认扫描结果里真实存在的包根，前端传不了任意路径；已有 info.json 的包一律不改写。
@@ -251,6 +379,8 @@ export function createLibraryServer({scan=scanPage,search=searchPage,open=openPu
         if(pkg.type==='zip')return json(res,400,{error:'ZIP 包内部写不进 info.json，先解压成文件夹再登记'});
         try{
           const result=await registerPackage(path.join(root,...rel.split('/')),pkg);
+          // info.json 落在既有包目录内部，扫描缓存的根签名探不到 → 显式失效。
+          invalidateScanCache();
           return json(res,200,{ok:true,skipped:result.skipped,uid:result.uid,meta:result.meta});
         }catch(error){
           const code=String(error?.code||'');
@@ -275,6 +405,8 @@ export function createLibraryServer({scan=scanPage,search=searchPage,open=openPu
         try{
           const meta=await patchPackageMeta(path.join(root,...rel.split('/')),{ai:input?.ai,user:input?.user});
           if(!meta)return json(res,409,{error:'这个资产还没有登记（缺 info.json），先登记再写信息'});
+          // 元信息写进了包目录内部，根签名探不到 → 显式失效扫描缓存。
+          invalidateScanCache();
           return json(res,200,{ok:true,meta});
         }catch(error){
           const code=String(error?.code||'');
@@ -409,6 +541,9 @@ export function createLibraryServer({scan=scanPage,search=searchPage,open=openPu
           const input=await body(req);
           if(u.pathname==='/api/downloads/tasks'){
             if(req.lanVisitor&&input.folder!==undefined)return json(res,403,{error:'访客不能指定主机下载目录'});
+            const ids=input.kind==='images'?(input.models||[]).map(m=>m.platform||'sketchfab'):[input.kind||'sketchfab'];
+            // 图站与 3D 平台共用一份开关：关掉图站卡片后解析和整站下载都会被拒。
+            if(ids.some(id=>!platforms.enabled(id)))return json(res,403,{error:'下载来源平台已关闭，请在设置中开启'});
             return json(res,200,await downloads.enqueueWithFolder(input));
           }
           if(u.pathname==='/api/downloads/pick-folder')return json(res,200,await downloads.pickFolder(input));
@@ -454,6 +589,50 @@ export function createLibraryServer({scan=scanPage,search=searchPage,open=openPu
         if(u.pathname==='/api/artstation/resolve')return json(res,200,await (artstation.resolve||resolveArtstationModel)(input.url,{signal:controller.signal}));
         return json(res,404,{error:'ArtStation 接口不存在'});
       }
+      // 平台自检（设置页卡片上的「测试」）：用各平台的真实搜索/解析入口发一次请求，
+      // 把「现在到底能不能用」如实返回，省得用户去发现页反复试错。
+      // 图站解析必须要具体页面，前端会把卡片上的示例链接一起带上来。
+      if(u.pathname==='/api/platforms/test'){
+        if(req.method!=='POST')return json(res,405,{error:'方法不允许'});
+        if(req.headers['x-sfx-local']!=='1')return json(res,403,{error:'缺少本地请求标识'});
+        const {id:platform,url:target}=await body(req);
+        if(!platform)return json(res,400,{error:'缺少平台标识'});
+        // Kenney 的目录要抓多页汇总，冷启动实测约 16s（之后走内存缓存很快），给它更宽的窗口。
+        const TEST_TIMEOUTS={kenney:32000};
+        const limit=TEST_TIMEOUTS[platform]||15000;
+        const signal=AbortSignal.timeout(limit),started=Date.now();
+        // 每个探测都走平台自己的入口，返回什么就先看条目数——连得上但零结果也能区分出「站点在、内容空」。
+        const probes={
+          sketchfab:()=>search({},{signal}),
+          artstation:()=>artsearch({},{signal}),
+          polyhaven:()=>polyhaven({},{signal,open}),
+          ambientcg:()=>ambientcg({},{signal,open}),
+          polypizza:()=>polypizza({},{signal,open}),
+          kenney:()=>kenney({},{signal,open}),
+          freestylized:()=>freestylized({},{signal,open}),
+          polyfork:()=>polyfork({},{signal,open}),
+        };
+        try{
+          let items=[];
+          if(isPictureSite(platform)){
+            const site=PICTURE_SITES[platform];
+            const url=target||site.referer||site.home||`https://${(site.host||'')}/`;
+            if(!url)throw Error('这个平台需要页面地址才能测试');
+            const data=await collectPictureAssets(platform,{url},{maxItems:1,signal});
+            items=Array.isArray(data.items)?data.items:[];
+          }else{
+            const probe=probes[platform];
+            if(!probe)throw Error('这个平台暂不支持自检');
+            const data=await probe();
+            items=data?.items||data?.models||data?.results||(Array.isArray(data)?data:[]);
+          }
+          const first=items[0]||{};
+          return json(res,200,{ok:true,ms:Date.now()-started,count:items.length,sample:String(first.title||first.name||first.label||'')});
+        }catch(error){
+          const timedOut=error?.name==='TimeoutError'||error?.name==='AbortError';
+          return json(res,200,{ok:false,ms:Date.now()-started,error:timedOut?`超时 ${Math.round(limit/1000)}s 无响应`:String(error?.message||'连接失败')});
+        }
+      }
       if(u.pathname==='/api/polyhaven/search'){
         if(req.method!=='POST')return json(res,405,{error:'方法不允许'});
         if(req.headers['x-sfx-local']!=='1')return json(res,403,{error:'缺少本地请求标识'});
@@ -494,6 +673,67 @@ export function createLibraryServer({scan=scanPage,search=searchPage,open=openPu
         if(req.headers['x-sfx-local']!=='1')return json(res,403,{error:'缺少本地请求标识'});
         const type=freestylizedType(u.searchParams.get('type'));
         return cachedCategories(res,`freestylized-cats:v2:${type}`,()=>freestylizedCats(type,{signal:controller.signal,open}));
+      }
+      // Polyfork：唯一一个走官方 JSON 接口、不需要任何解析的源，搜索即一次 GET 转发。
+      if(u.pathname==='/api/polyfork/search'){
+        if(req.method!=='POST')return json(res,405,{error:'方法不允许'});
+        if(req.headers['x-sfx-local']!=='1')return json(res,403,{error:'缺少本地请求标识'});
+        const input=await body(req);
+        return cachedJson(res,`polyfork:${JSON.stringify(input)}`,SEARCH_CACHE_MS,()=>polyfork(input,{signal:controller.signal,open}));
+      }
+      if(req.method==='GET'&&u.pathname==='/api/polyfork/categories'){
+        if(req.headers['x-sfx-local']!=='1')return json(res,403,{error:'缺少本地请求标识'});
+        return cachedCategories(res,'polyfork-cats:v1',()=>polyforkCats({signal:controller.signal}));
+      }
+      // 参数化预览的两条腿：清单（颜色/几何旋钮分类）与变体（几何改动必须在服务端重建）。
+      // 清单按天缓存 —— 它是资产的静态契约，同一天里反复开预览没必要每次回源。
+      if(req.method==='GET'&&u.pathname==='/api/polyfork/params'){
+        if(req.headers['x-sfx-local']!=='1')return json(res,403,{error:'缺少本地请求标识'});
+        const id=String(u.searchParams.get('id')||'').trim();
+        if(!id)return json(res,400,{error:'缺少资产 ID'});
+        return cachedJson(res,`polyfork-params:v1:${id}`,CATEGORY_CACHE_MS,()=>polyforkP(id,{signal:controller.signal,open}));
+      }
+      // 参数中文名：磁盘有就用磁盘，没有就让模型翻一遍存回去。前端异步要这份字典，
+      // 拿到后只替换文字、不重建控件 —— 所以这里慢一点不挡面板打开。
+      if(req.method==='GET'&&u.pathname==='/api/polyfork/zh'){
+        if(req.headers['x-sfx-local']!=='1')return json(res,403,{error:'缺少本地请求标识'});
+        const id=String(u.searchParams.get('id')||'').trim();
+        if(!id)return json(res,400,{error:'缺少资产 ID'});
+        const schema=await polyforkP(id,{signal:controller.signal,open});
+        // 资产名给翻译当上下文：风车的 sail 是风帆，不是船帆。
+        const name=String(u.searchParams.get('n')||'').slice(0,80);
+        return json(res,200,await polyforkZh.get(id,schema,{signal:controller.signal,name}));
+      }
+      // 变体是二进制，不能走缓存那套 JSON；响应头允许浏览器缓存，同一组参数不会再去烧烘焙额度。
+      if(req.method==='GET'&&u.pathname==='/api/polyfork/variant'){
+        if(req.headers['x-sfx-local']!=='1')return json(res,403,{error:'缺少本地请求标识'});
+        const id=String(u.searchParams.get('id')||'').trim();
+        if(!id)return json(res,400,{error:'缺少资产 ID'});
+        let params={};
+        try{params=JSON.parse(u.searchParams.get('p')||'{}');}catch{return json(res,400,{error:'参数不是合法 JSON'});}
+        const remote=await polyforkV(id,params,{signal:controller.signal,open});
+        res.writeHead(200,{'content-type':'model/gltf-binary','cache-control':'public, max-age=86400'});
+        return pipeline(remote.stream,res).catch(()=>{try{res.destroy();}catch{/* 客户端已断开 */}});
+      }
+      // Polyfork 生成器源码：前端拿回去在浏览器里跑 createAsset()，改参数几毫秒出新几何，
+      // 不用再走 -remix.glb（那要 1.5~2 秒，还吃每小时 40 次的烘焙额度）。
+      // 拿不到（资产没给源码 / 格式不认识）就报 404，前端自动退回服务端烘焙。
+      if(req.method==='GET'&&u.pathname==='/api/polyfork/module'){
+        // 这一条不能查 X-SFX-Local：浏览器 import() 无法附加自定义请求头。
+        // 内容本身是 Polyfork CDN 上公开的生成器源码，不涉及本机数据，放宽没有风险。
+        const id=String(u.searchParams.get('id')||'').trim();
+        if(!id)return json(res,400,{error:'缺少资产 ID'});
+        try{
+          const raw=await polyforkGen(id,{cacheDir:previewCacheDir,signal:controller.signal,open});
+          const code=patchGeneratorSource(raw);
+          // 页面的 CSP 是 script-src 'self'，blob: 脚本会被拒；所以这里直接把它当同源模块发出去，
+          // 前端 import('/api/polyfork/module?id=…') 就能跑，three 由 globalThis 注入共用。
+          if(!code)return json(res,415,{error:'生成器依赖不止 three，浏览器里跑不起来'});
+          res.writeHead(200,{'content-type':'text/javascript; charset=utf-8','cache-control':'no-store'});
+          return res.end(code);
+        }catch(err){
+          return json(res,404,{error:err.message||'生成器源码不可用'});
+        }
       }
       // FreeStylized 预览：ZIP 里的模型/贴图由服务端解出来，前端按清单逐条取（见 freestylized-preview.mjs）。
       if(req.method==='GET'&&u.pathname==='/api/freestylized/preview'){
@@ -557,9 +797,10 @@ export function createLibraryServer({scan=scanPage,search=searchPage,open=openPu
       }
       if(['/api/proxy','/api/image'].includes(u.pathname)&&req.method==='GET'){
         if(u.pathname==='/api/proxy'&&req.headers['x-sfx-local']!=='1')return json(res,403,{error:'缺少本地请求标识'});
+        // 图站整合：各图站 CDN 经 /api/image 代理出图（直接嵌 <img> 会被 Referer / hotlink 策略拦 403）。
         const target=validateUrl(u.searchParams.get('url'));
         const targetHost=target.hostname;
-        if(!isSketchfabHost(targetHost)&&!isArtstationHost(targetHost)&&!isPolyhavenHost(targetHost)&&!isAmbientcgHost(targetHost)&&!isPolypizzaHost(targetHost)&&!isKenneyHost(targetHost)&&!isFreestylizedHost(targetHost))throw Error('仅支持 Sketchfab、ArtStation、Poly Haven、ambientCG、Poly Pizza、Kenney 或 FreeStylized 的图床地址');
+        if(!isSketchfabHost(targetHost)&&!isArtstationHost(targetHost)&&!isPolyhavenHost(targetHost)&&!isAmbientcgHost(targetHost)&&!isPolypizzaHost(targetHost)&&!isKenneyHost(targetHost)&&!isFreestylizedHost(targetHost)&&!isPolyforkHost(targetHost)&&!isPictureCdnHost(targetHost))throw Error('仅支持 Sketchfab、ArtStation、Poly Haven、ambientCG、Poly Pizza、Kenney、FreeStylized、Polyfork 或各图站（Pixiv / Safebooru / Yande.re / Konachan / Wallhaven / Civitai 等）的图床地址');
         const image=u.pathname==='/api/image';
         // The gallery lays covers out at their own aspect ratio and needs a lighter file than the
         // grid, so a caller may name a rendition. Only whitelisted names are honoured: an unknown
@@ -575,8 +816,11 @@ export function createLibraryServer({scan=scanPage,search=searchPage,open=openPu
           const cached=await httpCache.image(imageKey,IMAGE_CACHE_MS);
           if(cached){res.writeHead(200,{'Content-Type':cached.mime,'Cache-Control':'private, max-age=604800'});res.end(cached.bytes);return;}
         }
+        const sourcePlatform=[[isSketchfabHost,'sketchfab'],[isArtstationHost,'artstation'],[isPolyhavenHost,'polyhaven'],[isAmbientcgHost,'ambientcg'],[isPolypizzaHost,'polypizza'],[isKenneyHost,'kenney'],[isFreestylizedHost,'freestylized'],[isPolyforkHost,'polyfork'],[isPictureCdnHost,'picture']].find(([matches])=>matches(targetHost))?.[1];
+        // picture 是图站大类（非模型模块、由各站 routeLink 控制开关），跳过平台 enabled 校验；其余平台照常校验。
+        if(sourcePlatform&&sourcePlatform!=='picture'&&!platforms.enabled(sourcePlatform))return json(res,403,{error:'该平台已关闭，请在设置中开启'});
         const remote=await firstAvailable(image?coverLadder(wanted):[target.href],
-          candidate=>open(candidate,{artstation:isArtstationHost(targetHost),signal:controller.signal,timeout:45000}));
+          candidate=>open(candidate,{artstation:isArtstationHost(targetHost),signal:controller.signal,timeout:45000,...(isPictureCdnHost(targetHost)?{headers:{Referer:pictureRefererForHost(targetHost)}}:{})}));
         const mime=String(remote.headers['content-type']||'').split(';')[0];
         if(image&&!['image/png','image/jpeg','image/webp','image/gif','image/avif'].includes(mime)){remote.stream.destroy();return json(res,502,{error:'缩略图不可用'});}
         if(image){
@@ -606,23 +850,32 @@ export function createLibraryServer({scan=scanPage,search=searchPage,open=openPu
   });
 }
 if(process.argv[1]&&import.meta.url===pathToFileURL(path.resolve(process.argv[1])).href){
-  const port=Number(process.env.SFX_PORT||4178);
+  const port=Number(process.env.SFX_PORT||4179);
   if(Number(process.versions.node.split('.')[0])<22)throw Error('后台下载需要 Node.js 22 或更高版本');
   const {dir:dataDir,migrated}=resolveDataDir(root);
   if(migrated)console.log(`  已把旧的 .sketchvault 数据目录迁移为 .assetvault\n`);
   const downloads=await new DownloadManager({dataDir:process.env.SFX_DATA_DIR||dataDir,defaultFolder:process.env.SFX_DOWNLOAD_DIR||path.join(root,'downloads')}).init();
   // 用户在「首次准备」里手动指过 blender.exe 的话，趁服务还没开始接活把它接回环境变量。
   applyBlenderOverride();
-  const server=createLibraryServer({downloads});server.on('error',async error=>{await downloads.close();console.error(error.code==='EADDRINUSE'?`端口 ${port} 已占用。可打开已有工作台，或设置 SFX_PORT 使用其他端口。`:error);process.exitCode=1;});
-  let closing=false;async function shutdown(reason){if(closing)return;closing=true;console.log(`\n  收到 ${reason}，正在关闭服务…`);await downloads.close();server.closeAllConnections();server.close(()=>process.exit(0));}
+  const sharing=createLanSharing({file:path.join(downloads.dataDir,'lan-sharing.json')});
+  let previousPort=4178;
+  try{const saved=JSON.parse(await fs.readFile(path.join(downloads.dataDir,'server-port.json'),'utf8')).port;if(Number.isInteger(saved)&&saved>0&&saved<=65535)previousPort=saved;}catch{}
+  sharing.startupPort(previousPort);
+  const server=createLibraryServer({downloads,lanSharing:sharing});
+  const lanListener=createLanListener(server,sharing);
+  let closing=false;async function shutdown(reason){if(closing)return;closing=true;console.log(`\n  收到 ${reason}，正在关闭服务…`);await lanListener.close();await downloads.close();server.closeAllConnections();server.close(()=>process.exit(0));}
   process.on('SIGINT',()=>shutdown('SIGINT'));process.on('SIGTERM',()=>shutdown('SIGTERM'));
   // 留痕：服务自己退出会写下这一行；日志里没有这一行却断了，就说明进程是被外部强杀的
   // （控制台被关闭、进程树被回收等），两种情况排查方向完全不同。
   process.on('exit',code=>{try{writeSync(1,`\n  [服务进程退出 code=${code}] ${new Date().toLocaleString()}\n`);}catch{}});
-  server.listen(port,'0.0.0.0',()=>{
-    const url=`http://127.0.0.1:${port}`;downloads.start(url);console.log(`\n  ASSETVAULT · 本地 3D 模型库\n  ${url}\n  局域网共享默认关闭，可在设置中开启。关闭此窗口将停止服务。\n`);
+  try{
+    const actualPort=await listenPort(server,{port,host:'127.0.0.1',fallback:process.env.SFX_PORT_FALLBACK!=='0',dataDir:downloads.dataDir,reservedPort:sharing.status().sharingPort});
+    const url=`http://127.0.0.1:${actualPort}`;downloads.start(url);
+    await lanListener.sync();
+    if(process.env.SFX_PORT_FALLBACK==='1')console.log(`ASSETVAULT_READY_PORT=${actualPort}`);
+    console.log(`\n  ASSETVAULT · 本地 3D 模型库\n  ${url}\n  局域网共享默认关闭，可在设置中开启。关闭此窗口将停止服务。\n`);
     // 打开的是启动画面而不是工作台：这个页面由本服务自己提供，跳转时端口一定在监听，
     // 不会出现「跳到打不开的地址」那种情况。
     if(process.argv.includes('--open')&&process.platform==='win32')execFile('cmd.exe',['/c','start','',`${url}/splash.html`],{windowsHide:true});
-  });
+  }catch(error){await lanListener.close();await downloads.close();server.closeAllConnections();if(server.listening)server.close();console.error(error.code==='EADDRINUSE'?`端口 ${port} 已占用，请设置 SFX_PORT 使用其他端口。`:error);process.exitCode=1;}
 }

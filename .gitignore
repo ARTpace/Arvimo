@@ -13,6 +13,8 @@ scratch/
 # 程序运行期产出（任务库/下载结果/临时备份），可重建
 .assetvault/
 .sketchvault/
+data/
+sketchfab-exporter-tauri/src/search-motion.css
 downloads/
 dist/
 artifacts/

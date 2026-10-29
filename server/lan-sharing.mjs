@@ -5,6 +5,7 @@ import {randomBytes,scryptSync,timingSafeEqual} from 'node:crypto';
 
 const SESSION_MS=12*60*60*1000;
 const MAX_NAMES=6;   // one device IP can be shared by a few people; keep the most recent names
+const validPort=port=>Number.isInteger(port)&&port>0&&port<=65535;
 const privateIP=ip=>/^10\.|^192\.168\.|^172\.(1[6-9]|2\d|3[01])\./.test(ip);
 const normalizeIP=ip=>String(ip||'').replace(/^::ffff:/,'');
 const loopback=ip=>ip==='127.0.0.1'||ip==='::1';
@@ -18,10 +19,12 @@ const attr=value=>String(value).replace(/&/g,'&amp;').replace(/"/g,'&quot;').rep
 const loginPage=(error='',username='')=>`<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>AssetVault · 局域网访问</title><style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#101820;color:#dce5ee;font:15px system-ui}main{width:min(340px,80vw);padding:32px;border:1px solid #30414f;border-radius:18px;background:#17222c}h1{font-size:25px;margin:0 0 8px}p{color:#9badbc;line-height:1.7}input,button{box-sizing:border-box;width:100%;padding:13px;border-radius:9px;border:1px solid #394e5f;font:inherit}input{background:#101820;color:#eee;margin:8px 0 14px}button{background:#c9f581;color:#192613;cursor:pointer}.error{color:#edaa89}</style><main><h1>AssetVault</h1><p>填写你的名字和主机设置的共享密码，访问同一资产库。</p>${error?`<p class="error">${error}</p>`:''}<form method="post" action="/api/lan/login"><label for="username">你的名字</label><input id="username" name="username" type="text" autocomplete="nickname" required autofocus maxlength="24" value="${attr(username)}"><label for="password">访问密码</label><input id="password" name="password" type="password" autocomplete="current-password" required maxlength="128"><button type="submit">进入资产库</button></form></main></html>`;
 
 export function createLanSharing({file,interfaces=()=>os.networkInterfaces(),now=Date.now}){ let config={enabled:false,salt:'',hash:''},configError='';
+ let listener=null;
  try{
   const saved=JSON.parse(fs.readFileSync(file,'utf8'));
   if(typeof saved.enabled!=='boolean'||!/^([a-f0-9]{32}|)$/.test(saved.salt)||!/^([a-f0-9]{64}|)$/.test(saved.hash)||saved.enabled&&(!saved.hash||!saved.salt))throw Error('配置无效');
-  config={enabled:saved.enabled,salt:saved.salt,hash:saved.hash};
+  if(saved.port!==undefined&&!validPort(saved.port))throw Error('共享端口无效');
+  config={enabled:saved.enabled,salt:saved.salt,hash:saved.hash,port:saved.port,previousPort:validPort(saved.previousPort)?saved.previousPort:undefined,portReview:saved.portReview===true};
  }catch(e){if(e.code!=='ENOENT')configError='共享配置读取失败，已关闭共享。请重新保存设置。';}
  const sessions=new Map(),attempts=new Map();
  const clientsFile=file+'.clients.json';
@@ -44,8 +47,30 @@ export function createLanSharing({file,interfaces=()=>os.networkInterfaces(),now
   return {total:list.length,online:list.filter(item=>item.online).length,clients:list.sort((a,b)=>b.lastSeen-a.lastSeen)};
  }
  const addresses=()=>[...new Set(Object.values(interfaces()).flat().filter(item=>item.family==='IPv4'&&!item.internal&&privateIP(item.address)).map(item=>item.address))];
- const status=port=>({enabled:config.enabled,hasPassword:!!config.hash,addresses:addresses().map(ip=>`http://${ip}:${port}/`),error:configError});
- function configure(input,port){
+ function saveConfig(next){
+  fs.mkdirSync(path.dirname(file),{recursive:true});
+  const temp=file+'.tmp';fs.writeFileSync(temp,JSON.stringify(next),{mode:0o600});fs.renameSync(temp,file);
+  config=next;configError='';
+ }
+ const status=port=>{
+  const sharingPort=config.port||4178,state=listener?.state();
+  const available=config.enabled&&(state?state.activePort===sharingPort:!config.port||port===sharingPort);
+  const portConflict=config.enabled&&!!state&&['EADDRINUSE','EACCES'].includes(state.errorCode);
+  return {enabled:config.enabled,available,hasPassword:!!config.hash,port,sharingPort,portConflict,
+   portChanged:config.enabled&&(config.portReview===true||!!config.previousPort&&config.previousPort!==sharingPort),previousPort:config.previousPort,
+   addresses:available?(state?.hosts||addresses()).map(ip=>`http://${ip}:${sharingPort}/`):[],error:configError||state?.error||''};
+ };
+ function startupPort(preferred){
+  if(!config.enabled)return preferred;
+  // 旧配置首次升级时沿用上次运行端口，此后分享端口不随本机回退而改变。
+  if(!config.port)saveConfig({...config,port:preferred,portReview:true});
+  // portReview/previousPort 只是「那一次迁移」的待确认提示，落盘后必须在下次启动前清掉，
+  // 否则 status() 永远报 portChanged，前端每次启动都会把设置页掀开。
+  // 用户主动改端口时的提示由那次 POST 的响应负责，不依赖这两个字段的持久化。
+  else if(config.portReview===true||config.previousPort!==undefined)saveConfig({...config,portReview:false,previousPort:undefined});
+  return config.port;
+ }
+ async function configure(input,port){
   if(typeof input.enabled!=='boolean')throw Error('共享开关格式无效');
   const next={...config,enabled:input.enabled};
   if(input.password!==undefined&&input.password!==''){
@@ -53,9 +78,16 @@ export function createLanSharing({file,interfaces=()=>os.networkInterfaces(),now
    next.salt=randomBytes(16).toString('hex');next.hash=scryptSync(input.password,next.salt,32).toString('hex');
   }
   if(next.enabled&&!next.hash)throw Error('首次启用共享请设置访问密码');
-  fs.mkdirSync(path.dirname(file),{recursive:true});
-  const temp=file+'.tmp';fs.writeFileSync(temp,JSON.stringify(next),{mode:0o600});fs.renameSync(temp,file);
-  config=next;configError='';sessions.clear();attempts.clear();return status(port);
+  if(input.useCurrentPort===true)throw Error('分享端口已独立，请填写新的局域网分享端口');
+  if(input.sharingPort!==undefined&&!validPort(input.sharingPort))throw Error('分享端口须为 1–65535 的整数');
+  const requested=input.sharingPort??next.port??4178;
+  if(input.sharingPort!==undefined&&listener&&requested===listener.state().localPort)throw Error('分享端口不能与本机入口端口相同，请选择其他端口');
+  if(next.port&&requested!==next.port)next.previousPort=next.port;
+  next.port=requested;
+  if(input.acknowledgePortChange===true){delete next.previousPort;delete next.portReview;}
+  const revoke=next.enabled!==config.enabled||next.hash!==config.hash||next.port!==config.port;
+  saveConfig(next);if(revoke){sessions.clear();attempts.clear();}
+  await listener?.sync();return status(port);
  }
  // no-referrer turns an HTTP form POST's Origin into null; keep it only within this origin.
  function html(res,error='',statusCode=200,username=''){res.writeHead(statusCode,{'Content-Type':'text/html; charset=utf-8','Referrer-Policy':'same-origin','Content-Security-Policy':"default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'"});res.end(loginPage(error,username));return true;}
@@ -63,6 +95,7 @@ export function createLanSharing({file,interfaces=()=>os.networkInterfaces(),now
   const port=req.socket.localPort,ip=normalizeIP(req.socket.remoteAddress),host=req.headers.host;
   const localHosts=[`127.0.0.1:${port}`,`localhost:${port}`];
   const local=loopback(ip)&&localHosts.includes(host);
+  if(!local&&config.enabled&&config.port&&config.port!==port)return reply(res,403,{error:'共享端口被占用，局域网共享已暂停，请联系主机确认新链接'});
   const allowedHosts=[...localHosts,...(config.enabled?addresses().map(address=>`${address}:${port}`):[])];
   if(!allowedHosts.includes(host)||!local&&!privateIP(ip))return reply(res,403,{error:'局域网共享未开启或访问地址不受支持'});
   const origin=req.headers.origin;
@@ -84,7 +117,7 @@ export function createLanSharing({file,interfaces=()=>os.networkInterfaces(),now
     return reply(res,200,clientStatus());
    }
    if(req.method==='GET')return reply(res,200,status(port));
-   if(req.method==='POST')return reply(res,200,configure(JSON.parse(await readBody(req)),port));
+   if(req.method==='POST')return reply(res,200,await configure(JSON.parse(await readBody(req)),port));
    return reply(res,405,{error:'请求方法不支持'});
   }
   if(local)return false;
@@ -129,5 +162,5 @@ export function createLanSharing({file,interfaces=()=>os.networkInterfaces(),now
   }
   return false;
  }
- return {handle,status};
+ return {handle,status,startupPort,networkAddresses:addresses,attachListener(value){listener=value;}};
 }

@@ -34,6 +34,7 @@ const threeResolver={
 await esbuild.build({entryPoints:[path.join(root,'src/library/engine.js')],outfile:path.join(output,'engine.js'),bundle:true,format:'esm',platform:'browser',target:'chrome110',plugins:[shims],logLevel:'info'});
 await esbuild.build({entryPoints:[path.join(root,'src/library/app.js')],outfile:path.join(output,'app.js'),bundle:true,format:'esm',platform:'browser',target:'chrome110',external:['./engine.js'],plugins:[threeResolver],logLevel:'info'});
 for(const f of ['index.html','app.css','favicon.svg','worker.html','splash.html','splash.js','mascot.png'])await fs.copyFile(path.join(root,'src/library',f),path.join(output,f));
+await fs.appendFile(path.join(output,'app.css'),'\n'+await fs.readFile(path.join(root,'src/library/search-motion.css'),'utf8'));
 // 桌面版（Tauri）的 frontendDist 指向它自己的 src/，而这条流水线只往 dist/library 写。
 // 少了这一步会出现「改了前端、打出来的安装包还是旧界面」（实测两边 app.js 哈希对不上）。
 // 顺手同步，保证跑一次 build:library，本地工作台和桌面安装包两条线都是最新。

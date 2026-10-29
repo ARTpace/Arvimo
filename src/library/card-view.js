@@ -5,12 +5,11 @@
 // why this file can be grown or restyled without touching how the grid decides what to render.
 // Two collaborators are passed as getters because they are wired up later than this module exists.
 import {coverRendition} from './gallery-view.js';
-import {classifyBlenderJob} from './blender-send.js';
 import {authorButton} from './asset-author.js';
 import {assetCard,cardMedia} from './card-shell.js';
 import {userMetaFor} from './library-state.js';
 
-export function createCardView({icon,esc,fmt,state,queuePulse,imageDownload,blenderSendButton,platformLabel,artstationUI=()=>null,downloadsUI=()=>null,isVisitor=false}){
+export function createCardView({icon,esc,fmt,state,queuePulse,imageDownload,sendControl,platformLabel,artstationUI=()=>null,downloadsUI=()=>null,isVisitor=false}){
 /** 封面一律走本地代理，代理负责按需降级到能取到的档位；
  *  画廊额外点名要轻一档的等比图，好让瀑布流按原图比例排且不吃带宽。 */
 function imageUrl(model,{gallery=false}={}){
@@ -49,6 +48,7 @@ function materialResolutionSelect(m,downloadedRes=new Set()){
  return `<select class="material-resolution" data-material-resolution="${m.uid}" aria-label="材质下载精度" title="材质贴图下载精度（✓ = 已下载）">${['1K','2K','4K','8K'].map(r=>`<option value="${r}"${(m.materialResolution||'2K')===r?' selected':''}>${r}${downloadedRes.has(r)?' ✓':''}</option>`).join('')}</select>`;
 }
 function card(m,{gallery=false}={}){
+ const pictureMode=state.route==='discover'&&m.platform==='artstation'&&!state.modelOnly;
  const art=m.platform==='artstation',art3d=art&&artstationUI().has3dScene(m),saved=state.favorites.has(m.uid),collected=state.models.some(x=>x.uid===m.uid),selected=state.selected.has(m.uid),backendJobs=downloadsUI()?.jobs||[],task=backendJobs.findLast(t=>t.uid===m.uid)||state.tasks.findLast(t=>t.uid===m.uid);
  // 有精度选择的资产（材质/HDRI/天空盒），「已下载」必须按精度对上：8K 下载过不代表 2K 也
  // 有了。历史任务没记精度的一律视为默认 2K，老记录不会集体变灰。
@@ -65,32 +65,32 @@ function card(m,{gallery=false}={}){
  // Poly Haven 只有 models 有网格可转，HDRI 是全景图、贴图是平铺图，转不了视角就别写「3D 预览」。
  // FreeStylized 的资源包 / Alpha / 智能材质里没有可渲染的东西（点开是官方页面），角标跟着改。
  const fsNoScene=m.platform==='freestylized'&&!['models','textures','skybox'].includes(m.assetType||'models');
- const previewLabel=art&&!art3d?'打开作品页':fsNoScene?'打开官方页面':'交互式 3D 预览';
- const previewIcon=art&&!art3d||fsNoScene?'external':'rotate';
+ const previewLabel=art&&!art3d?'查看作品图片':fsNoScene?'打开官方页面':'交互式 3D 预览';
+ const previewIcon=art&&!art3d?'image':fsNoScene?'external':'rotate';
  // 缩略图上的两个角标：左下角是「加入模型库」状态（点一下即加入），右下角是打开下载文件夹
  // （只有已下载的卡片才有）。多选复选框因此挪到右上角收藏键左边，四个角各司其职不重叠。
  const openFolder=savedJob&&!isVisitor?`<button class="card-icon-action open-folder" data-action="reveal-download" data-id="${esc(savedJob.id)}" title="打开下载所在文件夹" aria-label="打开下载所在文件夹">${icon('folder')}</button>`:'';
  // 入库角标与底部移除键都是「改主机资产库」的动作，访客没有这个身份：
  // 卡片一旦显示「已加入模型库」，访客会以为是自己的库，点一下又改到主机头上，所以整块不给。
- const collectedBadge=isVisitor?'':`<button class="collect-badge ${collected?'collected':''}" data-action="collect" data-uid="${m.uid}" ${collected?'disabled':''} title="${collected?'已在模型库中':'加入模型库'}" aria-label="${collected?'已加入模型库':'加入模型库'}">${icon(collected?'check':'folder')}<span>${collected?'已加入模型库':'加入模型库'}</span></button>`;
-  // 材质资产送进 Blender 是「建材质」、HDRI/天空盒是「设环境」，按钮文案跟着 job 的
-  // kind/assetType 走。判定与服务端 sendToBlender 同一份逻辑（classifyBlenderJob），
-  // 保证卡片、预览面板、后端三处一致，不会一个说「材质」一个发模型。
- const fsKind=classifyBlenderJob(savedJob);
- // 访客只能把整包模型推给本机 Blender：材质/HDRI 要在桥接里按贴图槽逐个接线，而 ZIP 里
- // 猜不出哪张是 baseColor，所以这两类不给访客这个入口，免得点了必然失败。
- const blenderButton=isVisitor&&fsKind&&fsKind!=='model'?'':blenderSendButton({job:savedJob,className:'card-download blender-download',label:fsKind==='material'?'材质':fsKind==='hdri'?'环境':'Blender',title:isVisitor?'导入你自己电脑上打开的 Blender（首次需装一次桥接插件）':undefined});
+ const collectedBadge=isVisitor||pictureMode?'':`<button class="collect-badge ${collected?'collected':''}" data-action="collect" data-uid="${m.uid}" ${collected?'disabled':''} title="${collected?'已在模型库中':'加入模型库'}" aria-label="${collected?'已加入模型库':'加入模型库'}">${icon(collected?'check':'folder')}<span>${collected?'已加入模型库':'加入模型库'}</span></button>`;
+ // 「发送到」控件：先挑目标（按键上显示软件名），再点旁边的图标键才真正导出。
+ // 访客只能把整包模型推给自己电脑上的 Blender，由 applicableTargets 过滤掉其余。
+ // 类名不用 card-download：那套样式是「下载键」的（34px 圆形、灰底），会让发送键变成看不懂的图标。
+ const exportControl=sendControl({job:savedJob,isVisitor,className:'card-export'});
  // 封面图下载功能已移除：卡片不再提供单独的「下载封面图」入口。
  // ambientCG 卡片在下载键左边带一个精度选择：选择写回模型对象（materialResolution），
  // 重渲染后原样回填；下载时队列从模型上读，整批取第一张的选择（服务端会再校验一次）。
- const materialResolution=`<button class="text-button" data-action="asset-tags" data-uid="${esc(m.uid)}" title="查看平台标签与管理 AI 标签">✦ 标签</button>`+materialFormatSelect(m)+materialResolutionSelect(m,downloadedRes);
+ // 卡片底栏一律图标化（2026-10-28）：文案收进 <span> 由 CSS 隐藏，保留在 DOM 里给无障碍与测试读。
+ const materialResolution=`<button class="text-button" data-action="asset-tags" data-uid="${esc(m.uid)}" title="查看平台标签与管理 AI 标签" aria-label="查看平台标签与管理 AI 标签">${icon('tag')}<span>标签</span></button>`+materialFormatSelect(m)+materialResolutionSelect(m,downloadedRes);
  // 访客的下载键永远是「下载到我这台电脑」：主机上已有副本只意味着这次可以直传、不用重新下载，
  // 不该把按钮变成「已下载」并禁用——那会让访客以为文件已经在自己的电脑里。
  const dlBusy=busy,dlDisabled=busy||(!isVisitor&&downloaded);
- const dlTitle=busy?'队列中':isVisitor?(savedJob?'主机已有副本，直接传输到这台电脑':'下载到这台电脑'):downloaded?'已下载到本地，无需重复下载':'下载到本地';
- const dlLabel=busy?'队列':isVisitor?'下载到本机':downloaded?'已下载':'下载';
- const dlAria=isVisitor?'下载到这台电脑':busy?'队列中':downloaded?'已下载到本地':'下载到本地';
- const dlIcon=busy?'clock':isVisitor?'download':downloaded?'check':'download';
+ const dlTitle=busy?'队列中':isVisitor?(savedJob?'主机已有副本，直接传输到这台电脑':'下载到这台电脑'):'下载到本地';
+ const dlLabel=busy?'队列':isVisitor?'下载到本机':'下载';
+ const dlAria=isVisitor?'下载到这台电脑':busy?'队列中':'下载到本地';
+ // 已下载的资产不再显示那个不能点的「✓ 已下载」键（2026-10-29 用户要求）：
+ // 封面上只剩一个「发送到」键 —— 已下载的资产唯一还需要做的就是导出到别的软件。
+ const downloadButton=(downloaded&&!isVisitor)?'':`<button class="card-download${dlBusy?' busy':''}" data-action="download" data-uid="${m.uid}" ${dlDisabled?'disabled':''} title="${dlTitle}" aria-label="${dlAria}">${icon(busy?'clock':'download')}<span>${dlLabel}</span></button>`;
  // meta 一行化：作者与平台标签重复时（如 ambientCG）不再显示，只留「标题 · 作者 · 许可」。
  const byline=m.author&&m.author.trim()!==platformLabel(m.platform)?authorButton(m,'card-byline'):'';
  // 控件拆成可复用的片段：紧凑视图缩略图只有 96px，角标与按键全叠在上面等于糊成一团，
@@ -98,7 +98,7 @@ function card(m,{gallery=false}={}){
  // 左上角只放资源类型标志（模型/材质/HDRI/天空盒…）。下载与导出状态由左下角「已加入模型库」、
  // 右下角文件夹键和底部下载键各自表达，不再挤占类型位（2026-10-16 用户要求）。
  const typeLabel=`<div class="card-type">${icon(art3d?'rotate':isHdri(m)?'image':isMaterial(m)?'image':'cube')}${art?(art3d?'MARMOSET 3D':'ARTSTATION 图片'):isHdri(m)?'HDRI':isMaterial(m)?'PBR 材质':m.platform==='kenney'?'资源包':m.platform==='freestylized'?(m.assetType==='skybox'?'天空盒':m.assetType==='textures'?'材质':m.assetType==='packs'?'资源包':m.assetType==='alphas'?'Alpha':m.assetType==='smart'?'智能材质':'3D 模型'):'3D ASSET'}</div>`;
- const favoriteButton=`<button class="favorite ${saved?'saved':''}" data-action="favorite" data-uid="${m.uid}" title="${saved?'取消收藏（仍保留在模型库）':'收藏并加入模型库'}" aria-label="${saved?'取消收藏':'收藏模型'}" aria-pressed="${saved}">${icon('heart')}</button>`;
+ const favoriteButton=pictureMode?'':`<button class="favorite ${saved?'saved':''}" data-action="favorite" data-uid="${m.uid}" title="${saved?'取消收藏（仍保留在模型库）':'收藏并加入模型库'}" aria-label="${saved?'取消收藏':'收藏模型'}" aria-pressed="${saved}">${icon('heart')}</button>`;
  const selectLabel=`<label class="card-select"><input type="checkbox" data-select="${m.uid}" aria-label="选择 ${esc(m.name)}" ${selected?'checked':''}></label>`;
  // gallery 视图虽然 state.compact 可能仍为 true，但样式类不挂 compact，这里必须同步判断。
  const compact=!!state.compact&&!gallery;
@@ -110,7 +110,9 @@ function card(m,{gallery=false}={}){
  // 我的评分：有分才显示，备注折进 title 供悬停速览（完整编辑在标签面板）。
  const meta=userMetaFor(state,m.uid);
  const ratingMark=meta.rating?`<div class="card-rating" title="我的评分 ${meta.rating} 星${meta.note?` · ${esc(meta.note.slice(0,120))}`:''}"><span class="stars">${'★'.repeat(meta.rating)}${'☆'.repeat(5-meta.rating)}</span></div>`:'';
- // 回收站视图（筛选=回收站）里，移除键换成「放回模型库 / 彻底删除」一对，访客没有写身份，整块不给。
+ // 回收站视图（筛选=回收站）里给「放回模型库 / 彻底删除」一对，访客没有写身份，整块不给。
+ // 正常视图下的「从模型库移除」键已按用户要求撤掉（2026-10-29）：封面上只留导出动作，
+ // 移除走详情面板 / 模型库筛选页，不再占用卡片寸土。
  const trashActions=state.filter==='trash'?`<button class="remove-model restore-model" data-action="restore" data-uid="${m.uid}" title="放回模型库" aria-label="放回模型库">${icon('rotate')}</button><button class="remove-model purge-model" data-action="purge" data-uid="${m.uid}" title="彻底删除记录（不会删除已下载文件）" aria-label="彻底删除记录">${icon('close')}</button>`:'';
  // 结构统一走 card-shell：卡片的 DOM 只有一份，远端资产和本地素材包长得一样。
 // 这里只负责算出「填什么」，不再拼 article 骨架。
@@ -125,7 +127,11 @@ return assetCard({
  title:esc(m.name),
  byline,
  side:ratingMark+licenseHint,
- actions:`${materialResolution}<button class="card-download${dlBusy?' busy':''}" data-action="download" data-uid="${m.uid}" ${dlDisabled?'disabled':''} title="${dlTitle}" aria-label="${dlAria}">${icon(dlIcon)}<span>${dlLabel}</span></button>${blenderButton}${state.route!=='discover'&&!isVisitor?(state.filter==='trash'?trashActions:`<button class="remove-model" data-action="remove" data-uid="${m.uid}" title="从模型库移除" aria-label="从模型库移除">${icon('close')}</button>`):''}`,
+ // 标签 / 材质格式 / 精度这些次要控件不再叠在封面上（6 个键糊一团），统一挪到缩略图下方常驻区。
+ // 导出控件也在这行：左边是「目标软件名」下拉，右边是图标化的导出键，两步走（先选后导）。
+ // 封面叠层只剩下载键；已下载的资产封面完全干净（导出在下方这行）。
+ metaActions:materialResolution+exportControl,
+ actions:`${downloadButton}${state.route!=='discover'&&!isVisitor?trashActions:''}`,
 });
 }
  return {imageUrl,card,materialResolutionSelect,materialFormatSelect};

@@ -4,7 +4,7 @@ import fs from 'node:fs/promises';
 import fsSync from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import {resolveBlenderImport,findHdriFile} from '../server/blender-import.mjs';
+import {resolveBlenderImport,findHdriFile,resolveDccImport} from '../server/blender-import.mjs';
 import {DownloadManager} from '../server/downloads.mjs';
 import {createBlenderButton} from '../src/library/blender-send.js';
 
@@ -74,6 +74,21 @@ async function kenneyDelivery(base,{zipEntries}={}){
  ]);
  return dir;
 }
+
+test('其他 DCC 直接复用 ZIP 解包，挑 FBX 且长期保留相对贴图路径',async()=>{
+ const base=await temp();
+ try{
+  const delivery=await kenneyDelivery(base,{zipEntries:[
+   {name:'asset/model.glb',data:'glb'},
+   {name:'asset/model.fbx',data:'fbx'},
+   {name:'asset/textures/color.png',data:'texture'}
+  ]});
+  const result=resolveDccImport(delivery);
+  assert.match(result.file,/pack\.unpacked[\\/]asset[\\/]model\.fbx$/);
+  assert.equal(await fs.readFile(path.join(path.dirname(result.file),'textures','color.png'),'utf8'),'texture');
+  assert.equal(resolveDccImport(delivery).file,result.file);
+ }finally{await fs.rm(base,{recursive:true,force:true});}
+});
 
 test('资源包交付：文件夹里只有 pack.zip 也能解出模型',async()=>{
  const base=await temp();
@@ -159,6 +174,25 @@ test('HDRI 交付：info.json 清单优先，退回按扩展名扫',async()=>{
   await fs.mkdir(dir3,{recursive:true});
   assert.throws(()=>findHdriFile(dir3),/没有[^。]*世界环境/);
  }finally{await fs.rm(base,{recursive:true,force:true});}
+});
+
+test('天空盒通过旧目录联接导入时，解包和贴图引用都使用真实路径',async()=>{
+ const base=await temp();
+ const current=path.join(base,'current'),legacy=path.join(base,'legacy');
+ try{
+  await fs.mkdir(current);
+  await fs.symlink(current,legacy,process.platform==='win32'?'junction':'dir');
+  await writeZip(path.join(current,'pack.zip'),[{name:'sky_129_2k.png',data:'panorama'}]);
+  const real=await fs.realpath(current);
+  const result=findHdriFile(legacy);
+  assert.equal(result.file,path.join(real,'pack.unpacked','sky_129_2k.png'));
+  assert.equal(result.tmpDir,null);
+  assert.equal(await fs.readFile(result.file,'utf8'),'panorama');
+  assert.equal(findHdriFile(legacy).file,result.file);
+ }finally{
+  await fs.unlink(legacy).catch(()=>{});
+  await fs.rm(base,{recursive:true,force:true});
+ }
 });
 
 test('ambientCG 天空盒：整包 ZIP 里优先挑 .exr，解到持久目录不清理',async()=>{

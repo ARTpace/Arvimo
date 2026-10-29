@@ -13,7 +13,7 @@ const needsBrowser=j=>j.kind==='sketchfab'&&!TERMINAL.has(j.state);
  *  converter), `platform` tells picture jobs which source their pictures live on. The whitelist
  *  exists to keep accidental card baggage (feeds, caches, DOM handles) out of the POST body —
  *  extend it deliberately when the queue learns a new field. */
-export const modelPayload=({uid,name,author,license,thumbnail,downloadable,artworkUrl,artId,platform,assetId,assetType,sourceType,hasMarmoset})=>({uid,name,author,license,thumbnail,downloadable,artworkUrl,artId,platform,assetId,assetType,sourceType,hasMarmoset});
+export const modelPayload=({uid,name,author,license,thumbnail,downloadable,artworkUrl,artId,platform,assetId,assetType,sourceType,hasMarmoset,url})=>({uid,name,author,license,thumbnail,downloadable,artworkUrl,artId,platform,assetId,assetType,sourceType,hasMarmoset,url});
 export function createDownloadUI({$,icon,esc,toast,legacy,requestLegacy,onUpdate,isVisible}){
  const visitor=isLanVisitor(),clientDirectory=createClientDirectory();
  const ui={jobs:[],settings:null,connected:false,filter:'all',selected:new Set(),revision:-1,timer:null,pending:false};

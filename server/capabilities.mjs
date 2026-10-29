@@ -11,7 +11,7 @@
 // 所以两边都从这里取：服务端原样返回 SERVER_CAPABILITIES，启动器用 serverIsCurrent() 判定。
 // 加一个前端要用的新接口 = 在这里加一个能力位，两侧自动同步，没有第二处要记得改的地方。
 
-export const SERVER_VERSION = '3.9.0';
+export const SERVER_VERSION = '3.12.0';
 
 /**
  * 服务端当前具备的能力。新增能力位之后，旧进程会在下次启动时被自动换掉。
@@ -19,6 +19,7 @@ export const SERVER_VERSION = '3.9.0';
  */
 export const SERVER_CAPABILITIES = Object.freeze({
   version: SERVER_VERSION,
+  platformModules: true,
   aiConnection: true,
   aiSearchTranslation: true,
   pickFolder: true,
@@ -28,11 +29,13 @@ export const SERVER_CAPABILITIES = Object.freeze({
   lanFolderDelivery: true,
   lanLargeFolderDelivery: true,
   lanDeviceManagement: true,
+  independentLanListener: true,
   lanVisitorSettingsGuard: true,
   clearedDownloadHistory: true,
   fixedExportDefaults: true,
   artstationVerifyWindow: true,
   blenderExistingScene: true,
+  dccOneShotImport: true,
   blenderBridgeProgress: true,
   // Poly Haven 检索。加这一位的起因就是它：老进程没有路由，点搜索只能看到 404。
   polyhavenSearch: true,
@@ -74,9 +77,28 @@ export const SERVER_CAPABILITIES = Object.freeze({
   // 本地文件夹索引：POST /api/library/scan + GET /api/local/file，资产库「自动认领本地素材」全靠这两条。
   // 老进程没有它们，扫描只会 404——而且因为版本没变永远不会重启，所以必须靠这一位把旧进程换掉。
   localFolderIndex: true,
+  // 图站抓取（素材下载器整合）：GET /api/picture-site/resolve 把图站 URL 解析成整站图片清单，
+  // 复用 collectImageAssets 下游（下载队列 / 本地图片库）。老进程没有这条路由，前端入队只会 404。
+  pictureSiteResolve: true,
+  // Pinterest 图站（借力 pin-grabber Python 服务）：GET /api/picture-site/resolve 命中 pinterest 后，
+  // 走 pinterest-proxy 把请求转发给 pin-grabber（AV 按需自动拉起）。老进程没有这条链路，图站解析只会撞 404。
+  pinterestViaPinGrabber: true,
+  pinterestBoardListing: true,
+  discoveryIdleRefresh: true,
+  artworkPicturePreview: true,
   // 视频转封装：GET /api/local/play，mov/avi/wmv/mkv 这类容器由 ffmpeg 边转边发。
   // 老进程没有这条路由，视频会直接失败在「放不了」上，同样要靠这一位换进程。
   mediaTranscode: true,
+  // Polyfork 检索 + 下载。老进程没有 /api/polyfork/* 路由，点搜索只会撞上
+  // 「不存在的页面或接口」；缩略图代理白名单也缺 polyfork.dev，封面会一律裂图。
+  polyforkSearch: true,
+  polyforkDownload: true,
+  // 参数化预览：/api/polyfork/params（旋钮清单）与 /api/polyfork/variant（几何重建）。
+  // 少了这两条，remixable 资产能看不能调，前端会显示「当前版本不支持参数预览」。
+  polyforkParams: true,
+  // 生成器源码接口：前端拿回浏览器跑 createAsset()，改参数 5ms 出新几何。
+  // 老进程没有这条路由，前端会静默退回服务端烘焙（能用但慢 400 倍），所以这一位只影响速度。
+  polyforkRebuild: true,
 });
 
 /** 必须为 true 的能力位（version 单独比）。从契约派生，不手抄，免得再漏一个。 */

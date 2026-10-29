@@ -75,12 +75,17 @@ export function projectImageAssets(json){
 }
 
 /** artwork URL -> { ids, title, author } from the project JSON, or null when unavailable. */
+export function project3dAssets(json){
+  return (json?.assets||[]).filter(a=>a?.asset_type==='marmoset')
+    .map((a,i)=>{
+      const id=String(a.player_embedded||'').match(/https?:\/\/(?:www\.)?artstation\.com\/embed\/(\d+)(?=[/?"'\s<]|$)/i)?.[1];
+      return id?{id,type:'3d',embedUrl:`https://www.artstation.com/embed/${id}`,title:a.title||`3D 场景 ${i+1}`,thumb:a.image_url||null,position:Number.isFinite(a.position)?a.position:i}:null;
+    }).filter(Boolean).sort((a,b)=>a.position-b.position);
+}
+
 export async function fetchProjectAssets(href,{open=openPublic,signal}={}){
   const json=await fetchProjectJson(href,{open,signal});
   if(!json)return null;
-  const ids=(json.assets||[])
-    .filter(a=>a&&a.asset_type==='marmoset')
-    .map(a=>{const m=String(a.player_embedded||'').match(/artstation\.com\/embed\/(\d+)/);return m?m[1]:null;})
-    .filter(Boolean);
+  const ids=project3dAssets(json).map(asset=>asset.id);
   return {ids:[...new Set(ids)],title:json.title||null,author:(json.user&&json.user.username)||null};
 }

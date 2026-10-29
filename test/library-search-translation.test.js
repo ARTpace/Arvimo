@@ -71,7 +71,7 @@ function discovery(){
  return {state,feed:createDiscoveryFeed(ctx)};
 }
 
-test('discovery sends English to the platform while preserving Chinese request and history',async t=>{
+test('discovery searches Chinese and English independently while preserving request and history',async t=>{
  const sent=[];
  t.mock.method(globalThis,'fetch',async(url,options)=>{
   const body=JSON.parse(options.body);sent.push({url,body});
@@ -79,7 +79,7 @@ test('discovery sends English to the platform while preserving Chinese request a
  });
  const {state,feed}=discovery();
  await feed.requestFeed('search',{q:'木椅',category:'furniture'},{record:true});
- assert.equal(sent[1].body.q,'wooden chair');assert.equal(sent[1].body.category,'furniture');
+ assert.deepEqual(sent.slice(1).map(item=>item.body.q),['木椅','wooden chair']);assert.ok(sent.slice(1).every(item=>item.body.category==='furniture'));
  assert.equal(state.feeds.search.request.q,'木椅');assert.equal(state.history[0].params.q,'木椅');
 });
 
@@ -95,7 +95,7 @@ test('a superseded translation cannot launch a stale platform search',async t=>{
  });
  const {feed}=discovery();const old=feed.requestFeed('search',{q:'旧'});
  await feed.requestFeed('search',{q:'新'});release();await old;
- assert.deepEqual(queries,['new']);
+ assert.deepEqual(queries,['新','new']);
 });
 
 test('clearing local search prevents a late parse from changing results',async()=>{

@@ -10,10 +10,12 @@ import {runPolyhavenJob} from './polyhaven.mjs';
 import {runPolypizzaJob} from './polypizza.mjs';
 import {runKenneyJob} from './kenney.mjs';
 import {runFreestylizedJob} from './freestylized.mjs';
+import {runPolyforkJob} from './polyfork.mjs';
 import {runAmbientcgJob} from './ambientcg.mjs';
 import {runImageJob} from './image-bundle.mjs';
+import {isPictureSite} from './picture-sites.mjs';
 import {inspectFolder,nativeFolderPicker} from './folder-dialog.mjs';
-import {commitFolder,commitArchive} from './local-commit.mjs';
+import {commitFolder,commitArchive,reserveFolder} from './local-commit.mjs';
 import {assetStorageCategory,storageRoot} from './asset-storage.mjs';
 import {canonicalPath,recoverDownloads,recoveredOptionsMatch} from './download-recovery.mjs';
 import {TransferProgress} from './transfer-progress.mjs';
@@ -32,11 +34,16 @@ const exists=p=>isFile(p)||isDir(p);
 const uidPattern=/^[a-f0-9]{32}$/;
 /** Both platforms feed one queue; the kind only decides which runner converts the model.
  *  `images` is the picture-only counterpart: no mesh, no FBX, no Blender — just the asset's pictures. */
-export const JOB_KINDS=new Set(['sketchfab','artstation','images','polyhaven','ambientcg','polypizza','kenney','freestylized']);
+export const JOB_KINDS=new Set(['sketchfab','artstation','images','polyhaven','ambientcg','polypizza','kenney','freestylized','polyfork']);
 export const ARTSTATION_BATCH=20;
 /** Pictures are small, so a picture batch may be as wide as a model batch; the ceiling is about
  *  keeping one request understandable, not about payload size. */
 export const IMAGE_BATCH=50;
+/** 图站（花瓣/Booru/站酷…）的「整站图片」是另一种量级：单个 3D 资产最多几十张图，
+ *  而一个画板常有上千张。所以图站任务单独给上限，既不挤占 3D 资产的 60 张默认值，
+ *  也不会在第一页就停下（画板页说好的「下载会抓取整站全部图片」得能兑现）。 */
+export const PICTURE_SITE_IMAGE_MAX=2000;
+export const PICTURE_SITE_IMAGE_BYTES=4*1024*1024*1024;
 const ARTSTATION_URL=/^https:\/\/www\.artstation\.com\/artwork\/[A-Za-z0-9]{4,20}$/;
 export const PACK_MODES=new Set(['model','glb','full']);
 export const OUTPUT_MODES=new Set(['zip','folder']);
@@ -103,6 +110,12 @@ export function modelSnapshot(m,kind){
     if(!m.assetId)throw Error('ambientCG 资产 ID 缺失');
     return {...common,kind:'images',platform:'ambientcg',url:String(m.url||`https://ambientcg.com/a/${m.assetId}`),downloadable:false,assetId:String(m.assetId).slice(0,120)};
    }
+  // 图站（素材下载器整合）：把整站 URL 作为一个图片任务，平台与链接一起持久化，恢复队列时
+  // 能正确重派到图站抓取，而不是被拐去 Sketchfab 拿图（否则 url 会被写成 sketchfab 假地址）。
+  if(m.platform&&isPictureSite(m.platform)){
+    if(!m.url)throw Error('图站链接缺失');
+    return {...common,kind:'images',platform:String(m.platform).slice(0,40),url:String(m.url).slice(0,2048),downloadable:false};
+  }
   const artwork=String(m.artworkUrl||m.url||'').replace(/\/$/,'');
   const art=m.platform==='artstation'||ARTSTATION_URL.test(artwork);
   if(art&&!ARTSTATION_URL.test(artwork))throw Error('ArtStation 作品地址无效');
@@ -127,12 +140,17 @@ export function modelSnapshot(m,kind){
  }
  if(kind==='kenney'){
   if(!m.assetId)throw Error('Kenney 资源包 ID 缺失');
-  return {...common,kind:'kenney',platform:'kenney',downloadable:true,url:String(m.url||`https://kenney.nl/assets/${m.assetId}`),assetId:String(m.assetId).slice(0,80),assetType:'pack'};
- }
+  return {...common,kind:'kenney',platform:'kenney',downloadable:true,url:String(m.url||`https://kenney.nl/assets/${m.assetId}`),assetId:String(m.assetId).slice(0,80),assetType:'pack'}; }
  if(kind==='freestylized'){
   if(!m.assetId)throw Error('FreeStylized 资产 ID 缺失');
   const assetType=['skybox','textures','packs','alphas','smart'].includes(m.assetType)?m.assetType:'models';
   return {...common,kind:'freestylized',platform:'freestylized',downloadable:true,url:String(m.url||''),assetId:String(m.assetId).slice(0,80),assetType};
+ }
+ // Polyfork：assetId 就是它的资产 id（`windmill-3aad49` 这种），随任务持久化，
+ // 恢复队列时才能重派。glb 与 fbx 都是官方现成的，不需要本地转换。
+ if(kind==='polyfork'){
+  if(!m.assetId)throw Error('Polyfork 资产 ID 缺失');
+  return {...common,kind:'polyfork',platform:'polyfork',downloadable:true,url:String(m.url||`https://polyfork.dev/asset/${m.assetId}`),assetId:String(m.assetId).slice(0,120)};
  }
  // ambientCG 材质与 Poly Haven 模型同构：uid 是资产 ID 的 md5，assetId 随任务持久化，
  // 恢复队列时才能正确重派给材质 runner。材质没有可另存的原始文件，downloadable 记 false。
@@ -153,13 +171,15 @@ function optionKey(value){
 }
 const sameFolder=(a,b)=>canonicalPath(a)===canonicalPath(b);
 export class DownloadManager{
- constructor({dataDir,defaultFolder,runner=runExportWorker,artRunner=runArtstationWorker,imageRunner=runImageJob,polyRunner=runPolyhavenJob,pizzaRunner=runPolypizzaJob,kenneyRunner=runKenneyJob,freestyleRunner=runFreestylizedJob,materialRunner=runAmbientcgJob,verify=verifyArchive,browser=browserPath,blender=blenderPath,fbxConverter=convertGlbToFbx,blenderImporter=launchBlenderImport,materialImporter=launchBlenderMaterialImport,hdriImporter=launchBlenderHdriImport,folderPicker=nativeFolderPicker,autoStart=true}={}){
-  this.instanceId=randomUUID();this.dataDir=path.resolve(dataDir);this.defaultFolder=path.resolve(defaultFolder);this.runner=runner;this.artRunner=artRunner;this.imageRunner=imageRunner;this.polyRunner=polyRunner;this.pizzaRunner=pizzaRunner;this.kenneyRunner=kenneyRunner;this.freestyleRunner=freestyleRunner;this.materialRunner=materialRunner;this.verify=verify;this.browser=browser;this.blender=blender;this.fbxConverter=fbxConverter;this.blenderImporter=blenderImporter;this.materialImporter=materialImporter;this.hdriImporter=hdriImporter;this.folderPicker=folderPicker;this.autoStart=autoStart;this.jobs=[];this.workers=new Map();this.transfers=new Map();this.closed=false;this.baseUrl=null;this.revision=0;this.timer=null;this.persistTimer=null;this.warning='';
+ constructor({dataDir,defaultFolder,runner=runExportWorker,artRunner=runArtstationWorker,imageRunner=runImageJob,polyRunner=runPolyhavenJob,pizzaRunner=runPolypizzaJob,kenneyRunner=runKenneyJob,freestyleRunner=runFreestylizedJob,polyforkRunner=runPolyforkJob,materialRunner=runAmbientcgJob,verify=verifyArchive,browser=browserPath,blender=blenderPath,fbxConverter=convertGlbToFbx,blenderImporter=launchBlenderImport,materialImporter=launchBlenderMaterialImport,hdriImporter=launchBlenderHdriImport,folderPicker=nativeFolderPicker,autoStart=true}={}){
+  this.instanceId=randomUUID();this.dataDir=path.resolve(dataDir);this.defaultFolder=path.resolve(defaultFolder);this.runner=runner;this.artRunner=artRunner;this.imageRunner=imageRunner;this.polyRunner=polyRunner;this.pizzaRunner=pizzaRunner;this.kenneyRunner=kenneyRunner;this.freestyleRunner=freestyleRunner;this.polyforkRunner=polyforkRunner;this.materialRunner=materialRunner;this.verify=verify;this.browser=browser;this.blender=blender;this.fbxConverter=fbxConverter;this.blenderImporter=blenderImporter;this.materialImporter=materialImporter;this.hdriImporter=hdriImporter;this.folderPicker=folderPicker;this.autoStart=autoStart;this.jobs=[];this.workers=new Map();this.transfers=new Map();this.closed=false;this.baseUrl=null;this.revision=0;this.timer=null;this.persistTimer=null;this.warning='';
   this.settings={folder:this.defaultFolder,concurrency:1,retryLimit:1,paused:false};
   this.dismissedDownloads=new Set();
  }
  async init(){
-  await fsp.mkdir(this.dataDir,{recursive:true});this.lockPath=path.join(this.dataDir,'manager.lock');
+  await fsp.mkdir(this.dataDir,{recursive:true});
+  // Windows 旧品牌目录可能是 junction；先解析真实目录，避免排他创建误报 EEXIST。
+  this.dataDir=await fsp.realpath(this.dataDir);this.lockPath=path.join(this.dataDir,'manager.lock');
   try{const fd=fs.openSync(this.lockPath,'wx');fs.writeFileSync(fd,JSON.stringify(processIdentity()));fs.closeSync(fd);}catch(e){if(e.code!=='EEXIST')throw e;let owner;try{owner=JSON.parse(fs.readFileSync(this.lockPath));}catch{throw Error('下载记录目录锁无效，请检查 manager.lock');}if(lockOwnerAlive(owner)&&!(process.env.SFX_REPLACE_LIBRARY_OWNER==='1'&&replaceLibraryOwner(owner)))throw Error('此下载记录目录已由另一个服务使用');fs.unlinkSync(this.lockPath);return this.init();}
   try{
    this.store=path.join(this.dataDir,'tasks.json');let saved;
@@ -182,7 +202,7 @@ export class DownloadManager{
  update(job,patch,{lazy=false}={}){Object.assign(job,patch,{updatedAt:Date.now()});this.revision++;if(lazy){clearTimeout(this.persistTimer);this.persistTimer=setTimeout(()=>{try{this.save();}catch{}},180);}else this.save();}
  log(job,message){job.logs??=[];job.logs.push(`[${new Date().toLocaleTimeString('zh-CN',{hour12:false})}] ${String(message).slice(0,1500)}`);job.logs=job.logs.slice(-160);}
  folderStatus(){return inspectFolder(this.settings.folder);}
- snapshot(){return {version:1,revision:this.revision,settings:this.settings,defaultFolder:this.defaultFolder,folderStatus:this.folderStatus(),browserAvailable:!!this.browser(),fbxAvailable:!!this.blender(),warning:this.warning,storageError:this.storageError||null,jobs:this.jobs.map(j=>({...j,fileExists:j.state==='saved'&&!!j.filePath&&exists(j.filePath)}))};}
+ snapshot(){return {version:1,revision:this.revision,settings:this.settings,defaultFolder:this.defaultFolder,folderStatus:this.folderStatus(),browserAvailable:!!this.browser(),fbxAvailable:!!this.blender(),warning:this.warning,storageError:this.storageError||null,jobs:this.jobs.map(j=>({...j,fileExists:!!j.filePath&&exists(j.filePath)}))};}
  async sendToBlender(job,filePath=job.filePath){
   // 材质交付物里没有网格，走建材质这条路；HDRI/天空盒走设世界环境；其余一律按模型导入
   //（Kenney / FreeStylized 的 pack.zip 由 resolveBlenderImport 解包后挑模型；
@@ -249,12 +269,12 @@ export class DownloadManager{
   const polyHdri=kind==='polyhaven'&&Array.isArray(input.models)&&input.models.length>0&&input.models.every(m=>m?.assetType==='hdris');
   const polyMixed=kind==='polyhaven'&&Array.isArray(input.models)&&input.models.some(m=>m?.assetType==='textures'||m?.assetType==='hdris')&&!polyMaterial&&!polyHdri;
   if(polyMixed)throw Error('Poly Haven 的模型、材质和 HDRI 请分批下载');
-  const noun=kind==='artstation'?' ArtStation 作品':kind==='images'?'资产图片':polyHdri?' Poly Haven HDRI':polyMaterial?' Poly Haven 材质':kind==='polyhaven'?' Poly Haven 模型':kind==='ambientcg'?' ambientCG 材质':kind==='polypizza'?' Poly Pizza 模型':kind==='kenney'?' Kenney 资源包':kind==='freestylized'?' FreeStylized 资产':'模型';
+  const noun=kind==='artstation'?' ArtStation 作品':kind==='images'?'资产图片':polyHdri?' Poly Haven HDRI':polyMaterial?' Poly Haven 材质':kind==='polyhaven'?' Poly Haven 模型':kind==='ambientcg'?' ambientCG 材质':kind==='polypizza'?' Poly Pizza 模型':kind==='kenney'?' Kenney 资源包':kind==='polyfork'?' Polyfork 模型':kind==='freestylized'?' FreeStylized 资产':'模型';
   if(!Array.isArray(input.models)||!input.models.length||input.models.length>batch)throw Error(`每批最多添加 ${batch} 个${noun}`);
   if(kind==='ambientcg'&&new Set(input.models.map(m=>m.sourceType||'material')).size>1)throw Error('ambientCG 不同类型的资产请分批下载');
   if(this.storageError)throw Error(this.storageError);if(this.jobs.length>=500)throw Error('任务记录已达 500 条，请清理已结束记录');
   const requestedOptions=openInBlender?{...input.options,output:'folder',format:'fbx'}:input.options;
-  const options=kind==='images'?imageOptions(requestedOptions):kind==='ambientcg'||polyMaterial?materialOptions(requestedOptions):polyHdri?{output:'folder',resolution:MATERIAL_RESOLUTIONS.has(requestedOptions?.resolution)?requestedOptions.resolution:'2K',textureFormat:'HDR'}:kind==='polypizza'||kind==='kenney'?{output:'folder',format:'glb'}:kind==='freestylized'?{output:'folder',format:'glb',resolution:MATERIAL_RESOLUTIONS.has(requestedOptions?.resolution)?requestedOptions.resolution:'2K'}:exportOptions(kind==='artstation'?{...requestedOptions,packMode:'glb'}:requestedOptions);
+  const options=kind==='images'?imageOptions(requestedOptions):kind==='ambientcg'||polyMaterial?materialOptions(requestedOptions):polyHdri?{output:'folder',resolution:MATERIAL_RESOLUTIONS.has(requestedOptions?.resolution)?requestedOptions.resolution:'2K',textureFormat:'HDR'}:kind==='polypizza'||kind==='kenney'?{output:'folder',format:'glb'}:kind==='polyfork'?{output:'folder',format:requestedOptions?.format==='fbx'?'fbx':'glb'}:kind==='freestylized'?{output:'folder',format:'glb',resolution:MATERIAL_RESOLUTIONS.has(requestedOptions?.resolution)?requestedOptions.resolution:'2K'}:exportOptions(kind==='artstation'?{...requestedOptions,packMode:'glb'}:requestedOptions);
   if(kind==='ambientcg'&&input.models.every(m=>m.sourceType==='substance'))options.textureFormat='SBSAR';
   const models=input.models.map(m=>modelSnapshot(m,kind)),added=[],duplicates=[],opened=[];
   // 已下载的重复项要「顺手送进 Blender」时，导入可能要几十秒，不能在循环里串行等：
@@ -310,7 +330,7 @@ export class DownloadManager{
    const hdriJob=['polyhaven','ambientcg'].includes(j.kind)&&j.assetType==='hdris'||j.kind==='freestylized'&&j.assetType==='skybox';
    const bundleJob=j.kind==='ambientcg'||materialJob||hdriJob||j.kind==='kenney'||j.kind==='freestylized';
    const imageBundle=j.kind==='images'||j.kind==='artstation'&&j.hasMarmoset===false||bundleJob;
-  const folderOutput=j.options.output==='folder',wantFbx=!imageBundle&&j.options.format==='fbx';
+  const folderOutput=j.options.output==='folder',wantFbx=!imageBundle&&j.options.format==='fbx'&&j.kind!=='polyfork';
   // Both folder delivery and FBX conversion need the loose files, so the staging tree is a
   // directory whenever either is asked for; a ZIP is packed from it afterwards if that is what
   // the user picked. One staging shape keeps the rest of this method mode-agnostic.
@@ -320,7 +340,15 @@ export class DownloadManager{
   const packed=scratch+'.zip.part';
   const profile=path.join(this.dataDir,'workers',`${j.id}-${j.attempts}`);
   const networkToken=randomUUID();this.transfers.set(networkToken,new TransferProgress(network=>{if(!signal.aborted)this.update(j,{network},{lazy:true});}));
+  // 图站整站图片直接写进最终文件夹（不走暂存再搬）：第一批图片落地后，资产库就能看到这张卡，
+  // 下载管理也能立刻打开文件夹，而不用等几百张全部下完。
+  const directFolder=j.kind==='images'&&folderOutput;
+  let liveDir=null;
   try{
+   if(directFolder){
+    liveDir=await reserveFolder(j.downloadDir,cleanFolderName(j.name||'图片包',j.uid));
+    this.update(j,{filePath:liveDir,live:true},{lazy:true});
+   }
   const art=j.kind==='artstation';
    this.log(j,`第 ${j.attempts} 次尝试，独立后台执行`);
    this.update(j,{state:'running',stage:'starting',message:materialJob?'正在启动材质下载器':j.kind==='images'?'正在启动图片下载器':art?(imageBundle?'正在启动作品图片下载器':'正在启动 Marmoset 转换器'):'正在启动后台转换器',startedAt:Date.now(),bytesWritten:0,totalBytes:null,network:null});
@@ -332,7 +360,7 @@ export class DownloadManager{
    // `hasMarmoset` rides along so the forked worker can pick its pipeline without re-reading the
    // artwork page first; it is persisted on the job, so a restored queue dispatches exactly the same way.
     const meta=j.kind==='images'
-    ?await this.imageRunner({uid:j.uid,platform:j.platform,name:j.name,author:j.author,url:j.url,assetId:j.assetId,deliver:looseStage?'folder':'zip',output:staged,workRoot:profile},{signal,progress:onProgress})
+    ?await this.imageRunner({uid:j.uid,platform:j.platform,name:j.name,author:j.author,url:j.url,assetId:j.assetId,deliver:looseStage?'folder':'zip',output:directFolder?liveDir:staged,workRoot:profile,...(isPictureSite(j.platform)?{limit:PICTURE_SITE_IMAGE_MAX,totalBytes:PICTURE_SITE_IMAGE_BYTES}:{})},{signal,progress:onProgress})
     :j.kind==='ambientcg'
      ?await this.materialRunner({uid:j.uid,assetId:j.assetId,options:j.options,deliver:looseStage?'folder':'zip',output:staged,workRoot:profile},{signal,progress:onProgress})
     :art
@@ -345,6 +373,8 @@ export class DownloadManager{
      ?await this.kenneyRunner({uid:j.uid,output:staged,assetId:j.assetId},{signal,progress:onProgress})
     :j.kind==='freestylized'
      ?await this.freestyleRunner({uid:j.uid,output:staged,assetId:j.assetId,assetType:j.assetType,options:j.options},{signal,progress:onProgress})
+    :j.kind==='polyfork'
+     ?await this.polyforkRunner({uid:j.uid,output:staged,assetId:j.assetId,options:j.options},{signal,progress:onProgress})
     :await this.runner({networkToken,uid:j.uid,options:runnerOptions,baseUrl:this.baseUrl,output:staged,profile},{signal,progress:onProgress});
    signal.throwIfAborted();
 
@@ -355,7 +385,7 @@ export class DownloadManager{
    }
 
    // Now that the FBX is inside the tree, a "ZIP + FBX" job packs it; plain folder delivery keeps it.
-   let deliverable=staged,folderDelivery=looseStage;
+   let deliverable=directFolder?liveDir:staged,folderDelivery=looseStage;
    if(looseStage&&!folderOutput){
     this.update(j,{state:'transferring',stage:'transferring',message:'正在把导出内容打包为 ZIP'},{lazy:true});
     await packFolder(staged,packed,{signal});
@@ -369,7 +399,7 @@ export class DownloadManager{
    if(verification.warning)j.warning='部分 CDN 贴图需检查；文件结构校验不代表材质视觉一致';
    this.update(j,{state:'saving',stage:'saving',message:folderDelivery?'正在提交导出文件夹（不会覆盖同名文件夹）':'正在提交已校验的文件（不会覆盖同名文件）'});
    const name=folderDelivery?cleanFolderName(meta.zipName||j.name,j.uid):cleanFilename(meta.zipName||j.name,j.uid);
-   const filePath=folderDelivery?await commitFolder(deliverable,j.downloadDir,name):await commitArchive(deliverable,j.downloadDir,name);
+   const filePath=directFolder?liveDir:folderDelivery?await commitFolder(deliverable,j.downloadDir,name):await commitArchive(deliverable,j.downloadDir,name);
    let blender=null;
    if(j.openInBlender&&imageBundle&&!materialJob&&!hdriJob){
     // The user asked for a Blender import, but this asset produced pictures, not a scene.
@@ -391,7 +421,7 @@ export class DownloadManager{
    else this.update(j,{state:signal.aborted?'cancelled':'failed',message,finishedAt:Date.now()});
   }finally{this.transfers.delete(networkToken);clearTimeout(timeout);await fsp.rm(staged,{recursive:true,force:true}).catch(()=>{});await fsp.rm(packed,{recursive:true,force:true}).catch(()=>{});}
  }
- file(id){const j=this.jobs.find(j=>j.id===id);if(!j||j.state!=='saved'||!j.filePath||path.dirname(j.filePath)!==path.resolve(j.downloadDir)||!exists(j.filePath))throw Error('文件不存在，可能已被移动或删除');return {job:j,path:j.filePath};}
+ file(id){const j=this.jobs.find(j=>j.id===id);if(!j||!j.filePath||path.dirname(j.filePath)!==path.resolve(j.downloadDir)||!exists(j.filePath))throw Error('文件不存在，可能已被移动或删除');return {job:j,path:j.filePath};}
  async reveal(id){if(!id)await fsp.mkdir(this.settings.folder,{recursive:true});const location=id?this.file(id).path:this.settings.folder;await fsp.access(location);const args=process.platform==='win32'?(id?['/select,',location]:[location]):[id?path.dirname(location):location];const app=process.platform==='win32'?'explorer.exe':process.platform==='darwin'?'open':'xdg-open';const child=execFile(app,args,{windowsHide:false},()=>{});child.unref();return {opened:true};}
  async close(){this.closed=true;clearTimeout(this.timer);for(const {controller} of this.workers.values())controller.abort(Error('本地服务已关闭'));await Promise.allSettled([...this.workers.values()].map(w=>w.promise));clearTimeout(this.persistTimer);this.save();if(fs.existsSync(this.lockPath))fs.unlinkSync(this.lockPath);}
 }

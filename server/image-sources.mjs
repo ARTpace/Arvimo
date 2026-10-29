@@ -6,10 +6,11 @@
 // a platform joins or an API shifts, so they live in one registry and nowhere else: the bundle
 // writer and the queue ask a name here, and never branch on a platform themselves.
 import {isSketchfabHost,publicJson} from './public-http.mjs';
-import {fetchProjectJson,projectImageAssets} from './artstation-project.mjs';
+import {fetchProjectJson,projectImageAssets,project3dAssets} from './artstation-project.mjs';
 import {downloadUrl as artstationDownloadUrl} from './artstation-cdn.mjs';
 import {polyhavenRenders} from './polyhaven.mjs';
 import {ambientcgRenders} from './ambientcg.mjs';
+import {collectPictureAssets,isPictureSite} from './picture-sites.mjs';
 
 /** How many pictures one asset may contribute. Real uploads sit far below this; anything larger is
  *  a collected gallery and is truncated rather than silently queued for gigabytes. */
@@ -75,8 +76,9 @@ export const IMAGE_SOURCES=Object.freeze({
       const json=await fetchProjectJson(url,{open,signal});
       if(!json)throw Error('读取 ArtStation 作品信息失败（站点可能要求验证），请稍后重试');
       const planned=planArtstationImages(projectImageAssets(json));
-      if(!planned.items.length)throw Error('这个作品没有可下载的图片（可能只包含视频或外链内容）');
-      return {...planned,title:trimmed(json.title),author:trimmed(json.user?.username),cover:planned.items[0]?.url||null,source:typeof url==='string'?url:null,rendition:'large'};
+      const scenes=project3dAssets(json);
+      if(!planned.items.length&&!scenes.length)throw Error('这个作品没有可预览的图片或 3D 场景');
+      return {...planned,scenes,title:trimmed(json.title),author:trimmed(json.user?.full_name||json.user?.username),authorUrl:json.user?.username?`https://www.artstation.com/${encodeURIComponent(json.user.username)}`:'',description:trimmed(json.description),tags:(json.tags||[]).map(tag=>typeof tag==='string'?tag:tag.name).filter(Boolean),cover:planned.items[0]?.url||null,source:typeof url==='string'?url:null,rendition:'large'};
     },
   },
   polyhaven:{
@@ -107,6 +109,8 @@ export const IMAGE_SOURCES=Object.freeze({
 
 /** Ask one platform for the pictures of one asset. The registry is the whole dispatch. */
 export async function collectImageAssets(platform,{uid,url,assetId}={},options={}){
+  // 图站抓取（素材下载器整合）：命中 PICTURE_SITES 走独立注册表，否则回落 3D 资产图片源。
+  if(isPictureSite(platform))return collectPictureAssets(platform,{url},options);
   const source=IMAGE_SOURCES[platform];
   if(!source)throw Error('这个来源暂时不支持下载图片');
   return {...(await source.resolve({uid,url,assetId},options)),platform:source.id,client:source.client,label:source.label};

@@ -8,6 +8,59 @@ import {createLanSharing} from '../server/lan-sharing.mjs';
 
 const LOGIN_BODY='username=tester&password=test-password';
 
+test('共享端口固定，冲突时仅本机可用，显式换端口后显示并保留重新分享提醒',async t=>{
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'assetvault-share-port-'));
+ t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
+ const file=path.join(dir,'sharing.json');
+ const options={file,interfaces:()=>({eth:[{family:'IPv4',internal:false,address:'192.168.1.10'}]})};
+ let service=createLanSharing(options);
+ let state={activePort:4178,errorCode:''};
+ function attach(){service.attachListener({state:()=>state,sync:async()=>{const port=service.status().sharingPort;if(port!==4178)state={activePort:port,errorCode:''};}});}
+ attach();
+ async function request(local,port,input){
+  const req=Readable.from([input?JSON.stringify(input):'']);req.url=input?'/api/lan/settings':'/';req.method=input?'POST':'GET';
+  req.socket={localPort:port,remoteAddress:local?'127.0.0.1':'192.168.1.20'};
+  req.headers={host:`${local?'127.0.0.1':'192.168.1.10'}:${port}`,'x-sfx-local':'1'};
+  const res={writeHead(code){this.code=code;},end(body){this.body=body;}};
+  res.handled=await service.handle(req,res);return res;
+ }
+ await request(true,4178,{enabled:true,password:'test-password'});
+ service=createLanSharing(options);
+ state={activePort:null,errorCode:'EADDRINUSE'};attach();
+ assert.equal(service.startupPort(5000),4178);
+ assert.equal(service.status(5000).portConflict,true);
+ assert.deepEqual(service.status(5000).addresses,[]);
+ assert.equal((await request(true,5000)).handled,false);
+ assert.equal((await request(false,5000)).code,403);
+ await request(true,5000,{enabled:true});
+ assert.equal(service.status(5000).portConflict,true,'普通保存不能悄悄切换共享端口');
+ await request(true,5000,{enabled:true,sharingPort:6000});
+ assert.equal(service.status(5000).portConflict,false);
+ assert.equal(service.status(5000).portChanged,true);
+ assert.deepEqual(service.status(5000).addresses,['http://192.168.1.10:6000/']);
+ assert.equal((await request(false,6000)).code,200);
+ service=createLanSharing(options);attach();
+ assert.equal(service.startupPort(4178),6000);
+ assert.equal(service.status(5000).portChanged,true,'重启不能清掉未确认的提醒');
+ await request(true,5000,{enabled:true,acknowledgePortChange:true});
+ assert.equal(service.status(5000).portChanged,false);
+ await request(true,5000,{enabled:false});
+ assert.equal(service.startupPort(4178),4178);
+});
+
+test('旧版共享配置迁移时固定原端口，不更改密码',t=>{
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'assetvault-share-migrate-'));
+ t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
+ const file=path.join(dir,'sharing.json');
+ const saved={enabled:true,salt:'a'.repeat(32),hash:'b'.repeat(64)};
+ fs.writeFileSync(file,JSON.stringify(saved));
+ const service=createLanSharing({file});
+ assert.equal(service.startupPort(5000),5000);
+ assert.equal(createLanSharing({file}).startupPort(4178),5000);
+ assert.equal(createLanSharing({file}).status(5000).portChanged,true,'旧版未记录分享端口时必须提示核对链接');
+ assert.equal(JSON.parse(fs.readFileSync(file)).hash,saved.hash);
+});
+
 test('LAN access requires a name and a password and local administration; sessions expire and are revoked',async t=>{
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'assetvault-lan-'));
  t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));

@@ -1,10 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {galleryAvailable,galleryActive,coverRendition,aspectRatioStyle,GALLERY_RENDITION} from '../src/library/gallery-view.js';
+import {galleryAvailable,galleryActive,displayGridClass,coverRendition,aspectRatioStyle,GALLERY_RENDITION} from '../src/library/gallery-view.js';
+import {PICTURE_SITES} from '../src/library/platforms.js';
 
 // 画廊是 ArtStation 专属的看图视图，判据集中在一个模块里：
 // 「按钮显不显示」和「网格生不生效」都从同一处推导，两者不可能各说各话。
-test('gallery: only the ArtStation platform on the discovery page offers it',()=>{
+test('gallery: all image platforms on the discovery page offer it',()=>{
  assert.equal(galleryAvailable({route:'discover',platform:'artstation'}),true);
  // Sketchfab 是 3D 模型，卡片上的面数/动画/许可是有用信息，极简掉是净损失。
  assert.equal(galleryAvailable({route:'discover',platform:'sketchfab'}),false);
@@ -12,6 +13,17 @@ test('gallery: only the ArtStation platform on the discovery page offers it',()=
  // 本地库与收藏里混着两个平台来源，画廊只画在线 A 站结果。
  for(const route of ['library','favorites','downloads'])assert.equal(galleryAvailable({route,platform:'artstation'}),false,route);
  assert.equal(galleryAvailable(),false);
+});
+
+test('all image platforms share mutually exclusive layout classes',()=>{
+ for(const platform of ['artstation',...Object.keys(PICTURE_SITES)]){
+  const state={route:'discover',platform};
+  assert.equal(galleryAvailable(state),true,platform);
+  assert.equal(displayGridClass(state),'model-grid');
+  assert.equal(displayGridClass({...state,compact:true}),'model-grid compact');
+  assert.equal(displayGridClass({...state,compact:true,gallery:true}),'model-grid gallery');
+ }
+ assert.equal(displayGridClass({route:'discover',platform:'sketchfab',gallery:true}),'model-grid');
 });
 
 test('gallery: the view renders only when it is offered and switched on',()=>{

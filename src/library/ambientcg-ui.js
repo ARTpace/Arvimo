@@ -7,9 +7,10 @@
 import {esc} from './html-esc.js';
 import {fetchCategories,fillOptions} from './category-options.js';
 
-export function createAmbientcgUI({$,toast,requestFeed}){
+export function createAmbientcgUI({enabled=()=>true,$,esc,toast,requestFeed}){
  const ui={categories:null};
  async function loadCategories(){
+  if(!enabled())return;
   const type=$('#ambientcg-type').value;
   try{
    const rows=await fetchCategories(`/api/ambientcg/categories?type=${encodeURIComponent(type)}`);

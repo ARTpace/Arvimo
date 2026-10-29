@@ -18,6 +18,14 @@
 - `platforms.js` — 平台注册表：`PLATFORMS` / `FEEDS` / `feedEndpoint` / `routeLink`。**加平台只改这里**（声明 feeds、filters、placeholder、suggestions 即可），契约测试白名单也从 `PLATFORMS` 派生。
 
 ## 平台 / 源
+- `polyfork-ui.js` — Polyfork 筛选 UI：类别下拉（固定 9 个官方 class，不编计数）+ 排序；`read()` 输出 `{q,assetClass,sort}`。
+- `polyfork-params.js` — Polyfork 参数面板（预览弹窗右侧）：渲染 `-params.json` 的旋钮、持有当前值、分派给 `gltfPreview`。
+  **颜色走 `setPolyforkColors()`（本地改顶点色），几何走 `bakePolyfork()`（本地生成器优先，见下）**；
+  range 拖动期间按 rAF 合并调 `bakePolyfork(...,{live:true})`，只有 `polyforkLive()` 为假（没有生成器）时才不发请求；
+  `range` 只在 `change`（松手）时请求，`input` 期间只更新数字。副标题用 `.pf-meta`，不能用 `.author-name`（会被作者按钮覆盖）。
+- `polyfork-zh.js` — 参数中文化的**规则层**：`KEYS`（整 key）→ `PHRASES`（整串短语）→ `WORDS`（逐词拼，全词命中才拼，否则留英文）。
+  `labelOf`／`valueOf` 的语义是「规则层翻出来了就信规则层，模型字典只补空缺」——**别改成字典优先**，
+  模型会把 windmill 的 `cap pitch` 译成「机头坡度」。`-params.json` 的 `describe` 是整段英文，规则层不碰。
 - `artstation-ui.js` — ArtStation 预览 / 作品页 UI（3D Viewer 与图片两种形态）。
 - `search-history.js` — 搜索历史下拉。
 - `search-options.js` — 搜索选项（排序 / 范围记忆等）。
@@ -73,6 +81,16 @@
 - `server/image-sources.mjs` — 图片源注册表（`IMAGE_SOURCES`：sketchfab / artstation / polyhaven）。Poly Haven 源走 `polyhavenRenders()`，CDN 拼 `cdn.polyhaven.com/asset_img/renders/<id>/<name>`；`collectImageAssets(platform,{uid,url,assetId})` 把 `assetId` 透传给各源 resolve（Poly Haven 只认 `assetId`，模型 uid 是 md5 拼不出 URL）。
 - `server/image-bundle.mjs` — `runImageJob`：图片任务 worker；调 `collectImageAssets` 取清单后逐张 `downloadImage`，落盘 `<名称>-images` 文件夹 + `info.json`。
 - `server/image-store.mjs` — `downloadImage` + `IMAGE_CLIENTS` 出域白名单（sketchfab 限 sketchfab.com / artstation 限 artstation.com / polyhaven 公开无限制）。**新增图片来源 = 在 `IMAGE_CLIENTS` 登记，否则会 fallback 成 artstation 白名单被拒**（Poly Haven 当初就是这么翻车的）。
+- `server/polyfork.mjs` — **唯一不解析网页的模型源**：直连 polyfork.dev 的 REST（`GET /api/assets`）。搜索只做字段归一化；下载拿 `/cdn/{id}.glb` 与 `/dl/{id}.fbx`，不做本地转换。选 FBX 时 GLB 也必下 —— 队列的内容校验认 GLB 网格。改这个文件时别照 Poly Pizza 那套去抓 HTML。
+  `polyforkGenerator()` 取 `/cdn/{id}.mjs`（资产自带的生成器，7 天磁盘缓存），`patchGeneratorSource()` 把
+  `import ... from 'three'` 改成从 `globalThis.__PF_THREE__` 取。**改写的理由**：页面 CSP 是
+  `script-src 'self'`，blob 脚本会被拒（实测 "Failed to fetch dynamically imported module"），
+  所以必须由同源 URL 发出、由 `import()` 加载；同时不要让浏览器再下一份 three。
+  路由 `/api/polyfork/module` 因此**不校验 X-SFX-Local**（`import()` 无法带自定义头，内容是公开 CDN 源码）。
+- `server/polyfork-zh.mjs` — 参数中文化的**字典层**：`buildPrompt()` 只把 label 与取值喂给模型（**不要把 describe 塞进去**，
+  一百多词的英文说明会让本地网关 60 秒后 502，去掉后同样任务 2 秒完成），`normalizeZh()` 做白名单校验
+  （键必须在 schema 里、长度夹断、非字符串丢弃），`createPolyforkZh()` 负责并发去重 + 落盘 `<数据目录>/polyfork-zh/<assetId>.json`。
+  路由 `GET /api/polyfork/zh?id=&n=` 里 `n` 是资产名，给模型当上下文（否则风车的 `sail` 会翻成「船帆」）。
 - `server/downloads.mjs` — 下载队列：`enqueue` / `run` / `modelSnapshot`（图片分支按平台分流，Poly Haven 用 `assetId` 而非 `uid`）。`run()` 调 `imageRunner({assetId})` 必须把 `assetId` 透传到底，否则 Poly Haven 图片源拿不到 ID。下载 kind 判定 `jobKindOf` 住 `platforms.js`，前端 `enqueueImmediate` 用 `jobKindOf(picked)` 不再写死 sketchfab。
 - `scripts/start-library-background.mjs` — 后台启动器：先问 capabilities，够新就复用、否则自动重启（`stopOldIfNeeded` → `killPids` → 重新构建 + 起服务）。判定只看契约，不再手写能力位清单。
 - `scripts/stop-library-background.mjs` — 停止后台服务（按 pid 文件 + 端口 + 命令行三重定位）。

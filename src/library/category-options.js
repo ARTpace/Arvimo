@@ -8,8 +8,18 @@
  */
 
 /** 拉一份本地接口数据。非 2xx 直接抛，让调用方决定提示文案。 */
-export async function localJson(url) {
-  const response = await fetch(url, { cache: 'no-store', headers: { 'X-SFX-Local': '1' } });
+const initialRequests=new Set();
+export async function waitForInitialCategories(){
+ await Promise.allSettled([...initialRequests]);
+}
+export function localJson(url){
+ const request=readLocalJson(url);
+ initialRequests.add(request);
+ request.then(()=>initialRequests.delete(request),()=>initialRequests.delete(request));
+ return request;
+}
+async function readLocalJson(url) {
+  const response = await fetch(url, { cache: 'no-store', signal:AbortSignal.timeout(12000), headers: { 'X-SFX-Local': '1' } });
   const data = await response.json().catch(() => ({}));
   if (!response.ok) throw Error(data.error || `接口请求失败 HTTP ${response.status}`);
   return data || {};

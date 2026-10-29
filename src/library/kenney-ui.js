@@ -1,12 +1,13 @@
 import {esc} from './html-esc.js';
 import {localJson,fillOptions} from './category-options.js';
 
-export function createKenneyUI({$,toast,requestFeed}){
+export function createKenneyUI({enabled=()=>true,$,esc,toast,requestFeed}){
  function read(){
   return {q:$('#asset-query').value.trim().slice(0,200),category:$('#kenney-category').value,series:$('#kenney-series').value};
  }
  function start(){return requestFeed('kenney',read());}
  async function load(){
+  if(!enabled())return;
   try{
    const data=await localJson('/api/kenney/categories');
    fillOptions($,'#kenney-category',data.categories,'全部类型',esc);

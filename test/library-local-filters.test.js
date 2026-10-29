@@ -2,7 +2,15 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
-import {filterLocalAssets,localFileState,localAssetKind} from '../src/library/local-filters.js';
+import {filterLocalAssets,localFileState,localAssetKind,localAssetCategories} from '../src/library/local-filters.js';
+
+test('local categories combine metadata and tags independently of discovery filters',()=>{
+ const models=[{uid:'a',category:'道具',categories:[{name:'武器'}],tags:['金属','道具'],userTags:['游戏']},{uid:'b',tags:['木材']}];
+ assert.deepEqual(localAssetCategories(models[0]),['武器','道具','金属','游戏']);
+ assert.deepEqual(filterLocalAssets(models,{category:'武器'},null),[models[0]]);
+ assert.deepEqual(filterLocalAssets(models,{category:'木材',search:'不存在'},null),[]);
+ assert.deepEqual(filterLocalAssets(models,{},null),models);
+});
 
 test('file status uses any available saved version before reporting missing',()=>{
  const jobs=[{id:'4k',uid:'a',state:'saved',fileExists:false,options:{resolution:'4K'}},{id:'8k',uid:'a',state:'saved',fileExists:true,options:{resolution:'8K'}}];

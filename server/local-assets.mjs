@@ -11,13 +11,20 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import {createInflateRaw} from 'node:zlib';
 import {fileKind} from './local-browse.mjs';
+import {mapLimit} from './bounded-map.mjs';
 
 const SKIP_DIRS = new Set(['node_modules', '.git', '.svn', '.hg', '$recycle.bin', 'system volume information', '__pycache__', '.cache', '.assetvault']);
 const MAX_DEPTH = 8;
-const MAX_PACKAGES = 2000;
+// 上限不写死：默认 20000（8k 资产库不会在 2000 处静默截断），SFX_SCAN_MAX_PACKAGES / SFX_SCAN_FILE_LIMIT 可覆盖。
+// 触顶时仍返回 truncated:true —— 这是「结果不完整」的标记，不是丢数据的借口。
+const MAX_PACKAGES = Math.max(1, Number(process.env.SFX_SCAN_MAX_PACKAGES) || 20000);
+const DEFAULT_FILE_LIMIT = Math.max(1, Number(process.env.SFX_SCAN_FILE_LIMIT) || 20000);
 const MAX_ZIP_BYTES = 2 * 1024 ** 3;
 const MAX_INFO_BYTES = 1024 * 1024;
 const MAX_LISTED_ENTRIES = 200;
+
+// 扫描时的 stat 并发度：可用 SFX_SCAN_CONCURRENCY 覆盖，0/非法值回落到默认 24。
+const STAT_CONCURRENCY = Math.max(1, Number(process.env.SFX_SCAN_CONCURRENCY) || 24);
 
 const MODEL_EXT = new Set(['glb', 'gltf', 'fbx', 'obj', 'stl', 'ply', '3mf']);
 const MODEL_PRIORITY = ['glb', 'gltf', 'fbx', 'obj', 'stl', 'ply', '3mf'];
@@ -137,23 +144,33 @@ async function walkPackage(abs, root, rel) {
   let bytes = 0, mtime = 0, fileCount = 0;
   while (queue.length) {
     const { dir, rel: prefix } = queue.shift();
-    for (const item of await readEntries(dir)) {
+    const listing = await readEntries(dir);
+    const subdirs = [];
+    const files = [];
+    for (const item of listing) {
       if (item.name.startsWith('.')) continue;
       const childRel = prefix ? `${prefix}/${item.name}` : item.name;
       if (item.isDirectory()) {
         if (SKIP_DIRS.has(item.name.toLowerCase()) || /\.unpacked$/i.test(item.name)) continue;
-        queue.push({ dir: path.join(dir, item.name), rel: childRel });
+        subdirs.push({ dir: path.join(dir, item.name), rel: childRel });
         continue;
       }
       if (!item.isFile()) continue;
       // 包根的 info.json 是资产自身的元信息，不算「包内文件」，也不该出现在清单里。
       if (!prefix && item.name === 'info.json') continue;
-      let stat = null;
-      try { stat = await fsp.stat(path.join(dir, item.name)); } catch { continue; }
+      files.push({ item, childRel });
+    }
+    // 同一层的文件 stat 并发发起；失败等价原来的 catch { continue; }，结果按下标回填，输出顺序与字段不变。
+    const stats = await mapLimit(files, STAT_CONCURRENCY, entry => fsp.stat(path.join(dir, entry.item.name)).then(stat => stat, () => null));
+    for (let index = 0; index < files.length; index++) {
+      const stat = stats[index];
+      if (!stat) continue;
+      const { item, childRel } = files[index];
       bytes += stat.size; fileCount++;
       if (stat.mtimeMs > mtime) mtime = Math.round(stat.mtimeMs);
       entries.push({ rel: childRel, name: item.name, ext: path.extname(item.name).slice(1).toLowerCase(), bytes: stat.size, mtime: Math.round(stat.mtimeMs) });
     }
+    for (const subdir of subdirs) queue.push(subdir);
   }
   return { entries, bytes, fileCount, mtime };
 }
@@ -221,7 +238,8 @@ function inflate(bytes) {
  * - packages：一个资产一条（含元信息、封面、主文件、总大小）；
  * - files：不属于任何包的文件，也就是用户自己拷进资产库目录的素材。
  */
-export async function scanLibraryPackages({ roots = [], limit = 2000 } = {}) {
+export async function scanLibraryPackages({ roots = [], limit = DEFAULT_FILE_LIMIT } = {}) {
+  const fileLimit = Math.max(1, Number(limit) || DEFAULT_FILE_LIMIT);
   const packages = [];
   const files = [];
   const byUid = new Map();
@@ -286,6 +304,17 @@ export async function scanLibraryPackages({ roots = [], limit = 2000 } = {}) {
         return;
       }
     }
+    // 本层文件的 stat 并发发起；zip 仍按原顺序单独读 manifest，结果按下标回填，输出顺序与字段不变。
+    const statTargets = [];
+    for (const item of entries) {
+      if (item.name.startsWith('.')) continue;
+      if (item.isDirectory()) continue;
+      if (!item.isFile()) continue;
+      if (/\.zip$/i.test(item.name)) continue;
+      statTargets.push({ item, abs: path.join(dir, item.name) });
+    }
+    const statResults = await mapLimit(statTargets, STAT_CONCURRENCY, target => fsp.stat(target.abs).then(stat => stat, () => null));
+    const statByItem = new Map(statTargets.map((target, index) => [target.item, statResults[index]]));
     for (const item of entries) {
       if (item.name.startsWith('.')) continue;
       const childRel = rel ? `${rel}/${item.name}` : item.name;
@@ -303,10 +332,15 @@ export async function scanLibraryPackages({ roots = [], limit = 2000 } = {}) {
           continue;
         }
       }
-      let stat = null;
-      try { stat = await fsp.stat(abs); } catch { continue; }
+      let stat;
+      if (statByItem.has(item)) {
+        stat = statByItem.get(item);
+        if (!stat) continue;
+      } else {
+        try { stat = await fsp.stat(abs); } catch { continue; }
+      }
       files.push({ rel: childRel, name: item.name, ext: path.extname(item.name).slice(1).toLowerCase(), kind: fileKind(item.name), bytes: stat.size, mtime: Math.round(stat.mtimeMs), root });
-      if (files.length >= limit) { truncated = true; return; }
+      if (files.length >= fileLimit) { truncated = true; return; }
     }
   }
 
@@ -314,5 +348,6 @@ export async function scanLibraryPackages({ roots = [], limit = 2000 } = {}) {
 
   packages.sort((a, b) => b.mtime - a.mtime);
   files.sort((a, b) => b.mtime - a.mtime);
-  return { packages, files, truncated };
+  // limits 供前端/调用方感知当前上限（附加字段，不影响既有字段）。
+  return { packages, files, truncated, limits: { maxPackages: MAX_PACKAGES, fileLimit } };
 }

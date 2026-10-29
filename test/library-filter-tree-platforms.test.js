@@ -5,6 +5,7 @@ import {readFileSync} from 'node:fs';
 const ROOT = new URL('..', import.meta.url);
 const tree = readFileSync(new URL('src/library/filter-tree.js', ROOT), 'utf8');
 const html = readFileSync(new URL('src/library/index.html', ROOT), 'utf8');
+const view = readFileSync(new URL('src/library/library-view.js', ROOT), 'utf8');
 
 // 平台 -> [筛选面板 id, 该面板里应当被搬进树的原生控件 id...]
 const PLATFORMS = [
@@ -15,6 +16,7 @@ const PLATFORMS = [
   ['Kenney', '#filters-kenney', ['#kenney-category', '#kenney-series']],
   ['Poly Pizza', '#filters-polypizza', ['#polypizza-cc0']],
   ['FreeStylized', '#filters-freestylized', ['#freestylized-type', '#freestylized-category']],
+  ['Polyfork', '#filters-polyfork', ['#polyfork-class', '#polyfork-sort']],
 ];
 
 test('六个平台的筛选面板全部登记进筛选树，没有平台掉队', () => {
@@ -74,6 +76,19 @@ test('渲染器两种折叠都认，且保留「什么都不写就平铺」的�
     '分组判据要同时认「谓词命中」（ArtStation 按分类名）与「按值命中」（Sketchfab 的 slug）');
   assert.ok(/import \{ARTSTATION_CATEGORY_GROUPS,MORE_GROUP,foldLongList\} from '\.\/filter-groups\.js'/.test(tree),
     '分组 / 折叠表必须来自 filter-groups.js，别再往渲染器里塞第二份清单');
+});
+
+test('每个平台的筛选面板都会被搬进左侧栏（FILTER_ROWS 一个不漏）', () => {
+  // 树是渲染在面板内部的，面板本身得先搬到 #filter-rows 才看得见。
+  // 漏一个的直接后果：宽屏下那个平台的分类还挂在搜索框下面，侧栏里空着。
+  const rows = (view.match(/const FILTER_ROWS=\[([\s\S]*?)\];/) || [])[1] || '';
+  const listed = new Set([...rows.matchAll(/'#([a-z-]+)'/g)].map(m => m[1]));
+  const panels = [...html.matchAll(/class="online-filters" id="(filters-[a-z]+)"/g)].map(m => m[1]);
+  assert.ok(panels.length >= 8, 'html 里的平台筛选面板数量不对，正则可能失效了');
+  for (const id of panels) {
+    assert.ok(listed.has(id), `#${id} 没写进 FILTER_ROWS，宽屏下它会留在搜索卡片里`);
+  }
+  assert.ok(listed.has('filters-all'), '「全部平台」的说明文字也要跟着搬，不然在搜索框下孤零零一行');
 });
 
 test('筛选树的隐藏原生控件约定没被破坏（业务代码仍只认原生 id）', () => {

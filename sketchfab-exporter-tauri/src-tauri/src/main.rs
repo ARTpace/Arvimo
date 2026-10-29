@@ -74,48 +74,6 @@ struct Backend {
     license_path: PathBuf,
 }
 
-/// 挑一个当前空闲的本机端口。
-///
-/// 以前端口写死 4178，于是有这一类坏法：只要上一版的 node 进程还占着 4178，新进程就绑不上，
-/// 而界面照样去连 4178 —— 连上的是那个旧进程。旧进程的静态文件是每次读盘的（界面看着是新的），
-/// 内存里的路由表却是旧的，于是新加的接口一律 404，且"界面是新的、报错却像接口不存在"，极难自查。
-/// 「缩到托盘」会让服务长期驻留，重装也不会杀掉旧进程，所以这个坑一定会反复出现。
-/// 改成每次启动让系统给一个空闲端口，从结构上消除冲突。
-/// 这里绑一下拿到端口号就立刻释放，真正的监听由 node 完成。
-fn free_port() -> u16 {
-    std::net::TcpListener::bind("127.0.0.1:0")
-        .and_then(|listener| listener.local_addr())
-        .map(|address| address.port())
-        .unwrap_or(4178)
-}
-
-/// 轮询本地服务端口，直到 library.mjs 可以响应 HTTP 请求。
-fn server_ready(port: u16) -> bool {
-    use std::io::{Read, Write};
-    use std::net::TcpStream;
-    for _ in 0..150 {
-        if let Ok(mut s) = TcpStream::connect(("127.0.0.1", port)) {
-            let request = format!(
-                "GET /api/health HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n"
-            );
-            if s.write_all(request.as_bytes()).is_ok() {
-                let mut buf = Vec::new();
-                let _ = s.set_read_timeout(Some(std::time::Duration::from_secs(2)));
-                if s.take(8192).read_to_end(&mut buf).is_ok() {
-                    // 只看到 HTTP 响应头还不够 —— 端口上可能坐着别的程序。
-                    // 健康检查会自报服务名，认这个名字才说明真的是我们的服务，
-                    // 否则会把界面导航到一个陌生的本地服务上去。
-                    if String::from_utf8_lossy(&buf).contains("assetvault-local-library") {
-                        return true;
-                    }
-                }
-            }
-        }
-        std::thread::sleep(std::time::Duration::from_millis(200));
-    }
-    false
-}
-
 /// 托盘可用时关窗隐藏，否则最小化，避免窗口隐藏后无法找回。
 static TRAY_READY: AtomicBool = AtomicBool::new(false);
 
@@ -260,8 +218,9 @@ fn start_backend(app: &AppHandle) -> Result<(), String> {
     let backend = app.state::<Backend>();
     *app.state::<BootError>().0.lock().unwrap() = None;
     *app.state::<BackendReady>().0.lock().unwrap() = None;
-    // 每次启动挑一个空闲端口，避免与残留的旧进程抢同一个端口（详见 free_port 注释）。
-    let port = free_port();
+    // 后台优先绑定固定端口，冲突时自行回退并通过自己的 stdout 报告实际端口。
+    let port = 4179;
+    let (ready_tx, ready_rx) = std::sync::mpsc::channel::<u16>();
     let mut cmd = Command::new(&backend.node_exe);
     let group = process_group::ProcessGroup::new().map_err(|e| format!("无法创建后台进程组：{e}"))?;
     cmd.arg(&backend.entry)
@@ -277,6 +236,7 @@ fn start_backend(app: &AppHandle) -> Result<(), String> {
         .env("SFX_PROXY", "none")
         .env("SFX_NO_SYSTEM_PROXY", "1")
         .env("SFX_PORT", port.to_string())
+        .env("SFX_PORT_FALLBACK", "1")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     // Windows 下隐藏被拉起的 node 控制台窗口，避免启动瞬间闪一下命令行窗。
@@ -298,6 +258,11 @@ fn start_backend(app: &AppHandle) -> Result<(), String> {
     if let Some(out) = child.stdout.take() {
         std::thread::spawn(move || {
             for line in BufReader::new(out).lines().map_while(Result::ok) {
+                if let Some(value) = line.strip_prefix("ASSETVAULT_READY_PORT=") {
+                    if let Ok(port) = value.parse::<u16>() {
+                        if port != 0 { let _ = ready_tx.send(port); }
+                    }
+                }
                 println!("[node] {line}");
             }
         });
@@ -327,11 +292,11 @@ fn start_backend(app: &AppHandle) -> Result<(), String> {
 
     let handle = app.clone();
     std::thread::spawn(move || {
-        if server_ready(port) {
+        if let Ok(port) = ready_rx.recv_timeout(std::time::Duration::from_secs(45)) {
             // ponytail: 本地加载页持续显示，只发布就绪地址，不再跳到第二张启动页。
             *handle.state::<BackendReady>().0.lock().unwrap() = Some(format!("http://127.0.0.1:{port}/"));
         } else {
-            eprintln!("[node] 本地服务在端口 {port} 上未就绪，界面会停在等待页。");
+            eprintln!("[node] 本地服务未报告就绪端口，界面会停在等待页。");
             let state = handle.state::<BootError>();
             let mut error = state.0.lock().unwrap();
             if error.is_none() { *error = Some("本地服务启动超时，请关闭旧版 AssetVault 后重新打开。".into()); }

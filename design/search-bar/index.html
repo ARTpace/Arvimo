@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>AssetVault 搜索栏 · 外观编辑示例</title>
+  <link rel="stylesheet" href="search-bar.css">
+</head>
+<body>
+  <svg class="svg-defs" aria-hidden="true"><defs><symbol id="search-icon" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/></symbol></defs></svg>
+  <section class="search-panel" id="search-panel" aria-label="资产搜索">
+    <form id="asset-search-form">
+      <div class="search-field">
+        <label class="platform-select">
+          <select id="search-platform" aria-label="搜索平台">
+            <option>Sketchfab</option><option>ArtStation</option><option>Poly Haven</option><option>ambientCG</option><option>Poly Pizza</option><option>Kenney</option><option>FreeStylized</option><option>Polyfork</option>
+          </select>
+          <span aria-hidden="true">↓</span>
+        </label>
+        <label class="global-search">
+          <svg aria-hidden="true"><use href="#search-icon"/></svg>
+          <input id="asset-query" type="search" maxlength="200" placeholder="搜索 Sketchfab，或粘贴模型 / 作者 / 合集链接" aria-label="搜索资产" autocomplete="off">
+          <kbd>Enter ↵</kbd>
+        </label>
+      </div>
+      <button class="primary" id="search-button" type="submit"><svg aria-hidden="true"><use href="#search-icon"/></svg>搜索 / 解析</button>
+      <button class="secondary" id="theme-breakdown-btn" type="button" aria-label="AI 拆解搜索主题">✦ AI 拆解</button>
+    </form>
+    <div class="topic-strip" id="topic-strip">
+      <span class="topic-lead">今日主题</span>
+      <button class="topic-chip today" type="button" data-topic="boat">boat <small>今日</small></button>
+      <button class="topic-chip" type="button" data-topic="plane">plane</button>
+      <button class="topic-chip" type="button" data-topic="mushroom">mushroom</button>
+      <button class="topic-chip" type="button" data-topic="treasure">treasure</button>
+      <button class="topic-chip" type="button" data-topic="island">island</button>
+      <button class="topic-chip" type="button" data-topic="robot">robot</button>
+    </div>
+  </section>
+  <script src="search-bar.js"></script>
+</body>
+</html>

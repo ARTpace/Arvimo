@@ -19,7 +19,7 @@ const fmtMB=n=>n==null?'未知':`${(n/1048576).toFixed(n>=10485760?0:1)} MB`;
 const pad2=n=>String(n).padStart(2,'0');
 
 /** Download every planned picture into `<work>/images`, naming each after what its bytes really are. */
-async function collectFiles(work,items,{client,open,signal,progress,startedAt}){
+async function collectFiles(work,items,{client,open,signal,progress,startedAt,onFile}){
   const dir=path.join(work,'images');
   await fsp.mkdir(dir,{recursive:true});
   const files=[],used=new Set();
@@ -44,6 +44,9 @@ async function collectFiles(work,items,{client,open,signal,progress,startedAt}){
     await fsp.rename(raw,path.join(work,relative));
     written+=sniffed.bytes;done++;
     files.push({file:relative,title:item.title||null,width:item.width??null,height:item.height??null,bytes:sniffed.bytes,format:sniffed.format,sourceUrl:item.url});
+    // Streaming delivery: hand each finished picture out at once instead of waiting for the whole
+    // board, so the folder (and the library card built from it) is usable from the first image.
+    if(onFile)await onFile(files[files.length-1]);
     progress({
       stage:'converting',message:`已取回高清图片 ${done}/${items.length}`,
       bytesWritten:written,totalBytes:null,
@@ -90,7 +93,7 @@ export function bundleStem(name,plan){
  * the shape of `output`, the uid comes from the caller), so DownloadManager treats image jobs as
  * ordinary members of the same queue: one verifier, one retry policy, one task list.
  */
-export async function runImageJob({uid,name,author,platform,url,assetId,output,deliver='folder',workRoot,open=openPublic,json=publicJson,limit=IMAGE_MAX}={},{signal,progress=()=>{}}={}){
+export async function runImageJob({uid,name,author,platform,url,assetId,output,deliver='folder',workRoot,open=openPublic,json=publicJson,limit=IMAGE_MAX,totalBytes=IMAGE_TOTAL_BYTES}={},{signal,progress=()=>{}}={}){
   signal?.throwIfAborted();
   await fsp.mkdir(deliver==='folder'?output:path.dirname(output),{recursive:true});
   progress({stage:'starting',message:'正在读取资产的图片清单…'});
@@ -103,17 +106,35 @@ export async function runImageJob({uid,name,author,platform,url,assetId,output,d
   const work=await fsp.mkdtemp(path.join(workRoot||os.tmpdir(),'sva-images-'));
   try{
     const startedAt=Date.now();
-    const files=await collectFiles(work,assets,{client:plan.client,open,signal,progress,startedAt});
+    let outWritten=0;const outBegin=Date.now();
+    // 直接存文件夹：每取回一张就 copy 进输出目录（而不是等全部下完再统一写）。
+    // 图站整站动辄上百张，先落地的那张就等于资产库里已经能打开的一张图。
+    const copyOut=deliver!=='folder'?null:async file=>{
+      signal?.throwIfAborted();
+      const target=path.join(output,...file.file.split('/'));
+      await fsp.mkdir(path.dirname(target),{recursive:true});
+      await fsp.copyFile(path.join(work,...file.file.split('/')),target);
+      outWritten+=file.bytes;
+      progress({stage:'transferring',message:`已写入本机 ${outWritten?Math.round(outWritten/1024):0} KB`,bytesWritten:outWritten,totalBytes:null,transferRate:Math.round(outWritten/Math.max(.001,(Date.now()-outBegin)/1000))});
+    };
+    const files=await collectFiles(work,assets,{client:plan.client,open,signal,progress,startedAt,onFile:copyOut});
     const bytes=files.reduce((n,f)=>n+f.bytes,0);
-    if(bytes>IMAGE_TOTAL_BYTES)throw Error(`图片合计超过 ${fmtMB(IMAGE_TOTAL_BYTES)} 限制`);
+    if(bytes>totalBytes)throw Error(`图片合计超过 ${fmtMB(totalBytes)} 限制`);
     signal?.throwIfAborted();
     progress({stage:'converting',message:deliver==='folder'?'正在写出图片文件夹…':'正在打包 ZIP…'});
     const manifest=imageManifest({job:{uid,name,author,url},plan,files,skipped});
+    const summary={zipName:bundleStem(name,plan),title:plan.title||name||null,author:plan.author||author||null,thumbnail:plan.cover||null,imageCount:files.length};
+    // 文件夹模式的图片已经在 copyOut 里逐张落盘，这里只补清单：不把每张图读进内存，
+    // 图站整站上千张（单张几百 KB）攒成 entries 会在 Node 堆里堆到 GB 级。
+    if(deliver==='folder'){
+      await fsp.writeFile(path.join(output,'info.json'),JSON.stringify(manifest,null,2));
+      return {bytes,folder:true,fileCount:files.length+1,...summary};
+    }
     const entries=[];
     for(const file of files)entries.push({name:file.file,data:await fsp.readFile(path.join(work,...file.file.split('/')))});
     entries.push({name:'info.json',data:Buffer.from(JSON.stringify(manifest,null,2),'utf8')});
     const written=await writeEntriesDeliverable({entries,output,deliver,signal,progress,message:'高清图片已取回'});
-    return {...written,zipName:bundleStem(name,plan),title:plan.title||name||null,author:plan.author||author||null,thumbnail:plan.cover||null,imageCount:files.length};
+    return {...written,...summary};
   }finally{
     await fsp.rm(work,{recursive:true,force:true,maxRetries:3,retryDelay:100}).catch(()=>{});
   }

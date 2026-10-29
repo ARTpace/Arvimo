@@ -73,6 +73,10 @@ const SPECS=[
  {row:'#filters-polypizza',plate:{emoji:'🍕',label:'Poly Pizza',tone:'#e8b48c'},fields:[
   {key:'license',label:'许可',icon:'check',checks:[{label:'仅 CC0',selector:'#polypizza-cc0'}]},
  ]},
+ {row:'#filters-polyfork',plate:{emoji:'🌳',label:'Polyfork',tone:'#9dc8e8'},fields:[
+  {key:'class',label:'类别',icon:'cube',control:'#polyfork-class'},
+  {key:'sort',label:'排序',icon:'list',control:'#polyfork-sort'},
+ ]},
 ];
 
 const el=(tag,className,text)=>{const node=document.createElement(tag);if(className)node.className=className;if(text!=null)node.textContent=text;return node;};
@@ -191,9 +195,11 @@ function buildField({field,icon,keep}){
  body.append(kids);
  section.append(head,body);
 
- const state={open:!!field.open,wideOpen:null,last:null,signature:''};
+ const state={open:field.open!==false,wideOpen:null,last:null,signature:''};
  const setOpen=open=>{state.open=open;section.classList.toggle('open',open);head.setAttribute('aria-expanded',String(open));};
- head.addEventListener('click',()=>setOpen(!state.open));
+ // 点击时读 DOM 上的 .open 类，而不是内部的 state.open：抽屉会在打开时直接给分支加 .open，
+ // 内部 state 若不同步，第一次点击就会算反方向（看着像没反应）。
+ head.addEventListener('click',()=>setOpen(!section.classList.contains('open')));
 
  let sync=()=>{};
 
@@ -229,6 +235,7 @@ function buildField({field,icon,keep}){
    groupBody.append(groupKids);
    wrap.append(groupHead,groupBody);
    groupHead.addEventListener('click',()=>setGroupOpen(wrap,!wrap.classList.contains('open')));
+   setGroupOpen(wrap,false);   // 子分组默认折叠（只展开父级，避免抽屉里列表拉太长）
    return wrap;
   };
   /** 把命中某组判据的项按原顺序摘出来；剩下的留给后面的组与兜底。 */
@@ -311,10 +318,13 @@ function buildField({field,icon,keep}){
    chip.textContent=picked?`已选 ${picked}`:'不限';
   };
  }
+ setOpen(state.open);
  sync();
- return {field,section,sync,setOpen,setNarrow(next){
-  if(next){state.wideOpen=state.open;setOpen(false);}
-  else setOpen(state.wideOpen==null?field.open:state.wideOpen);
+  return {field,section,sync,setOpen,setNarrow(next){
+  // 折叠/还原以 DOM 上的 .open 类为准（抽屉会直接给分支加 .open），别用内部 state，
+  // 否则两边不同步，手动折叠会看着像没反应。
+  if(next){state.wideOpen=section.classList.contains('open');setOpen(false);}
+  else setOpen(state.wideOpen==null?field.open!==false:state.wideOpen);
  }};
 }
 

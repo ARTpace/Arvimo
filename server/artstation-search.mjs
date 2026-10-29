@@ -59,7 +59,7 @@ export function artSearchParams(input={}){
   const browsing=!q.trim()&&!category
     &&(input.sort===undefined||input.sort==='relevance')
     &&(input.picked===undefined||input.picked===false)
-    &&assetType===ARTSTATION_ASSET_TYPE_DEFAULT;
+    &&(!assetType||assetType===ARTSTATION_ASSET_TYPE_DEFAULT);
   // 浏览态要真的覆盖掉控件上的默认值（前端送来的 sort 是 'relevance'，那是真值，
   // 不能写 input.sort||… 否则浏览态永远排不到前面）。
   return {q:q.trim(),sort:browsing?'newest':input.sort||'relevance',category,picked:input.picked===true||browsing,assetType};

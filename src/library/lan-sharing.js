@@ -54,11 +54,15 @@ export function createLanSharingSettings({toast}){
    <span class="lan-status" role="status" data-lan-status>正在读取共享状态…</span>
   </div>
   <form class="lan-form" data-lan-form>
+   <label>分享端口 <input type="number" data-lan-port min="1" max="65535" step="1" required aria-label="局域网分享固定端口" style="width:100px"></label>
    <input type="password" data-lan-password autocomplete="new-password" minlength="8" maxlength="128" aria-label="访问密码" placeholder="访问密码">
    <button class="secondary" type="submit" data-lan-save>保存</button>
    <button type="button" class="lan-hint" data-tip="${HINTS.password}" aria-label="密码规则说明">?</button>
   </form>
   <div class="lan-sharing-addresses" data-lan-addresses></div>
+  <p class="lan-status" role="alert" data-lan-port-notice hidden></p>
+  <button type="button" class="secondary" data-lan-change-port hidden>重试固定分享端口</button>
+  <button type="button" class="secondary" data-lan-ack-port hidden>已重新分享新链接</button>
   <div class="lan-row lan-devices">
    <span class="lan-section">访问设备</span>
    <button type="button" class="lan-hint" data-tip="${HINTS.devices}" aria-label="访问设备说明">?</button>
@@ -68,6 +72,8 @@ export function createLanSharingSettings({toast}){
   <div data-lan-clients></div>`;
  bindTips(card);
  const enabled=card.querySelector('[data-lan-enabled]'),password=card.querySelector('[data-lan-password]'),save=card.querySelector('[data-lan-save]'),status=card.querySelector('[data-lan-status]'),addresses=card.querySelector('[data-lan-addresses]');
+ const portNotice=card.querySelector('[data-lan-port-notice]'),changePort=card.querySelector('[data-lan-change-port]'),ackPort=card.querySelector('[data-lan-ack-port]');
+ const sharePort=card.querySelector('[data-lan-port]');
  async function api(input,url='/api/lan/settings'){
   const response=await fetch(url,{method:input?'POST':'GET',cache:'no-store',headers:{'X-SFX-Local':'1',...(input?{'Content-Type':'application/json'}:{})},...(input?{body:JSON.stringify(input)}:{})});
   const result=await response.json();if(!response.ok)throw Error(result.error||'共享设置请求失败');return result;
@@ -121,10 +127,20 @@ export function createLanSharingSettings({toast}){
  refresh.onclick=loadClients;
  function render(data){
   enabled.checked=data.enabled;password.value='';
+  sharePort.value=String(data.sharingPort);
   password.placeholder=data.hasPassword?'访问密码（留空保留）':'访问密码（至少 8 位）';
   status.textContent=data.error||(data.enabled?'共享已开启':'共享已关闭，仅主机可访问');
+  changePort.hidden=!data.portConflict;
+  ackPort.hidden=!data.portChanged||data.portConflict;
+  portNotice.hidden=!data.error&&!data.portConflict&&!data.portChanged;
+  portNotice.textContent=data.portConflict
+   ?`分享端口 ${data.sharingPort} 被占用或不可用，局域网分享已暂停，本机入口不受影响。释放端口后点击“重试固定分享端口”，或修改上方分享端口并保存；改端口后须重新分享链接。`
+   :data.portChanged?(data.previousPort
+    ?`分享端口已从 ${data.previousPort} 改为 ${data.sharingPort}，旧链接已失效，请将下方新链接重新分享给其他人。`
+    :`分享端口已固定为 ${data.sharingPort}。旧版未记录固定分享端口，请核对下方链接，并重新分享给其他人。`):(data.error||'');
+  if(data.portConflict)status.textContent='共享已暂停：分享端口冲突';
   addresses.replaceChildren();
-  if(data.enabled){
+  if(data.enabled&&data.available!==false){
    if(!data.addresses.length)status.textContent='共享已开启，未检测到局域网地址';
    for(const url of data.addresses){
     const row=document.createElement('div'),link=document.createElement('a'),copy=document.createElement('button');
@@ -135,6 +151,14 @@ export function createLanSharingSettings({toast}){
    }
   }
  }
+ async function updatePort(input){
+  changePort.disabled=ackPort.disabled=save.disabled=enabled.disabled=password.disabled=sharePort.disabled=true;
+  try{const data=await api({enabled:true,...input});render(data);toast(data.portConflict||data.error||data.available===false?'分享尚未恢复，请检查端口提示':data.portChanged?'分享链接已更新，请重新分享给其他人':'分享设置已更新');}
+  catch(e){status.textContent=e.message;}
+  finally{changePort.disabled=ackPort.disabled=save.disabled=enabled.disabled=password.disabled=sharePort.disabled=false;}
+ }
+ changePort.onclick=()=>updatePort({});
+ ackPort.onclick=()=>updatePort({acknowledgePortChange:true});
  async function load(){
   save.disabled=true;
   try{render(await api());enabled.disabled=password.disabled=false;await loadClients();}
@@ -143,9 +167,9 @@ export function createLanSharingSettings({toast}){
  }
  card.querySelector('form').onsubmit=async event=>{
   event.preventDefault();save.disabled=true;enabled.disabled=password.disabled=true;
-  try{render(await api({enabled:enabled.checked,password:password.value}));await loadClients();toast('共享设置已保存');}
+  try{const data=await api({enabled:enabled.checked,password:password.value,sharingPort:Number(sharePort.value)});render(data);await loadClients();toast(data.error||data.portConflict?'分享端口不可用，本机仍可使用':data.portChanged?'分享链接已更新，请重新分享给其他人':'共享设置已保存');}
   catch(e){status.textContent=e.message;}
   finally{save.disabled=enabled.disabled=password.disabled=false;}
  };
- return {card,load};
+ return {card,load,check:()=>api()};
 }

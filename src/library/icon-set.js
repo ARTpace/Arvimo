@@ -6,4 +6,16 @@ export const paths={compass:'M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0m-5-5-3 7-7 3 3
 Object.assign(paths,{eye:'M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0','eye-off':'M3 3l18 18 M10.6 5.1 12 5c6.5 0 10 7 10 7a19 19 0 0 1-3.2 4.1 M6.3 6.3A20 20 0 0 0 2 12s3.5 7 10 7a12 12 0 0 0 5.7-1.4 M9.9 9.9a3 3 0 0 0 4.2 4.2'});
 // ban：圆 + 斜杠，用于「禁止这个设备」这类拦截动作。
 Object.assign(paths,{ban:'M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0M5.6 5.6l12.8 12.8'});
+// tag：卡片底栏的「标签」入口原来是个 ✦ 字符，图标化后和旁边的圆形图标键同一套观感。
+Object.assign(paths,{tag:'M20.6 13.4 13.4 20.6a2 2 0 0 1-2.8 0L2 12V2h10l8.6 8.6a2 2 0 0 1 0 2.8zM7 7h.01'});
+// share：卡片底栏「发送到」入口的图标，三个节点连线的分享语义。
+Object.assign(paths,{share:'M18 8a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM6 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM18 22a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM8.6 13.5l6.8 4M15.4 6.5l-6.8 4'});
+// engine：引擎类目标（Unity/Unreal/Godot）的统一图标，齿轮造型。
+Object.assign(paths,{engine:'M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M19.1 4.9 17 7M7 17l-2.1 2.1'});
+// export：把成品送出到外部软件的图标（箭头从容器里升出去），与 download 的向下箭头区分开。
+Object.assign(paths,{export:'M12 16V4m0 0 4.5 4.5M12 4 7.5 8.5M4 15v4a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-4'});
+// filter：分类抽屉的触发键图标（漏斗），语义是「按条件筛选」。
+Object.assign(paths,{filter:'M3 4h18l-7 8v6l-4 2v-8z'});
+// trash：删除 / 移入回收站。垃圾桶造型，与 close（叉）区分开——叉是「关闭」，垃圾桶是「删掉东西」。
+Object.assign(paths,{trash:'M4 7h16M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2m-8 0 1 13a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-13M10 11v6M14 11v6'});
 export const icon=name=>`<i><svg viewBox="0 0 24 24" aria-hidden="true"><path d="${paths[name]||paths.cube}"></path></svg></i>`;

@@ -40,3 +40,15 @@ export function lockOwnerAlive(owner){
  }
  try{process.kill(owner.pid,0);return true;}catch(error){return error.code!=='ESRCH';}
 }
+
+
+// 旧安装版没有 server-port.json，按同一目录锁的真实进程查端口，不能猜固定端口。
+export function libraryOwnerPorts(owner,inspect=execFileSync){
+ if(!Number.isSafeInteger(owner?.pid)||owner.pid<=0)return [];
+ try{
+  const script=`$ErrorActionPreference='Stop'; $p=Get-CimInstance Win32_Process -Filter 'ProcessId=${owner.pid}'; if($null -eq $p){'null'}else{@{executable=$p.ExecutablePath;startedAt=([DateTimeOffset]$p.CreationDate).ToUnixTimeMilliseconds();isLibrary=($p.Name -match '^node.*\\.exe$' -and $p.CommandLine -match 'library\\.mjs');ports=@(Get-NetTCPConnection -State Listen -OwningProcess $p.ProcessId -ErrorAction SilentlyContinue | Select-Object -ExpandProperty LocalPort)}|ConvertTo-Json -Compress}`;
+  const actual=JSON.parse(inspect('powershell.exe',['-NoProfile','-NonInteractive','-Command',script],{encoding:'utf8',windowsHide:true,timeout:7000}).trim());
+  if(!canReplaceOwner(owner,actual))return [];
+  return [...new Set((actual.ports||[]).filter(port=>Number.isInteger(port)&&port>0&&port<=65535))];
+ }catch{return [];}
+}

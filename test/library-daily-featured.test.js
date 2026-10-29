@@ -87,5 +87,5 @@ test('the topic strip shows only while browsing, and its chips search for real',
 
 test('capability bit and version bump so the launcher replaces the old process',()=>{
   assert.equal(SERVER_CAPABILITIES.browseFeaturedDaily,true);
-  assert.equal(SERVER_VERSION,'3.9.0');
+  assert.equal(SERVER_VERSION,'3.12.0');
 });

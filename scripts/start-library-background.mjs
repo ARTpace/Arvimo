@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {spawn,execFile,execFileSync} from 'node:child_process';
+import {libraryOwnerPorts,replaceLibraryOwner} from '../server/process-lock.mjs';
 import {serverIsCurrent} from '../server/capabilities.mjs';
 import {fileURLToPath} from 'node:url';
 
@@ -22,13 +23,16 @@ if(!process.env.SFX_DATA_DIR||!process.env.SFX_DOWNLOAD_DIR){
 const stateDir=path.join(root,'.assetvault');
 const logPath=path.join(stateDir,'library-server.log');
 const pidPath=path.join(stateDir,'library-server.pid');
-const port=Number(process.env.SFX_PORT||4178);
-const base=`http://127.0.0.1:${port}`;
+let port=Number(process.env.SFX_PORT||4179);
+let base=`http://127.0.0.1:${port}`;
 fs.mkdirSync(stateDir,{recursive:true});
 
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
-function alive(pid){const n=Number(String(pid||'').trim());if(!Number.isInteger(n)||n<=0)return false;try{process.kill(n,0);return true;}catch{return false;}}
-async function capabilities(){
+async function capabilities(readSaved=true){
+ if(readSaved)try{
+  const saved=JSON.parse(fs.readFileSync(path.join(process.env.SFX_DATA_DIR,'server-port.json'),'utf8')).port;
+  if(Number.isInteger(saved)&&saved>0&&saved<=65535){port=saved;base=`http://127.0.0.1:${port}`;}
+ }catch{}
  try{
   const controller=new AbortController();const timeout=setTimeout(()=>controller.abort(),1200);
   const res=await fetch(base+'/api/downloads/capabilities',{headers:{'X-SFX-Local':'1'},cache:'no-store',signal:controller.signal});
@@ -37,20 +41,27 @@ async function capabilities(){
   return await res.json();
  }catch{return null;}
 }
+async function discoverOwner(){
+ let owner;try{owner=JSON.parse(fs.readFileSync(path.join(process.env.SFX_DATA_DIR,'manager.lock'),'utf8'));}catch{return null;}
+ for(const candidate of libraryOwnerPorts(owner)){
+  const address=`http://127.0.0.1:${candidate}`;
+  try{
+   const response=await fetch(address+'/api/health',{signal:AbortSignal.timeout(1500)});
+   if(response.ok&&(await response.json()).name==='assetvault-local-library'){
+    port=candidate;base=address;return owner;
+   }
+  }catch{}
+ }
+ return null;
+}
 function psJson(command){
  if(process.platform!=='win32')return null;
  try{return execFileSync('powershell.exe',['-NoProfile','-ExecutionPolicy','Bypass','-Command',command],{encoding:'utf8',stdio:['ignore','pipe','ignore']}).trim();}catch{return null;}
 }
-function pidsOnPort(){
- if(process.platform!=='win32')return [];
- const raw=psJson(`Get-NetTCPConnection -LocalPort ${port} -State Listen -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess | ConvertTo-Json -Compress`);
- if(!raw)return [];
- try{const data=JSON.parse(raw);return [...new Set((Array.isArray(data)?data:[data]).map(Number).filter(Boolean))];}catch{return [];}
-}
 function projectServerPids(){
  if(process.platform!=='win32')return [];
  const marker=root.replace(/'/g,"''");
- const raw=psJson(`Get-CimInstance Win32_Process | Where-Object { ($_.CommandLine -like '*server/library.mjs*' -or $_.CommandLine -like '*npm run library*') -and $_.CommandLine -like '*${marker}*' } | Select-Object -ExpandProperty ProcessId | ConvertTo-Json -Compress`);
+ const raw=psJson(`Get-CimInstance Win32_Process | Where-Object { ($_.Name -match '^node.*\\.exe$') -and ($_.CommandLine -like '*server/library.mjs*' -or $_.CommandLine -like '*server\\library.mjs*') -and $_.CommandLine -like '*${marker}*' } | Select-Object -ExpandProperty ProcessId | ConvertTo-Json -Compress`);
  if(!raw)return [];
  try{const data=JSON.parse(raw);return [...new Set((Array.isArray(data)?data:[data]).map(Number).filter(Boolean))];}catch{return [];}
 }
@@ -65,10 +76,21 @@ function killPids(pids){
  }
 }
 async function stopOldIfNeeded(){
- const cap=await capabilities();
+ const owner=await discoverOwner();
+ const cap=await capabilities(!owner);
  if(serverIsCurrent(cap))return true;
- const pid=fs.existsSync(pidPath)?fs.readFileSync(pidPath,'utf8').trim():'';
- const targets=[...(alive(pid)?[Number(pid)]:[]),...pidsOnPort(),...projectServerPids()];
+ if(owner){
+  const response=await fetch(base+'/api/downloads',{headers:{'X-SFX-Local':'1'},signal:AbortSignal.timeout(3000)});
+  const snapshot=response.ok?await response.json():null;
+  if(!Array.isArray(snapshot?.jobs))throw Error('无法确认旧后台任务状态，请从托盘完全退出安装版后重试。');
+  const active=new Set(['running','transferring','validating','saving','cancelling','queued','retry_wait']);
+  if(snapshot.jobs.some(job=>active.has(job.state)))throw Error('旧后台有下载任务，请等待任务完成或暂停队列后，再启动开发模式。');
+  if(!replaceLibraryOwner(owner))throw Error('旧后台仍占用数据目录，请从托盘完全退出安装版后重试。');
+  note(`已安全替换空闲旧后台 PID ${owner.pid}（${base}）`);
+  fs.rmSync(pidPath,{force:true});
+ }
+ // 只处理命令行确认属于本项目的后台，不能按端口或旧 PID 杀掉其他工具。
+ const targets=projectServerPids();
  if(targets.length){
   console.log('检测到旧版 AssetVault 后台服务，正在重启以启用新功能…');
   killPids(targets);
@@ -108,7 +130,9 @@ const launcherLog=path.join(stateDir,'launcher.log');
 function note(line){try{fs.appendFileSync(launcherLog,`${new Date().toLocaleString()}  ${line}\n`);}catch{}}
 note(`--- 启动请求（node ${process.version}） ---`);
 
-if(await stopOldIfNeeded()){
+let alreadyRunning;
+try{alreadyRunning=await stopOldIfNeeded();}catch(error){note(`启动失败：${error.message}`);console.error(error.message);process.exit(1);}
+if(alreadyRunning){
  console.log(`AssetVault 已在后台运行（${base}）。`);
  note('已有服务在运行，直接把启动画面交给浏览器。');
  // 服务本来就在跑，直接把启动画面推给浏览器，双击一样能看到启动动效。
@@ -125,7 +149,7 @@ for(const step of ['scripts/apply-patches.mjs','scripts/build-library.mjs']){
  try{
   execFileSync(process.execPath,[path.join(root,step)],{cwd:root,stdio:['ignore',out,out],windowsHide:true});
  }catch(e){
-  console.log(`构建步骤失败：${step}（${e.message}）`);
+  note(`构建步骤失败：${step}（${e.message}），详情见 library-server.log`);process.exit(1);
  }
 }
 
@@ -165,3 +189,4 @@ for(let i=0;i<30;i++){
 note(`服务在 15 秒内没有就绪（PID ${child.pid}），未打开浏览器`);
 console.log(`AssetVault 已尝试在后台启动（PID ${child.pid}），但尚未确认服务就绪。`);
 console.log(`如果网页打不开，请查看日志：${logPath}`);
+process.exitCode=1;

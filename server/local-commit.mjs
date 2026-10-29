@@ -26,6 +26,21 @@ export async function commitFolder(source,folder,name){
   throw Error('同名文件夹过多，请选择其他保存目录');
 }
 
+/**
+ * Folder delivery for jobs that stream into place: claim the final name up front, so the folder can
+ * grow while it downloads. A picture board can hold hundreds of images — waiting for the last one
+ * before the folder exists would keep the asset library blind to it for minutes.
+ */
+export async function reserveFolder(folder,name){
+  await fsp.mkdir(folder,{recursive:true});
+  for(let i=0;i<10000;i++){
+    const destination=path.join(folder,i?`${name} (${i})`:name);
+    try{await fsp.mkdir(destination);return destination;}
+    catch(e){if(e.code==='EEXIST')continue;throw e;}
+  }
+  throw Error('同名文件夹过多，请选择其他保存目录');
+}
+
 /** Archive delivery: prepared under a unique name, then linked (copied across volumes) into place. */
 export async function commitArchive(source,folder,filename){
   await fsp.mkdir(folder,{recursive:true});const prepared=path.join(folder,`.sfx-${randomUUID()}.part`);

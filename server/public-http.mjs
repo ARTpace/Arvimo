@@ -7,6 +7,7 @@ import { execFileSync } from 'node:child_process';
 import { createGunzip, createInflate, createBrotliDecompress } from 'node:zlib';
 import { Readable } from 'node:stream';
 import { artstationFetch, curlImpersonateAvailable } from './curl-impersonate.mjs';
+import { cookieHeaderFor } from './cookie-jar.mjs';
 
 export const isSketchfabHost = host => /^(?:[a-z0-9-]+\.)*sketchfab\.com$/i.test(host);
 export const isArtstationHost = host => /^(?:[a-z0-9-]+\.)*artstation\.com$/i.test(host);
@@ -152,13 +153,18 @@ async function openViaImpersonate(u,{signal,timeout,proxy}){
   return {stream:Readable.from([r.body]),status:r.status,headers:r.headers,url:u.href};
 }
 
-/** GET by default; pass `method:'POST'` plus a serialised `body` for JSON APIs (ArtStation search). */
-export async function openPublic(value, { sketchfabOnly=false, artstation=false, signal, timeout=25000, redirects=5, method='GET', body=null, headers:extraHeaders=null, impersonate=true }={}) {
+/** GET by default; pass `method:'POST'` plus a serialised `body` for JSON APIs (ArtStation search).
+ *  `useProxy:false` 强制直连：个别站点（如 500px 的 GraphQL）经本机系统代理会连不通或被判 403，
+ *  调用方明确知道目标是固定可信域名时才会这么用。 */
+export async function openPublic(value, { sketchfabOnly=false, artstation=false, signal, timeout=25000, redirects=5, method='GET', body=null, headers:extraHeaders=null, impersonate=true, useProxy=true, useCookies=true }={}) {
   const u=validateUrl(value,{sketchfabOnly,artstation});signal?.throwIfAborted();
   const host=u.hostname.replace(/^\[|\]$/g,'');
   const payload=body==null?null:Buffer.from(body);
-  const headers={'User-Agent':'SketchfabLocalLibrary/1.0 (authorized personal model library)','Accept':'*/*','Accept-Encoding':'identity',...(isSketchfabHost(host)?{Referer:'https://sketchfab.com/'}:isArtstationHost(host)?{Referer:'https://www.artstation.com/'}:{}),...(payload?{'Content-Length':String(payload.length)}:{}),...(extraHeaders||{})};
-  const proxy=resolveProxy();
+  // 登录态 cookie：用户在这个站点登录过（或被浏览器跑过 WAF 挑战），就把域名匹配的 cookie 一起带上。
+  // 只按域名匹配，所以不会误发给第三方 CDN；调用方显式给了 Cookie 时以调用方为准。
+  const jarCookie=(!useCookies||extraHeaders?.cookie||extraHeaders?.Cookie)?'':cookieHeaderFor(u.href);
+  const headers={'User-Agent':'SketchfabLocalLibrary/1.0 (authorized personal model library)','Accept':'*/*','Accept-Encoding':'identity',...(isSketchfabHost(host)?{Referer:'https://sketchfab.com/'}:isArtstationHost(host)?{Referer:'https://www.artstation.com/'}:{}),...(payload?{'Content-Length':String(payload.length)}:{}),...(jarCookie?{Cookie:jarCookie}:{}),...(extraHeaders||{})};
+  const proxy=useProxy?resolveProxy():null;
   if(proxy){
     const viaProxy=await openViaProxy(u,{proxy,signal,timeout,redirects,headers,method,body:payload});
     if(shouldImpersonate(viaProxy.status,{artstation,impersonate,method}))return openViaImpersonate(u,{signal,timeout,proxy});
@@ -178,7 +184,7 @@ export async function openPublic(value, { sketchfabOnly=false, artstation=false,
   if ([301,302,303,307,308].includes(result.statusCode) && result.headers.location) {
     result.resume();if (redirects<=0) throw new Error('网页重定向过多');
     const keepBody=[307,308].includes(result.statusCode);
-    return openPublic(new URL(result.headers.location,u).href,{sketchfabOnly,artstation,signal,timeout,redirects:redirects-1,method:keepBody?method:'GET',body:keepBody?body:null,headers:keepBody?extraHeaders:null,impersonate});
+    return openPublic(new URL(result.headers.location,u).href,{sketchfabOnly,artstation,signal,timeout,redirects:redirects-1,method:keepBody?method:'GET',body:keepBody?body:null,headers:keepBody?extraHeaders:null,impersonate,useProxy});
   }
   if (shouldImpersonate(result.statusCode,{artstation,impersonate,method})) {
     result.resume();                                    // 挑战页要读完再丢，否则 socket 会一直挂着

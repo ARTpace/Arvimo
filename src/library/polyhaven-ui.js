@@ -3,9 +3,10 @@
 // because the two catalogs do not share a category list.
 import {fetchCategories,fillOptions} from './category-options.js';
 
-export function createPolyhavenUI({$,esc,toast,requestFeed}){
+export function createPolyhavenUI({enabled=()=>true,$,esc,toast,requestFeed}){
  const ui={categories:null};
  async function loadCategories(){
+  if(!enabled())return;
   const type=$('#polyhaven-type').value;
   const kind=type==='textures'||type==='hdris'?type:'models';
   try{

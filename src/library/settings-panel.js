@@ -1,6 +1,6 @@
 /** Group the existing settings controls; moving nodes preserves IDs, values and event handlers. */
 import {isLanVisitor} from './visitor-mode.js';
-export function createSettingsPanel({$,loadAI,updateCard,sharing}){
+export function createSettingsPanel({$,loadAI,updateCard,sharing,platformCard}){
  if(isLanVisitor()){
   for(const selector of ['#settings-button','#ai-settings-button','#download-settings','#settings-dialog','#ai-dialog']){
    const node=$(selector);if(node){node.hidden=true;node.inert=true;}
@@ -9,12 +9,17 @@ export function createSettingsPanel({$,loadAI,updateCard,sharing}){
  }
  const dialog=$('#settings-dialog'),body=dialog.querySelector('.settings-body');
  const cards=[...body.querySelectorAll(':scope > .settings-card')];
+ const exportTargets=cards.find(card=>card.querySelector('#export-targets-list'));
+ const blenderCard=cards.find(card=>card.querySelector('#blender-bridge-status'));
+ if(exportTargets&&blenderCard)exportTargets.append(blenderCard);
+ if(exportTargets)exportTargets.querySelector('.compact-note').textContent='Maya、3ds Max、Houdini、Cinema 4D 首次使用需安装接收脚本，并重启对应软件一次。Blender 沿用现有连接；Unity、Unreal、Godot 配置项目目录。';
  const aiCard=$('#ai-dialog .settings-card');
  const footer=body.querySelector('.settings-footer');
  const groups=[
   {id:'export',label:'导出内容',section:'资产管理',description:'模型格式、贴图与新任务默认参数',cards:cards.slice(0,2)},
   {id:'storage',label:'保存与队列',description:'文件路径、任务并发与重试',cards:cards.slice(4,5)},
-  {id:'connections',label:'软件与环境',section:'服务连接',description:'Blender 桥接与后台浏览器',cards:cards.slice(2,4)},
+  {id:'connections',label:'软件与环境',section:'服务连接',description:'切换软件，检测安装与连接状态，自动安装导入脚本',cards:exportTargets?[exportTargets,...cards.slice(3,4)]:cards.slice(2,4)},
+  ...(platformCard?[{id:'platforms',label:'平台模块',description:'管理在线资产来源，按需开启平台',cards:[platformCard]}]:[]),
   {id:'ai',label:'AI 接入',description:'模型连接、中文搜索翻译与后续智能整理',cards:[aiCard]},
   ...(sharing?[{id:'sharing',label:'局域网共享',description:'共享访问、密码与连接地址',cards:[sharing.card]}]:[]),
   ...(updateCard?[{id:'updates',label:'软件更新',section:'应用',description:'检查新版本、下载与安装更新',cards:[updateCard]}]:[]),
@@ -47,7 +52,10 @@ export function createSettingsPanel({$,loadAI,updateCard,sharing}){
  function select(id){
   const active=groups.find(group=>group.id===id)||groups[0];
   for(const group of groups){group.page.hidden=group!==active;group.button.classList.toggle('active',group===active);group.button.setAttribute('aria-current',group===active?'page':'false');}
-  title.textContent=active.label;description.textContent=active.description;footer.hidden=['ai','updates','sharing'].includes(active.id);
+  // 平台页自带分组标题与计数器，再顶一行页面标题+描述就是三层重复，整块省掉。
+  const compact=active.id==='platforms';
+  title.textContent=active.label;description.textContent=active.description;
+  title.hidden=compact;description.hidden=compact;footer.hidden=['ai','updates','sharing','platforms'].includes(active.id);
   content.scrollTop=0;
   if(active.id==='ai'&&!aiLoaded){aiLoaded=true;loadAI();}
   if(active.id==='sharing')sharing.load();

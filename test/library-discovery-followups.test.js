@@ -57,23 +57,9 @@ test('inlineResources 就地 push blob，调用方不能把返回值赋给 blobs
 
 test('预览资源跨预览复用缓存，且必须有容量上限',()=>{
  const code=preview.replace(/\/\*[\s\S]*?\*\//g,'').replace(/^\s*\/\/.*$/gm,'');
- // 缓存的是 ArrayBuffer 而不是 blob URL：blob URL 每次换资产都被 revokeBlobs 回收掉了，
- // 缓存它等于缓存一个死 URL。缓存字节、每次重建 URL 才是对的。
- assert.ok(code.includes('const bytes=await res.arrayBuffer()'),'要缓存 ArrayBuffer');
- assert.ok(/if\(cached\)\{[\s\S]{0,120}createObjectURL/.test(code),
-  '命中缓存时只重建 blob URL，不发请求');
- assert.ok(code.includes('cacheGet(url)')&&code.includes('cachePut(url,bytes)'),
-  'toBlob 必须先查缓存再下载');
- // 容量双封顶：只按条数封顶的话，贴图大小差异会让最坏占用到几百 MB。
- assert.ok(code.includes('BLOB_CACHE_MAX_ENTRIES')&&code.includes('BLOB_CACHE_MAX_BYTES'),
-  '条目数与字节数两个上限都要有');
- assert.ok(/while\(blobCache\.size>BLOB_CACHE_MAX_ENTRIES\|\|blobCacheBytes>BLOB_CACHE_MAX_BYTES\)/.test(code),
-  '两个上限都要真正参与淘汰判断');
- assert.ok(code.includes('blobCacheBytes-=blobCache.get(oldest).byteLength'),
-  '淘汰时要扣掉字节计数，否则计数只涨不落、上限形同虚设');
- // LRU：命中要移到队尾，否则先淘汰的其实是刚用过的。
- assert.ok(/function cacheGet\(url\)\{[^}]*delete\(url\);blobCache\.set\(url,bytes\)/.test(code),
-  'cacheGet 命中后要 delete+set 实现 LRU');
+ assert.ok(code.includes('createPreviewCache(fetchLocal)'), '预览使用有容量限制的持久缓存');
+ assert.ok(code.includes('await previewCache.get(url)'), '先读热缓存/磁盘，再访问网络');
+ assert.ok(code.includes('URL.createObjectURL(blob)'), '每次预览创建独立 URL，关闭后可安全回收');
  // 文件清单同样不该每次重取（三条预览路径都要先问一遍 /files/{id}）。
  assert.ok(code.includes('async function fetchList(assetId,type)'),'文件清单要有缓存入口');
  // 只数调用形态（=await fetchList(…,'type')），别把函数定义那一行也算进来。

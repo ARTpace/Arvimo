@@ -88,7 +88,8 @@ function extractZip(zipPath){
  *  （视口里就是「爆粉」），所以解出来的贴图/环境图必须长期留在交付物目录里。
  *  同一压缩包重复导入会复用这个目录，不重复落盘。 */
 function unpackDirFor(container){
- const src=path.resolve(container);
+ // 旧品牌下载目录可能是 junction；在真实目录旁创建解包目录，避免旧路径 mkdir 失败。
+ const src=fs.realpathSync(container);
  const target=path.join(path.dirname(src),path.basename(src).replace(/\.zip$/i,'')+'.unpacked');
  fs.mkdirSync(target,{recursive:true});
  return target;
@@ -108,6 +109,24 @@ function collectFiles(dir,re){
  };
  walk(dir);
  return out.sort((a,b)=>a.length-b.length||a.localeCompare(b));
+}
+
+/** Other DCCs reuse our persistent ZIP extraction, but prefer their native FBX/OBJ importers. */
+export function resolveDccImport(location){
+ const root=fs.realpathSync(location),stat=fs.statSync(root);
+ if(stat.isFile()&&/\.(fbx|obj)$/i.test(root))return {file:root};
+ let dir=root;
+ if(stat.isFile()&&/\.zip$/i.test(root))dir=extractZipTo(root,unpackDirFor(root));
+ else if(!stat.isDirectory())throw Error('该软件需要 FBX 或 OBJ，请重新下载 GLB + FBX 格式');
+ let files=collectFiles(dir,/\.(fbx|obj)$/i);
+ if(!files.length){
+  const pack=findPackZip(dir);
+  if(pack)dir=extractZipTo(pack,unpackDirFor(pack));
+  files=collectFiles(dir,/\.(fbx|obj)$/i);
+ }
+ files.sort((a,b)=>Number(/\.obj$/i.test(a))-Number(/\.obj$/i.test(b))||a.length-b.length||a.localeCompare(b));
+ if(!files.length)throw Error('资源中没有 FBX 或 OBJ，请选择包含 FBX 的下载格式');
+ return {file:files[0]};
 }
 
 /** 在目录树里按「glb > gltf > fbx、路径短优先」挑最合适的模型文件。 */
@@ -703,7 +722,7 @@ export async function launchBlenderMaterialImport(location,{blender=blenderPath}
 /** HDRI 交付物 → 环境贴图文件路径。贴图一律落在持久位置（解包时也不会产生临时目录），
  *  tmpDir 恒为 null，只为兼容老调用方签名。 */
 export function findHdriFile(location){
- const root=path.resolve(location||'');
+ const root=fs.realpathSync(path.resolve(location||''));
  const stat=fs.statSync(root);
  if(stat.isFile()&&HDRI_EXT.test(root))return {file:root,tmpDir:null};
  if(stat.isFile()&&ENV_IMAGE_EXT.test(root))return {file:root,tmpDir:null};

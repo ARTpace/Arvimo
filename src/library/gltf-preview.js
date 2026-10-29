@@ -7,6 +7,7 @@
 // 而 CDN 上并没有这个目录，直接加载必然 404。官方是靠自己的文件清单把 basename 映射回真实 URL，
 // 我们照同样的做法——先要清单，再按 basename 改写 GLTFLoader 要用的 URL。
 import * as THREE from 'three';
+import {createPreviewCache} from './preview-cache.js';
 import {GLTFLoader} from 'three/examples/jsm/loaders/GLTFLoader.js';
 import {OrbitControls} from 'three/examples/jsm/controls/OrbitControls.js';
 import {RoomEnvironment} from 'three/examples/jsm/environments/RoomEnvironment.js';
@@ -17,6 +18,9 @@ import {FBXLoader} from 'three/examples/jsm/loaders/FBXLoader.js';
 // 每个格式一个官方 loader，按扩展名分派（见 showPackModel 的格式表）。
 import {OBJLoader} from 'three/examples/jsm/loaders/OBJLoader.js';
 import {STLLoader} from 'three/examples/jsm/loaders/STLLoader.js';
+// Polyfork 的生成器脚本 import 了 mergeGeometries：本地重建时把这一份注入给它，
+// 免得为了跑生成器再让浏览器下载第二份 three。
+import {mergeGeometries} from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import {PLYLoader} from 'three/examples/jsm/loaders/PLYLoader.js';
 import {ThreeMFLoader} from 'three/examples/jsm/loaders/3MFLoader.js';
 // 环境贴图除了 Radiance .hdr，还有 ambientCG / Poly Haven 出的 EXR 全景。
@@ -46,59 +50,11 @@ function indexByBasename(node,index=new Map()){
  return index;
 }
 
-/** 跨预览复用的 blob 缓存。
- *
- *  /api/proxy 只给 /api/image 做了缓存，预览要用的 glTF / .bin / 贴图**完全没有缓存** ——
- *  每打开一次预览就把整个模型重新下一遍（本机代理 + 跨境 CDN，一个 1K 模型常要好几秒）。
- *
- *  这里按 URL 缓存 ArrayBuffer 并登记 blob URL：同一份资源只在第一次下载，之后再建 blob URL
- *  是纯本地操作（微秒级），重复预览就只剩「解码 + 解析 + 渲染」这部分必然要花的功夫。
- *
- *  为什么缓存的是 ArrayBuffer 而不是 blob URL：blob URL 会被 revokeBlobs() 连带回收，
- *  而模型一旦解析完，贴图像素已经进 GPU 了，源字节留着也不会占显存；下次要时重新建 URL 即可。
- *
- *  容量双封顶：条目数 + 总字节。只按条目数封顶不够 —— 贴图从几百 KB 到几 MB 都有，
- *  单看条数最坏能吃掉几百 MB，对常驻的桌面应用太重；字节上限才是真正约束内存的那一头。
- *  上限内按 LRU 淘汰（Map 保序，命中即移到队尾）。
- *
- *  淘汰时**不需要** revoke blob URL：它们早已被 revokeBlobs() 在换资产时回收过，
- *  这里只把字节从 Map 里丢掉，剩下的交给 GC。
- */
-const BLOB_CACHE_MAX_ENTRIES=96;
-const BLOB_CACHE_MAX_BYTES=160*1024*1024;
-const blobCache=new Map();
-let blobCacheBytes=0;
-function cacheGet(url){
- if(!blobCache.has(url))return null;
- const bytes=blobCache.get(url);
- // 命中就移到队尾（Map 保序），实现 LRU。
- blobCache.delete(url);blobCache.set(url,bytes);
- return bytes;
-}
-function cachePut(url,bytes){
- blobCache.set(url,bytes);
- blobCacheBytes+=bytes.byteLength;
- while(blobCache.size>BLOB_CACHE_MAX_ENTRIES||blobCacheBytes>BLOB_CACHE_MAX_BYTES){
-  const oldest=[...blobCache.keys()][0];
-  blobCacheBytes-=blobCache.get(oldest).byteLength;
-  blobCache.delete(oldest);
- }
- return bytes;
-}
-
-/** 把远程资源抓成本地 blob URL（登记进 registry，关预览时统一 revoke）。
- *  命中缓存时只重建 URL，不发请求 —— 这是「重复预览同一个模型快很多」的全部原因。 */
+// 磁盘保存原始压缩图片/几何资源，热缓存只保留 24 MB；重复预览不必重新下载。
+const previewCache=createPreviewCache(fetchLocal);
 async function toBlob(url,registry,kind='资源'){
- const cached=cacheGet(url);
- if(cached){
-  const reused=URL.createObjectURL(new Blob([cached]));
-  registry.push(reused);
-  return reused;
- }
- const res=await fetchLocal(url);
- const bytes=await res.arrayBuffer();
- cachePut(url,bytes);
- const created=URL.createObjectURL(new Blob([bytes]));
+ const blob=await previewCache.get(url);
+ const created=URL.createObjectURL(blob);
  registry.push(created);
  return created;
 }
@@ -150,6 +106,7 @@ async function inlineResources(gltf,index,baseDir,registry){
 export function createGltfPreview(){
  let renderer=null,scene=null,camera=null,controls=null,frame=0,disposed=false,ready=false;
  let loadToken=0,blobs=[],root=null,baseEnvironment=null,envTexture=null;
+ let cacheIdleTimer;
  // 灯光 rig：Shift+左键拖动时转它（八猴的 rotate lights），绕视线中心旋转。
  let lightRig=null,homeShot=null,lightDrag=null,gesturesBound=false,uiBound=false;
  // 上一次真正同步过的画布尺寸：渲染 buffer 必须等于显示尺寸，否则画面被拉伸变形。
@@ -195,6 +152,7 @@ const DEFAULT_CAPTION='左键旋转 · 右键缩放 · 中键平移 · 双击重
  function fail(message,detail){
   stop();
   // 释放上一帧的 GPU 资源（灯光在 scene 上、不会被清），避免连续预览显存堆积。
+  pfGround=null;
   if(root){for(const child of [...root.children]){root.remove(child);disposeObject(child);}}
   if(canvas)canvas.hidden=true;
   const iframe=document.getElementById('viewer');
@@ -220,6 +178,7 @@ const DEFAULT_CAPTION='左键旋转 · 右键缩放 · 中键平移 · 双击重
 
  /** 弹窗打开时才建渲染器：<dialog>关闭时尺寸是 0，建了也白建。 */
  function ensureRenderer(){
+  clearTimeout(cacheIdleTimer);
   // 复用渲染器（连着看多个资产）时也要保证循环是活的，并重新对齐画布尺寸
   // （窗口可能在上次预览后变过宽高，否则画布会被 CSS 拉伸、画面错位）。
   if(renderer){disposed=false;if(!frame)loop();observeStage();resize();return true;}
@@ -862,6 +821,7 @@ function applyPackTextures(object,bySlot){
   const ground=new THREE.Mesh(new THREE.CircleGeometry(radius*3,48),new THREE.ShadowMaterial({opacity:0.28}));
   ground.rotation.x=-Math.PI/2;ground.position.set(center.x,box.min.y,center.z);
   ground.receiveShadow=true;root.add(ground);
+  pfGround=ground;
   renderer.shadowMap.enabled=true;
   object.traverse(node=>{if(node.isMesh){node.castShadow=true;node.receiveShadow=true;}});
   renderer.render(scene,camera);
@@ -1127,13 +1087,299 @@ async function showPackModel(manifest,token){
   }
  }
 
+ /* ── Polyfork 参数化预览 ────────────────────────────────────────────────────
+  * 同一份资产有两类旋钮，代价差三个数量级，混在一起做就会又慢又烧额度：
+  *   颜色 → GLB 里是顶点色（COLOR_0，线性空间）。就地改写 = 实时、零请求、零配额。
+  *          官方也说明了「纯颜色变体在运行时应用」，所以重烘焙出来的文件颜色永远是默认涂装。
+  *   几何 → 只能回服务端重新生成（/api/polyfork/variant，几秒，消耗匿名 40 次/小时额度）。
+  * 换几何时**不动相机**：滑杆连拖两下如果每次都重新取景，用户会晕。
+  */
+ let pf=null;
+ // 换几何时地面要复用：每帧重建一次 CircleGeometry + 重设阴影，白花一半时间还闪。
+ let pfGround=null;
+ // 一个资产的生成器只 import 一次。null 表示「试过了，没有/跑不起来」，别反复打接口。
+ const pfModules=new Map();
+ // 本次会话烘焙过的 GLB（同参数来回拖时直接复parse，省一次往返）。最多留 8 档。
+ const pfBuffers=new Map();
+
+ /** 取回资产的 .mjs 生成器并在页面里跑起来。它是官方文档推荐的用法：
+  *  `import { createAsset } from './xxx.mjs'; scene.add(createAsset());`
+  *  实测 5ms 一套几何，比服务端烘焙的 1.5~2 秒快三个数量级，也不吃烘焙额度。
+  *  依赖注入走服务端改写 + 同源 URL：CSP 只放行 script-src 'self'，
+  *  blob: 脚本会被拒（实测 "Failed to fetch dynamically imported module"）。 */
+ async function pfLoadGenerator(assetId){
+  if(pfModules.has(assetId))return pfModules.get(assetId);
+  try{
+   // 先摆好 three / mergeGeometries，被 import 的模块初始化时就要用。
+   globalThis.__PF_THREE__=THREE;
+   globalThis.__PF_BGU__={mergeGeometries};
+   const mod=await import(`/api/polyfork/module?id=${encodeURIComponent(assetId)}`);
+   const create=typeof mod?.createAsset==='function'?mod.createAsset:typeof mod?.default==='function'?mod.default:null;
+   if(!create)throw new Error('生成器没有导出 createAsset');
+   const entry={createAsset:create};
+   pfModules.set(assetId,entry);
+   return entry;
+  }catch{
+   pfModules.set(assetId,null);          // 记下「跑不起来」，同一资产别反复试
+   return null;
+  }
+ }
+
+ /** 把新几何换进场景。**不走完整 pfMount**：机位、地面、阴影配置、近远平面都沿用上一帧，
+  *  只换模型本身 —— 滑杆每帧都会调到这里，重建地面那点开销乘上 60fps 就是肉眼可见的卡。
+  *  机位不动也是产品决定：连拖时每次都重新取景会让人晕。 */
+ function pfSwap(object){
+  if(root){
+   for(const child of [...root.children]){
+    if(child===pfGround)continue;
+    root.remove(child);disposeObject(child);
+   }
+  }
+  root.add(object);
+  setChannelAvailable(true,object);
+  object.traverse(node=>{if(node.isMesh){node.castShadow=true;node.receiveShadow=true;}});
+  pf.rows=pfIndexZones(object,pf.zones);
+  pfPaint(pf.rows,pf.zones,pf.values);
+  setHint('');
+  renderer.render(scene,camera);
+ }
+
+ const pfColor=hex=>{const c=new THREE.Color();c.setStyle(hex);return c;};
+
+ function pfDefaults(schema){
+  const values={};
+  for(const p of schema?.params||[])values[p.key]=p.type==='range'?Number(p.default):p.default;
+  return values;
+ }
+
+ /** 只有「非默认值」才发给服务端：默认几何不烘焙，直接吃 CDN 上现成的那一份，
+  *  既不烧额度也快一倍。字符串比较即可，range 的默认值是数字。 */
+ function pfGeometry(schema,values){
+  const out={};
+  for(const p of schema?.params||[]){
+   if(p.kind!=='geometry')continue;
+   const value=values[p.key];
+   if(value===undefined||value===null||value==='')continue;
+   if(String(value)===String(p.default))continue;
+   out[p.key]=p.type==='range'?Number(value):value;
+  }
+  return out;
+ }
+
+ function pfZones(schema){
+  return (schema?.params||[]).filter(p=>p.kind==='color')
+   .map(p=>({key:p.key,hex:p.default,color:pfColor(p.default)}));
+ }
+
+ /** 给每个顶点找归属色区。必须取**最近**而不是「近似就收」：
+  *  iron #3c4550 与 interior #363f4a 转成线性后只差 0.017，用宽松阈值必然串色。
+  *  顶点色是精确复制出来的浮点值（距离≈0），所以阈值收紧到 0.008 也不会漏。 */
+ function pfIndexZones(object,zones){
+  const rows=[];
+  if(!zones.length)return rows;
+  const seen=new Set();
+  object.traverse(node=>{
+   if(!node.isMesh)return;
+   const attr=node.geometry?.attributes?.color;
+   if(!attr||!attr.count||seen.has(attr))return;
+   seen.add(attr);
+   const index=new Uint8Array(attr.count);
+   const array=attr.array,size=attr.itemSize;
+   for(let i=0;i<attr.count;i++){
+    const o=i*size,r=array[o],g=array[o+1],b=array[o+2];
+    let best=255,bestDistance=0.008;
+    for(let z=0;z<zones.length;z++){
+     const c=zones[z].color;
+     const distance=Math.hypot(r-c.r,g-c.g,b-c.b);
+     if(distance<bestDistance){bestDistance=distance;best=z;}
+    }
+    index[i]=best;
+   }
+   rows.push({attr,index});
+  });
+  return rows;
+ }
+
+ /** 顶点色可能是 float、也可能是归一化的 Uint8/Uint16（glTF 允许，Loader 不会替你放大）。
+  *  直接写 0.8 进 Uint8Array 会被截成 0，所以按数组类型换算到整型量程上。 */
+ function pfPaint(rows,zones,values){
+  if(!rows.length||!zones.length)return;
+  const scale=rows.map(row=>row.attr.array instanceof Float32Array?1:(row.attr.array instanceof Uint16Array?65535:255));
+  const colors=zones.map(zone=>pfColor(values?.[zone.key]||zone.hex));
+  rows.forEach((row,i)=>{
+   const {attr,index}=row;
+   const array=attr.array,size=attr.itemSize,factor=scale[i];
+   for(let v=0;v<attr.count;v++){
+    const zone=index[v];
+    if(zone===255)continue;
+    const c=colors[zone],o=v*size;
+    array[o]=c.r*factor;array[o+1]=c.g*factor;array[o+2]=c.b*factor;
+   }
+   attr.needsUpdate=true;
+  });
+ }
+
+ /** 挂模型进场景。keepCamera=true 用于重建后的热替换：保留相机与观察目标，
+  *  只更新裁剪面、缩放限制和地面阴影位置（几何变高时地面不会浮起来）。 */
+ function pfMount(object,keepCamera){
+  root.add(object);
+  setChannelAvailable(true,object);
+  const box=new THREE.Box3().setFromObject(object);
+  if(box.isEmpty())throw new Error('模型是空的');
+  const size=box.getSize(new THREE.Vector3()),center=box.getCenter(new THREE.Vector3());
+  const radius=Math.max(size.length()*0.5,0.05);
+  if(!keepCamera){
+   camera.position.copy(center).add(new THREE.Vector3(radius*1.4,radius*1.1,radius*1.7));
+   camera.lookAt(center);
+   controls.target.copy(center);
+  }
+  camera.near=radius*0.01;camera.far=radius*120;
+  camera.updateProjectionMatrix();
+  controls.minDistance=radius*0.15;controls.maxDistance=radius*14;
+  controls.update();
+  if(!keepCamera)rememberHome();
+  const ground=new THREE.Mesh(new THREE.CircleGeometry(radius*3,48),new THREE.ShadowMaterial({opacity:0.28}));
+  ground.rotation.x=-Math.PI/2;ground.position.set(center.x,box.min.y,center.z);
+  ground.receiveShadow=true;root.add(ground);
+  renderer.shadowMap.enabled=true;
+  object.traverse(node=>{if(node.isMesh){node.castShadow=true;node.receiveShadow=true;}});
+  renderer.render(scene,camera);
+ }
+
+ async function fetchPolyforkParams(assetId){
+  const res=await fetch(`/api/polyfork/params?id=${encodeURIComponent(assetId)}`,{headers:LOCAL_HEADER,cache:'no-store'});
+  if(!res.ok){
+   let detail='';
+   try{detail=(await res.json())?.error||'';}catch{}
+   throw new Error(detail||`参数清单请求失败 HTTP ${res.status}`);
+  }
+  return res.json();
+ }
+
+ async function fetchPolyforkGlb(assetId,geometry){
+  const query=Object.keys(geometry||{}).length?`&p=${encodeURIComponent(JSON.stringify(geometry))}`:'';
+  const res=await fetch(`/api/polyfork/variant?id=${encodeURIComponent(assetId)}${query}`,{headers:LOCAL_HEADER,cache:'no-store'});
+  if(!res.ok){
+   let detail='';
+   try{detail=(await res.json())?.error||'';}catch{}
+   throw new Error(detail||`变体请求失败 HTTP ${res.status}`);
+  }
+  return res.arrayBuffer();
+ }
+
+ /** 首次加载。返回 {schema, values} 供参数面板渲染；schema 可以由调用方预取后传入，
+  *  免得「面板要一份、预览要一份」拉两遍。 */
+ async function loadPolyfork(assetId,{schema=null,values=null}={}){
+  const token=++loadToken;
+  const id=String(assetId||'').trim();
+  if(!id){fail('缺少 Polyfork 资产 ID');return null;}
+  if(!prepareStage('左键旋转 · 右键缩放 · 中键平移 · 双击重置 · 右侧可调参数','正在读取参数清单…'))return null;
+  resetEnvironment();
+  // 生成器和参数/模型并行取：首次 30~80KB 的源码下载藏在等模型的时间里，不额外拖慢首屏。
+  const genPromise=pfLoadGenerator(id);
+  try{
+   const detail=schema||await fetchPolyforkParams(id);
+   if(token!==loadToken)return null;
+   const current={...pfDefaults(detail),...values};
+   const geometry=pfGeometry(detail,current);
+   setHint(Object.keys(geometry).length?'正在按参数重建模型…':'正在加载模型…');
+   const buffer=await fetchPolyforkGlb(id,geometry);
+   if(token!==loadToken)return null;
+   const object=await parseModelBuffer(buffer,`${id}.glb`,new THREE.LoadingManager());
+   if(!object)throw new Error('模型解析结果为空');
+   clearRoot();setHint('');
+   pfMount(object,false);
+   pf={assetId:id,schema:detail,values:current,rows:null,zones:pfZones(detail),seq:0,gen:null};
+   // 生成器晚到不影响首屏：等它到位再挂上，在那之前拖滑杆走服务端烘焙（慢但结果一样）。
+   genPromise.then(gen=>{if(pf&&pf.assetId===id)pf.gen=gen;}).catch(()=>{});
+   pf.rows=pfIndexZones(object,pf.zones);
+   pfPaint(pf.rows,pf.zones,pf.values);
+   renderer.render(scene,camera);
+   return {schema:detail,values:{...current}};
+  }catch(err){
+   if(token!==loadToken)return null;
+   fail(`无法加载 Polyfork 预览：${err.message}`,err);
+   return null;
+  }
+ }
+
+ /** 颜色改动：不动网络，直接改顶点色。values 只需传改动的键，其余沿用当前值。 */
+ function setPolyforkColors(values){
+  if(!pf)return false;
+  Object.assign(pf.values,values||{});
+  pfPaint(pf.rows,pf.zones,pf.values);
+  if(renderer&&scene&&camera)renderer.render(scene,camera);
+  return true;
+ }
+
+ /** 几何改动：三级策略，从快到慢。
+  *  一、本地生成器（资产自带 .mjs）：重新算一遍几何，实测 4~20ms，零请求零配额；
+  *  二、本次会话烘焙过的同一档 GLB：还留在内存里，重新 parse 就行；
+  *  三、回服务端烘焙：1.5~2 秒，吃匿名每小时 40 次的额度（拖动中调用时 live=true 会跳过这一步）。
+  *  三级都失败只提示一句，保留上一档几何 —— 重建失败不该把画面变空。 */
+ async function bakePolyfork(values,{live=false}={}){
+  if(!pf)return false;
+  const next={...pf.values,...values};
+  const geometry=pfGeometry(pf.schema,next);
+  const key=JSON.stringify(geometry);
+
+  if(pf.gen){
+   try{
+    const object=pf.gen.createAsset({...next});
+    if(!object)throw new Error('生成结果为空');
+    pf.values=next;
+    pfSwap(object);
+    return true;
+   }catch{
+    // 这个参数组合在生成器里跑炸了：退回服务端（同一份程序的服务端版本）。
+    pf.gen=null;
+   }
+  }
+
+  const stored=pfBuffers.get(key);
+  if(stored){
+   try{
+    const object=await parseModelBuffer(stored.slice(0),`${pf.assetId}.glb`,new THREE.LoadingManager());
+    if(!object)throw new Error('缓存结果为空');
+    pf.values=next;
+    pfSwap(object);
+    return true;
+   }catch{pfBuffers.delete(key);}
+  }
+
+  if(live)return false;                          // 拖动途中不发请求：1.5 秒 + 一次额度
+
+  const seq=++pf.seq;
+  setHint('正在按新参数重建…');
+  try{
+   const buffer=await fetchPolyforkGlb(pf.assetId,geometry);
+   if(seq!==pf.seq)return false;
+   const object=await parseModelBuffer(buffer,`${pf.assetId}.glb`,new THREE.LoadingManager());
+   if(!object)throw new Error('重建结果为空');
+   if(seq!==pf.seq)return false;
+   pfBuffers.set(key,buffer.slice(0));
+   if(pfBuffers.size>8)pfBuffers.delete(pfBuffers.keys().next().value);
+   pf.values=next;
+   pfSwap(object);
+   return true;
+  }catch(err){
+   if(seq!==pf.seq)return false;
+   setHint(`按新参数重建失败：${err.message}`);
+   return false;
+  }
+ }
+
  function close(){
   disposed=true;loadToken++;
+  clearTimeout(cacheIdleTimer);
+  cacheIdleTimer=setTimeout(()=>previewCache.clearMemory(),60000);
+  resetEnvironment();
   revokeBlobs();
   // 释放上一帧模型/地面的 GPU 资源（灯光在 scene 上保留，渲染器也长期复用、不销毁）。
   if(root){for(const child of [...root.children]){root.remove(child);disposeObject(child);}}
   channelTarget=null;disposeChannelResources();setChannelMode('off');
   stop();
+  renderer?.renderLists.dispose();
   if(canvas)canvas.hidden=true;
   const iframe=document.getElementById('viewer');
   if(iframe){iframe.hidden=false;iframe.removeAttribute('src');}
@@ -1178,7 +1424,7 @@ async function showPackModel(manifest,token){
   }
  }
 
- return {load,loadFreestylized,loadSubstance,loadLocalModel,loadLocalEnvironment,close,resize:resizeIfLive,canPreview:type=>true};
+ return {load,loadFreestylized,loadSubstance,loadLocalModel,loadLocalEnvironment,loadPolyfork,setPolyforkColors,bakePolyfork,polyforkLive:()=>!!pf?.gen,fetchPolyforkParams,close,resize:resizeIfLive,canPreview:type=>true};
 }
 function polyhavenAssetType(value){return value==='textures'||value==='hdris'?value:'models';}
 /** 换资产时释放上一帧的 GPU 资源。只 remove 不 dispose 的话，纹理与几何会一直挂在

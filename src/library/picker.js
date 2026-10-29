@@ -73,7 +73,7 @@ export function enhanceSelect(select){
  function place(){
   const box=trigger.getBoundingClientRect(),height=menu.offsetHeight;
   const below=window.innerHeight-box.bottom-10,above=box.top-10;
-  const dropUp=below<Math.min(height,190)&&above>below;
+  let dropUp=below<Math.min(height,190)&&above>below;
   const left=Math.max(8,Math.min(box.left,window.innerWidth-box.width-8));
   const room=window.innerWidth-left-12;
   menu.style.width='max-content';                 // 先量出「不换行时的自然宽度」，再回到自适应
@@ -82,6 +82,10 @@ export function enhanceSelect(select){
   menu.style.left=`${left}px`;
   menu.style.maxWidth=`${room}px`;
   menu.style.minWidth=`${Math.max(box.width,Math.min(natural,room))}px`;
+  if(id==='search-platform'){
+   dropUp=below<menu.scrollHeight+7&&above>below;
+   menu.style.maxHeight=`${Math.max(0,(dropUp?above:below)-7)}px`;
+  }
   menu.style.top=`${dropUp?box.top-7:box.bottom+7}px`;
   menu.style.transform=dropUp?'translateY(-100%)':'none';
  }
