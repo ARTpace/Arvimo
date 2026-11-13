@@ -2,7 +2,7 @@
 /**
  * sync-thirdparty-plugins —— 把工程源码里的 plugins/（第三方可编辑插件）同步到「运行副本」目录。
  *
- * 用途：开发时改了 H:\AI-Tools\artflow\plugins\<id>\plugin.js，
+ * 用途：开发时改了 H:\AI-Tools\studio\apps\artflow\plugins\<id>\plugin.js，
  *       但不想重新打包，想立刻在已安装的 ArtFlow 里看到效果。
  *
  * 目标目录（自动探测，两种布局都支持）：
