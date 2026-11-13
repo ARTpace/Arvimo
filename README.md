@@ -1,76 +1,61 @@
-# AssetVault
+# Studio Monorepo
 
-本地 3D 资产工作台：统一搜索 8 个 3D 资产平台（Sketchfab、ArtStation、Poly Haven、ambientCG、Poly Pizza、Kenney、FreeStylized、Polyfork），后台下载并转成 GLB / FBX，统一收进本地模型库；另有 13 个图站可批量抓参考图。完整清单（名称 / 简介 / 官网 / 分类）见 [`docs/platforms.md`](docs/platforms.md)。
-同时保留一个 **Tampermonkey 单文件脚本**（`dist/sketchfab-exporter.user.js`，只处理 Sketchfab）。
+AssetVault 与 Artflow 的统一工作仓。仓库就地由原 AssetVault 仓改造而来，Git 历史完整保留。
 
-> 自 3.4.0 起品牌由 Sketchvault 改为 **AssetVault**。运行数据默认位于 `%APPDATA%\AssetVault\`；旧工程数据使用显式迁移，见 [用户数据目录](docs/user-data-storage.md)。
-> 仅用于你自有或已获明确授权的模型，请遵守模型许可证与站点条款（署名写入输出包 `info.json`）。
+## 目录结构
 
-## 快速开始
-
-Windows 双击 **`AssetVault.lnk`** 或 **`Start-Library-Silent.vbs`** → 服务后台运行 → 浏览器自动打开工作台 **http://127.0.0.1:4179**。
-本机入口仅监听回环地址，端口冲突时自动回退。局域网分享使用独立固定端口（默认 4178），在设置中启用；分享端口冲突只暂停分享，不影响本机。手动更改分享端口后需重新分享链接。
-
-首次使用需 Node.js 22+ 并 `npm install`；FBX 转换需已安装 Chrome / Edge。停止服务双击 `Stop-Library.cmd`。
-
-## 启用 Blender 导入（AssetVault Bridge）
-
-在打开 Blender **之前**双击 **`Install-Blender-Bridge.cmd`** 即可，无需重启 Blender。
-也可在工作台「导出设置 → Blender 连接」里一键安装 / 更新。
-手动兜底：把 `server/blender-bridge.py` 复制到 `%APPDATA%\Blender Foundation\Blender\<版本>\scripts\startup\`，重命名为 `assetvault_bridge_startup.py`，重启 Blender。
-
-## 核心功能
-
-- **统一搜索**：8 个 3D 资产平台 + 13 个图站，「全部平台」并行检索并交错合并结果；平台清单见 [`docs/platforms.md`](docs/platforms.md)。
-- **一键下载队列**：各平台共用同一套队列，支持暂停 / 重试 / 取消 / ZIP·GLB 校验 / SHA-256。
-- **导出选项**：GLB 或 FBX；ZIP 压缩包或直接输出文件夹（可直接拖进 Unity）；贴图尺寸可选。
-- **本地模型库**：收藏、分类筛选、可旋转 3D 预览。
-- **Blender 直送**：已下载到本地的资产一键导入当前场景。
-- **高清图批量下载**：勾选资产即可批量导出各平台最大档图片。
-
-## 油猴脚本（仅 Sketchfab）
-
-1. 安装 Tampermonkey（Chrome / Edge）。
-2. 打开 `dist/sketchfab-exporter.user.js`，按提示安装。
-3. 在 Sketchfab 模型页点右下角 ⬇，勾选是否下载贴图后点「下载」。
-
-## 开发
-
-```sh
-npm install
-npm test                       # 补丁 + 本仓库回归 + 上游测试集
-npm run build                  # 输出 dist/sketchfab-exporter.user.js
-npm run build:library          # 构建独立工作台 dist/library/
-npm run test:library           # 网页 / 服务器 / 安全回归
-npm run test:artstation        # ArtStation Marmoset 搜索回归
-npm run fetch:blender          # 下载便携版 Blender（FBX 导出可选）
+```
+studio/
+├── apps/
+│   ├── assetvault/        # AssetVault（原 AssetVault 仓，含 3D 预览库、Sketchfab 导出器、Tauri 桌面端）
+│   └── artflow/           # Artflow（Electron + React 无限画布宿主，经 git subtree 并入）
+├── packages/              # 跨应用共享包（L1 headless 内核 / L0 契约），待建
+├── docs/                  # 仓级文档与架构决策
+└── .gitignore             # 仅通用规则；应用专属规则见各 apps/<name>/.gitignore
 ```
 
-上游源码固定在 `vendor/upstream-src/`，改动一律写成 `patches/*.mjs`，勿手改。
+## 应用速查
 
-## 目录
+| 应用 | 技术栈 | 构建 | 入口 |
+| --- | --- | --- | --- |
+| assetvault | 纯 JS（命令式 DOM）+ esbuild 单文件打包 | `npm run build:library` | `apps/assetvault/src/library/` |
+| artflow | Electron + React 19 + TS + Vite + Tailwind | `npm run build` / `npm run dev` | `apps/artflow/src/` |
 
-根目录只保留项目说明、许可证、包管理文件与 Windows 启停 / 安装入口。开发与功能文档统一从 [文档索引](docs/README.md) 查找，修改前先读 [代码地图](docs/CODEMAP.md)。
+## 合仓后的路径基准变更
 
-- `src/`、`server/` — 前端、油猴脚本与本地服务源码
-- `test/`、`scripts/` — 自动化测试与构建 / 维护脚本
-- `sketchfab-exporter-tauri/` — 桌面端独立工程（沿用现名，避免破坏打包路径）
-- `assets/`、`design/` — 项目素材与独立设计稿
-- `docs/` — 说明、代码地图、版本记录与第三方声明
-- `patches/`、`vendor/` — 上游补丁与第三方代码 / 运行依赖
-- `dist/`、`artifacts/` — 构建产物与验证证据 / 历史日志，不提交
-- `%APPDATA%\AssetVault\` — 工程外的用户状态、缓存与下载资产，不随构建清理
+原 AssetVault 仓根下的所有相对路径，其基准已从仓库根下移到 `apps/assetvault/`：
 
-完整放置规则与本次清理候选见 [目录规范](docs/project-structure.md)。
-编译缓存可用 `npm run clean:build` 预览；执行方式与发布后自动清理规则见 [构建清理](docs/build-cleanup.md)。
+- 原 `H:\AI-Tools\AssetVault\<x>` → 现 `H:\AI-Tools\studio\apps\assetvault\<x>`
+- 原 `H:\AI-Tools\artflow\<x>` → 现 `H:\AI-Tools\studio\apps\artflow\<x>`
+- 原仓库根 `.gitignore` 的路径规则已拆分：通用规则上提至仓库根，路径相关规则下放至 `apps/assetvault/.gitignore`
+- 已修正的硬编码绝对路径：`apps/assetvault/.workbuddy/skills/assetvault-self-check/SKILL.md`、`apps/assetvault/docs/ai-bridge.md`
 
-## 版本记录
+## 大件隔离
 
-历史变更与修复见 [版本记录](docs/CHANGELOG.md)。
+合仓前将可再生大件移至同步范围外的 `H:\_preMerge_archive\`（同盘移动，可随时取回）：
 
-## License
+| 隔离项 | 原位置 | 体积 |
+| --- | --- | --- |
+| Rust 构建缓存 | `apps/assetvault/sketchfab-exporter-tauri/src-tauri/target` | 5.9 GB |
+| 草稿与探查脚本 | `apps/assetvault/scratch` | 3.8 GB |
+| 文件系统诊断输出 | `apps/assetvault/tmp-fs-diag-out` | 664 MB |
+| 依赖目录 | `apps/assetvault/node_modules`、`apps/artflow/node_modules` | 2.0 GB |
+| 构建产物 | `apps/artflow/dist` | 4 MB |
+| 原 artflow 独立仓（含 .git 全量留档） | `H:\_preMerge_archive\artflow-orig` | — |
 
-GPL-3.0-only（上游 GPL-3.0，本仓库为衍生作品，见 `LICENSE`）。
-第三方代码来源与补丁说明见 [第三方声明](docs/THIRD_PARTY.md)。
+## 开发前必读
 
-平台模块：在「设置 → 平台模块」按需启用或关闭在线平台，默认全部启用。保存后页面自动刷新；关闭的平台不参与搜索、分类初始化、在线解析和新下载，已下载文件及已有任务保留。配置由主机统一保存，局域网访客刷新后同步，不能修改开关。
+迁移后各应用依赖需重装：
+
+```powershell
+cd H:\AI-Tools\studio\apps\assetvault ; npm install
+cd H:\AI-Tools\studio\apps\artflow    ; npm install
+```
+
+## 回滚方式
+
+两个仓的合仓前状态已打 tag `pre-merge-backup-20261113` 并推送远端：
+
+```powershell
+git -C H:\AI-Tools\studio checkout pre-merge-backup-20261113
+```

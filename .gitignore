@@ -1,75 +1,36 @@
+# ============================================================
+# 仓库根 .gitignore —— 只放跨应用通用规则
+# 各应用的路径相关规则见 apps/<name>/.gitignore
+# ============================================================
+
+# ---- 依赖 ----
 node_modules/
-scripts/.gen/
-*.log
+
+# ---- 系统 / 编辑器 ----
 .DS_Store
-vendor/mviewer/
-# three.js 是 vendored 的第三方库（Poly Haven 3D 预览用，版本锁定在 0.160.0）。
-# 换版本时同步 scripts/build-library.mjs 的解析规则与 test/library-polyhaven-3d-preview.test.js 的存在性断言。
-vendor/three/
-!vendor/three/
-!vendor/three/**
-# 人工草稿与探查脚本：可随时整目录删除，不进版本库
-scratch/
-# 程序运行期产出（任务库/下载结果/临时备份），可重建
-.assetvault/
-.sketchvault/
-data/
-sketchfab-exporter-tauri/src/search-motion.css
-downloads/
-dist/
-artifacts/
-示例/
-*.lnk
+Thumbs.db
+desktop.ini
+
+# ---- 日志与生成中间物 ----
+*.log
+scripts/.gen/
+
+# ---- 密钥与本地配置 ----
 *.pem
 *.key
 *.key.pub
 .env
 .env.*
 !.env.example
-vendor/blender/
-vendor/curl-impersonate/
-sketchfab-exporter-tauri/src-tauri/sidecar-server/
-sketchfab-exporter-tauri/src-tauri/binaries/
-sketchfab-exporter-tauri/src-tauri/gen/
-sketchfab-exporter-tauri/licensing/
-scripts/tmp-*.mjs
-sketchfab-exporter-tauri/src/app.js
-sketchfab-exporter-tauri/src/engine.js
-sketchfab-exporter-tauri/src/gltf-preview.js
-sketchfab-exporter-tauri/src/app.css
-sketchfab-exporter-tauri/src/index.html
-sketchfab-exporter-tauri/src/favicon.svg
-sketchfab-exporter-tauri/src/mascot.png
-sketchfab-exporter-tauri/src/worker.html
-sketchfab-exporter-tauri/src/splash.html
-sketchfab-exporter-tauri/src/splash.js
-sketchfab-exporter-tauri/src/splash.css
 
-# 构建期产物与缓存（不进版本库）
-# chrome-headless-shell 改为安装后按需下载，不再随仓库分发（281MB+）。
-vendor/browser/
+# ---- Python ----
 **/__pycache__/
 *.pyc
 
-# ── 抓包 / 调试残留（2026-11 基线整理，不入库）──
-/c.json
-/s.json
-/u.json
-/v.json
-/w.json
-/uic.json
-/fs.json
-/scratch-v.json
-/scratch_u.json
-/page.html
-# 根目录下名为 folder 的 3.6MB ZIP 调试包
-/folder
-/tmp-fs-diag-out/
-/.workbuddy/
-
-# ── Artflow 构建产物拷贝（由 build-library / 打包脚本生成，不入库）──
-/sketchfab-exporter-tauri/src/artflow/
-/sketchfab-exporter-tauri/src/doc-render.js
-
-# ── 同步工具冲突副本（Syncthing *sync-conflict*）──
+# ---- Syncthing 冲突副本 ----
 *.sync-conflict-*
+
+# ---- 本地隔离区（迁移时移出的大件、归档备份，不入库）----
+/_archive/
+/_local/
+/scratch/
