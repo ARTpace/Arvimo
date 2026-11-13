@@ -2,11 +2,20 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createAISettings} from '../src/library/ai-settings.js';
 
+/* ai-settings 既用注入的 $，也有直接摸 document 的路径（#ai-models 父容器、动态插字段）。
+   node --test 没有 DOM，补最小桩，让被测代码走真实分支而不是抛 ReferenceError。 */
+globalThis.document ??= {
+ querySelector: () => null,
+ createElement: () => ({className:'',innerHTML:'',after(){},addEventListener(){}}),
+};
+
 function setup(t){
  const elements=new Map();
  const $=selector=>{
   if(!elements.has(selector))elements.set(selector,{value:'',checked:false,disabled:false,type:'password',attributes:{},events:{},
-   addEventListener(name,handler){this.events[name]=handler;},setAttribute(name,value){this.attributes[name]=value;}});
+   addEventListener(name,handler){this.events[name]=handler;},setAttribute(name,value){this.attributes[name]=value;},
+   /* 真实元素有 closest / after / parentElement：桩补齐，否则 ensureSemanticFields 里 $('#ai-model')?.closest 直接抛 TypeError。 */
+   closest(){return null;},after(){},parentElement:null});
   return elements.get(selector);
  };
  const requests=[];let saved='fixture-secret',fail=false;
