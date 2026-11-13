@@ -1,79 +1,75 @@
-# Arvimo · 艺团
+# Arvimo
 
-素材收集、资产管理与无限画布创作工作台，由 AssetVault 与 Artflow 组成。仓库就地由原 AssetVault 仓改造而来，Git 历史完整保留。
+**收素材、整素材、拼构图 —— 一个窗口做完。**
 
-- GitHub：<https://github.com/ARTpace/Arvimo>
-- 本地目录：`H:\AI-Tools\Arvimo`
-- 总品牌为 **Arvimo · 艺团**；`apps/assetvault`（素材库）与 `apps/artflow`（画布）保留模块名称、各自版本与构建链。
+Arvimo 是一个本地优先的创作素材工作台（Windows 桌面版）。它把散在硬盘里、浏览记录里、收藏夹里的参考图和模型收进同一个库，筛出想要的那几张，再丢到无限画布上拼大色块、试构图。
 
-## 启动与联动构建
+![资产库](docs/screenshots/library.jpg)
 
-根目录双击 `Start-Arvimo.cmd` 启动素材工作台；左侧点击「画布」即可进入 Artflow。
+## 能做什么
 
-首次安装依赖后，或修改画布源码后，按顺序构建，确保素材库内嵌的是最新画布：
+### 资产库
+
+- **拖进来就入库**：单张、一批、整个文件夹都可以直接拖进窗口，图片 / 视频 / 3D 模型 / 材质 / HDRI / 资源包混着放
+- **两种排法**：瀑布流（默认，按原始比例排）和网格，卡片尺寸随手调；点开就是大图 / 3D 预览
+- **按想法筛**：类型、颜色、尺寸比例、标签、评分、收藏，也能用高级检索拼条件
+- **批量操作**：框选一片、右键菜单、评分和备注，一次处理一堆
+- **拖出去就能用**：拖到 Blender、Photoshop、资源管理器，直接当作文件交出去
+
+### 发现
+
+- 关键词搜索 Sketchfab、ArtStation 等平台的作品，也可以粘贴作品链接直接解析
+- 看到合适的，一键收进本地库，和已有素材放在一起
+
+### 画板
+
+- 把同一个项目的素材归进一块画板，卡片**直接拖到画板上**即可加入
+- **智能画板**存的是筛选规则，符合条件的新素材会自动进来，不用手动整理
+- 一块画板对应一张画布，点开就能接着摆
+
+### 画布
+
+- 无限画布：参考图、模型截图、文字说明随便摆，做构图推演和大色块试验
+- 和资产库双向联动：画布上能取库里的素材，库里也能一键跳到对应画布
+
+### 其他
+
+- **界面外观**：底色、背景图、面板不透明度，整套界面一起变
+- **本地优先**：素材留在本机，账号之间互不可见；需要时可以开只读的局域网访客
+- 托盘常驻，关窗口不打断后台任务
+
+## 截图
+
+| 资产库 | 发现与搜索 |
+| --- | --- |
+| ![资产库](docs/screenshots/library.jpg) | ![发现](docs/screenshots/discover.jpg) |
+
+## 快速开始
+
+需要 Windows 和 Node.js 20+。
 
 ```powershell
-npm --prefix apps/artflow run build
-npm --prefix apps/assetvault run build:library
+git clone https://github.com/ARTpace/Arvimo.git
+cd Arvimo
+npm --prefix apps/assetvault ci
+npm --prefix apps/artflow ci
 ```
 
-画布产物默认取仓内 `apps/artflow/dist`，不依赖本机绝对路径；特殊部署仍可通过 `SFX_ARTFLOW_SRC` 覆盖。
-用户数据目录、应用标识、消息协议和文件格式保留旧名称，改名不迁移或清空已有素材、账号与设置。
+- 双击 `Start-Arvimo.cmd` 使用正式版
+- 双击 `Arvimo 开发版.lnk` 使用开发版（改前端会自动重建并刷新窗口，改后端会自动重启服务）
+- 双击 `Build-Arvimo.cmd` 生成安装包，产物输出到 `dist/`
 
-## 目录结构
+## 仓库结构
 
 ```
 Arvimo/
-├── apps/
-│   ├── assetvault/        # AssetVault（原 AssetVault 仓，含 3D 预览库、Sketchfab 导出器、Tauri 桌面端）
-│   └── artflow/           # Artflow（Electron + React 无限画布宿主，经 git subtree 并入）
-├── packages/              # 跨应用共享包（L1 headless 内核 / L0 契约），待建
-├── docs/                  # 仓级文档与架构决策
-└── .gitignore             # 仅通用规则；应用专属规则见各 apps/<name>/.gitignore
+├── apps/assetvault/   # 素材库（资产库 / 发现 / 画板 / 设置，桌面壳在这里）
+├── apps/artflow/      # 画布（无限画布宿主）
+├── docs/              # 文档与截图
+└── packages/          # 跨应用共享包
 ```
 
-## 应用速查
+## 文档
 
-| 应用 | 技术栈 | 构建 | 入口 |
-| --- | --- | --- | --- |
-| assetvault | 纯 JS（命令式 DOM）+ esbuild 单文件打包 | `npm run build:library` | `apps/assetvault/src/library/` |
-| artflow | Electron + React 19 + TS + Vite + Tailwind | `npm run build` / `npm run dev` | `apps/artflow/App.tsx` |
-
-## 合仓后的路径基准变更
-
-原 AssetVault 仓根下的所有相对路径，其基准已从仓库根下移到 `apps/assetvault/`：
-
-- 原 `H:\AI-Tools\AssetVault\<x>` → 现 `H:\AI-Tools\Arvimo\apps\assetvault\<x>`
-- 原 `H:\AI-Tools\artflow\<x>` → 现 `H:\AI-Tools\Arvimo\apps\artflow\<x>`
-- 原仓库根 `.gitignore` 的路径规则已拆分：通用规则上提至仓库根，路径相关规则下放至 `apps/assetvault/.gitignore`
-- 已修正的硬编码绝对路径：`apps/assetvault/.workbuddy/skills/assetvault-self-check/SKILL.md`、`apps/assetvault/docs/ai-bridge.md`
-
-## 大件隔离
-
-合仓前将可再生大件移至同步范围外的 `H:\_preMerge_archive\`（同盘移动，可随时取回）：
-
-| 隔离项 | 原位置 | 体积 |
-| --- | --- | --- |
-| Rust 构建缓存 | `apps/assetvault/sketchfab-exporter-tauri/src-tauri/target` | 5.9 GB |
-| 草稿与探查脚本 | `apps/assetvault/scratch` | 3.8 GB |
-| 文件系统诊断输出 | `apps/assetvault/tmp-fs-diag-out` | 664 MB |
-| 依赖目录 | `apps/assetvault/node_modules`、`apps/artflow/node_modules` | 2.0 GB |
-| 构建产物 | `apps/artflow/dist` | 4 MB |
-| 原 artflow 独立仓（含 .git 全量留档） | `H:\_preMerge_archive\artflow-orig` | — |
-
-## 开发前必读
-
-迁移后各应用依赖需重装：
-
-```powershell
-cd H:\AI-Tools\Arvimo\apps\assetvault ; npm ci
-cd H:\AI-Tools\Arvimo\apps\artflow    ; npm ci
-```
-
-## 回滚方式
-
-两个仓的合仓前状态已打 tag `pre-merge-backup-20261113` 并推送远端：
-
-```powershell
-git -C H:\AI-Tools\Arvimo worktree add --detach H:\AI-Tools\Arvimo-pre-merge pre-merge-backup-20261113
-```
+- [画布与资产库的联动](docs/canvas-library-link.md)
+- [设置页集成](docs/settings-integration.md)
