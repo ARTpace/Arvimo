@@ -141,7 +141,7 @@ export function mountArtflow(host,{resolve,onCount,onStatus}={}){
     try{text=frame.contentDocument?.body?.textContent||'';}catch{text='';}
     if(!text.includes('artflow')&&!frame.contentDocument?.querySelector('#root')){
       notice.hidden=false;
-      notice.innerHTML='<b>Artflow 产物未构建</b><span>请在 artflow 工程执行 <code>npx vite build --outDir dist-web</code>，然后回到这里重新构建 AssetVault 前端。</span>';
+      notice.innerHTML='<b>Artflow 产物未构建</b><span>请在 apps/artflow 执行 <code>npm run build</code>，再在 apps/assetvault 执行 <code>npm run build:library</code>。</span>';
       status('Artflow 产物未构建','error');
     }
   });

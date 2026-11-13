@@ -37,7 +37,7 @@ npm run ai:config
   "mcpServers": {
     "assetvault": {
       "command": "node",
-      "args": ["H:/AI-Tools/studio/apps/assetvault/server/ai-mcp.mjs"]
+      "args": ["H:/AI-Tools/Arvimo/apps/assetvault/server/ai-mcp.mjs"]
     }
   }
 }

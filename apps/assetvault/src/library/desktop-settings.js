@@ -19,7 +19,7 @@ export function createAutostartCard({ toast = () => {} } = {}) {
     <div class="settings-section-title"><span>启动与后台</span><small>登录 Windows 后自动运行，窗口收在托盘里</small></div>
     <label class="field" style="display:flex;align-items:center;gap:9px;cursor:pointer">
       <input type="checkbox" id="autostart-toggle">
-      <span>开机时自动启动 AssetVault</span>
+      <span>开机时自动启动 Arvimo · 艺团</span>
     </label>
     <p class="compact-note" id="autostart-note">开机只启动后台服务，不弹主窗口；点任务栏托盘图标即可打开。关闭窗口默认也是收到托盘，不中断下载。</p>`;
   const toggle = card.querySelector('#autostart-toggle');

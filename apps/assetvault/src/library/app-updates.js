@@ -55,9 +55,9 @@ export function createAppUpdates({hasActiveTasks=()=>false,onState=()=>{}}={}){
  if(!api?.core?.invoke){
   if(versionNode)versionNode.textContent='网页版';card.querySelector('[data-version]').textContent='浏览器模式';
   if(stateNode){stateNode.textContent='不可用';stateNode.className='update-state';}
-  if(hintNode)hintNode.textContent='请在 AssetVault 桌面版中检查与安装更新';
+  if(hintNode)hintNode.textContent='请在 Arvimo · 艺团桌面版中检查与安装更新';
   if(ctaNode)ctaNode.textContent='查看说明';
-  status.textContent='请在 AssetVault 桌面版中检查和安装更新。';check.disabled=action.disabled=auto.disabled=true;
+  status.textContent='请在 Arvimo · 艺团桌面版中检查和安装更新。';check.disabled=action.disabled=auto.disabled=true;
   card.querySelector('[data-open]').onclick=open;
   return {card,open,check(){onState({phase:'unavailable',message:status.textContent});},update(){},start(){}};
  }

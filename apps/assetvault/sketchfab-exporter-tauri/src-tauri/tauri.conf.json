@@ -10,7 +10,7 @@
     "withGlobalTauri": true,
     "windows": [
       {
-        "title": "AssetVault",
+        "title": "Arvimo · 艺团",
         "width": 1400,
         "height": 900,
         "minWidth": 960,
@@ -47,7 +47,7 @@
   "plugins": {
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDJGRUFBMTgyNEY2QTM2QzcKUldUSE5tcFBncUhxTDhjUm5NUEpTWHdxcDZsYVd2TE5UdDBha2J0dUpmZk9ia3g3aUZrUTI1MGEK",
-      "endpoints": ["https://github.com/ARTpace/AssetVault/releases/latest/download/latest.json"],
+      "endpoints": ["https://github.com/ARTpace/Arvimo/releases/latest/download/latest.json"],
       "windows": {"installMode": "passive"}
     }
   }

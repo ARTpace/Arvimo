@@ -1,5 +1,7 @@
 # Artflow
 
+Arvimo · 艺团的画布模块，总仓库见 [Arvimo](https://github.com/ARTpace/Arvimo)。
+
 基于 React、TypeScript、Vite 和 Electron 的无限画布创作工具，包含素材管理、媒体导入、插件扩展和主题系统。当前版本 `0.1.8`，另提供 Tauri 2 实验入口。
 
 ## 安装与启动

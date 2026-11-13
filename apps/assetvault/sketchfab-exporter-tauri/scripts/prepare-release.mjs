@@ -18,7 +18,7 @@ try{
 }catch{throw Error('最终安装器缺失或为空：先跑 build-custom-installer 再准备发布资产');}
 await fs.mkdir(output,{recursive:true});
 const notes=process.env.ASSETVAULT_RELEASE_NOTES||'支持应用内检查、签名下载与重启更新；新增安装动效；修复 Blender 导入 ZIP 文件夹条目冲突。';
-await fs.writeFile(path.join(output,'latest.json'),JSON.stringify({version,notes,pub_date:new Date().toISOString(),platforms:{'windows-x86_64':{url:`https://github.com/ARTpace/AssetVault/releases/download/v${version}/${name}-setup.exe`,signature}}},null,2)+'\n');
+await fs.writeFile(path.join(output,'latest.json'),JSON.stringify({version,notes,pub_date:new Date().toISOString(),platforms:{'windows-x86_64':{url:`https://github.com/ARTpace/Arvimo/releases/download/v${version}/${name}-setup.exe`,signature}}},null,2)+'\n');
 // 引擎已嵌入最终安装器，bundle 目录里的副本删掉：安装包只保留 dist/ 一处，
 // 不会再出现「target 里一份、dist 里一份」的两处存放。
 await fs.rm(engine,{force:true});

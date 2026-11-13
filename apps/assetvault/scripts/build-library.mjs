@@ -43,7 +43,7 @@ await esbuild.build({entryPoints:[path.join(root,'src/library/gltf-preview.js')]
 // 有自己的 Tailwind 编译、插件系统与构建链，混进 esbuild 只会两头不讨好。
 // 按 vite manifest 精确拷贝：整目录搬会把历次构建的旧 chunk 一起带过去（几十 MB 死文件）。
 // 产物缺失不阻断构建：画板视图会显示「尚未构建 artflow」的提示，其余功能照常。
-const artflowSrc=process.env.SFX_ARTFLOW_SRC||'H:/AI-Tools/studio/apps/artflow/dist-web';
+const artflowSrc=process.env.SFX_ARTFLOW_SRC||path.resolve(root,'../artflow/dist');
 const artflowOut=path.join(output,'artflow');
 try{
   const manifestPath=path.join(artflowSrc,'.vite','manifest.json');

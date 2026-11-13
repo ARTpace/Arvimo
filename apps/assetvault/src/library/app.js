@@ -1834,7 +1834,7 @@ settingsPanel=createSettingsPanel({$,loadAI:()=>aiSettings.load(),updateCard:app
   }
   try{const warm=activeModes().some(mode=>state.feeds[mode].rows.length);if(!warm&&activeModes().every(mode=>!state.feeds[mode].request&&!state.feeds[mode].busy&&!state.feeds[mode].rows.length)&&state.route==='discover'&&!$('#asset-query').value.trim())startSearch();}
   catch(error){const feed=state.feeds[activeModes()[0]||'search'];feed.status=`初始化搜索失败：${error.message}`;feed.error=true;renderStatus();toast(feed.status);}
- },()=>{state.feeds[activeModes()[0]||'search'].status='本地服务未连接，请重新启动 AssetVault。';state.feeds[activeModes()[0]||'search'].error=true;renderStatus();toast('本地服务未连接：卡片动作都依赖本地服务');});
+ },()=>{state.feeds[activeModes()[0]||'search'].status='本地服务未连接，请重新启动 Arvimo · 艺团。';state.feeds[activeModes()[0]||'search'].error=true;renderStatus();toast('本地服务未连接：卡片动作都依赖本地服务');});
 }
 
 setup().catch(error=>{
