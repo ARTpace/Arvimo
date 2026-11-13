@@ -6,12 +6,14 @@ import {
   contentKindsOf, activeModeId, savedMode, rememberMode, createContentKindTabs,
 } from '../src/library/content-kind-tabs.js';
 import {paths} from '../src/library/icon-set.js';
+import {modePresetById} from '../src/library/mode-presets.js';
 
 const read = name => readFileSync(new URL(`../src/library/${name}`, import.meta.url), 'utf8');
 
-test('模式轨：固定 4 个常驻图标，没有「全部」、没有计数、没有平台', () => {
-  assert.deepEqual(MODE_TABS.map(entry => entry.id), ['images', 'models', 'documents', 'videos']);
-  assert.deepEqual(MODE_TABS.map(entry => entry.label), ['图片', '模型', '文本', '视频']);
+test('模式轨：固定 5 个常驻图标，没有「全部」、没有计数、没有平台', () => {
+  // 2026-11 新增 ui 模式（Uiverse），顺序即 mode-presets.js 的 MODE_PRESETS。
+  assert.deepEqual(MODE_TABS.map(entry => entry.id), ['images', 'models', 'ui', 'documents', 'videos']);
+  assert.deepEqual(MODE_TABS.map(entry => entry.label), ['图片', '模型', 'UI', '文本', '视频']);
   assert.ok(!MODE_TABS.some(entry => entry.id === 'all'));
   assert.equal(Object.isFrozen(MODE_TABS), true);
   assert.equal(modeTabs(), MODE_TABS, '常驻集合不认 route / counts，永远是这 4 个');
@@ -30,9 +32,12 @@ test('远程收藏的 .jpg 缩略图不能把 3D 模型误判成图片', () => {
   assert.deepEqual(contentKindsOf(model), ['models']);
 });
 
-test('本地文件扩展名派生视频 / 文本 / 音频 / HDRI，且允许多值', () => {
+test('本地文件扩展名派生视频 / 音频 / HDRI，附带文档不污染主类型，且允许多值', () => {
   assert.ok(contentKindsOf({assetType: 'image', filePath: 'C:/lib/clip.mp4'}).includes('videos'));
-  assert.ok(contentKindsOf({assetType: 'image', filePath: 'C:/lib/readme.docx'}).includes('documents'));
+  // 2026-11 新规格：主类型明确（base=images）时，附带文档不再把资产拖进 documents ——
+  // 预览页 / 元数据文件几乎每条资产都有，否则「文本」模式会被全部资产淹没。
+  assert.equal(contentKindsOf({assetType: 'image', filePath: 'C:/lib/readme.docx'}).includes('documents'), false, '主类型明确时附带文档要被抑制');
+  assert.ok(contentKindsOf({assetType: 'other', filePath: 'C:/lib/readme.docx'}).includes('documents'), '纯文档资产仍能归位');
   assert.ok(contentKindsOf({assetType: 'image', filePath: 'C:/lib/ambience.wav'}).includes('audio'));
   assert.ok(contentKindsOf({assetType: 'image', filePath: 'C:/lib/studio.hdr'}).includes('hdris'));
   const pack = contentKindsOf({assetType: 'model', entries: [{rel: 'robot.fbx'}, {rel: 'albedo.png'}]});
@@ -104,12 +109,12 @@ function fakeHost() {
   return host;
 }
 
-test('组件：4 个图标常驻、无计数 / 分隔线 / 平台，DOM 只建一次', () => {
+test('组件：5 个图标常驻、无计数 / 分隔线 / 平台，DOM 只建一次', () => {
   const host = fakeHost();
   const state = {route: 'library'};
   const tabs = createContentKindTabs({host, state, readKind: () => ''});
   tabs.render();
-  assert.deepEqual(host.buttons.map(button => button.dataset.mode), ['images', 'models', 'documents', 'videos']);
+  assert.deepEqual(host.buttons.map(button => button.dataset.mode), ['images', 'models', 'ui', 'documents', 'videos']);
   assert.ok(host.html.includes('<svg'), '每个键都要是 SVG 图标');
   assert.ok(!host.html.includes('ck-count'), '不显示数量');
   assert.ok(!host.html.includes('ck-sep'), '不显示分组线');
@@ -234,11 +239,17 @@ test('类型模式也要压住磁盘上的额外卡片与空状态文案', () =>
   assert.equal(modeAllowsLocalKind('videos', 'files', 'video'), true);
   assert.equal(modeAllowsLocalKind('documents', 'packages', 'images'), false, '图片资产包也不该出现在文本模式');
   assert.equal(modeAllowsLocalKind('images', 'packages', 'images'), true);
+  // 2026-11 新增 ui 模式后，MODE_TABS 的 id 不再等于磁盘类型词表的键：
+  // app.js:138 把 state.contentKind 设成 modePresetById(state.mode).localKind（ui → uielement）。
+  // 判据必须按 localKind 查表，否则会误报「ui 缺映射」，也会漏掉真正漏配的模式。
   for (const entry of MODE_TABS) {
-    const map = LOCAL_KINDS_OF_MODE[entry.id];
-    assert.ok(map, `${entry.id} 缺磁盘类型映射：额外卡片会漏筛`);
-    assert.ok(Array.isArray(map.files) && Array.isArray(map.packages), `${entry.id} 的两个面都要给数组`)  ;
+    const kind = modePresetById(entry.id).localKind;
+    const map = LOCAL_KINDS_OF_MODE[kind];
+    assert.ok(map, `${entry.id}(${kind}) 缺磁盘类型映射：额外卡片会漏筛`);
+    assert.ok(Array.isArray(map.files) && Array.isArray(map.packages), `${entry.id} 的两个面都要给数组`);
   }
+  assert.equal(modePresetById('ui').localKind, 'uielement', 'UI 模式走 uielement 磁盘类型');
+  assert.equal(modeAllowsLocalKind('uielement', 'files', 'document'), true);
   const app = read('app.js');
   const extra = app.slice(app.indexOf('function extraCards(){'), app.indexOf("/** 远程收藏卡上的「下载原图」"));
   assert.ok(extra.includes("modeAllowsLocalKind(modeKind,'packages'"), '资产包要过一次模式类型');

@@ -151,7 +151,7 @@ export async function runFreestylizedJob({uid,output,assetId,assetType,options},
  const dest=path.join(output,'pack.zip');
  await downloadFile(fileUrl,dest,{signal,open});
  const stat=await fs.stat(dest);
- const meta={uid,kind:'pack',platform:'freestylized',assetId:slug,assetType:type,url:pageUrl,license:'FreeStylized 免费资源，下载前请在官网确认授权范围',files:[{file:'pack.zip',bytes:stat.size,url:fileUrl}],note:`FreeStylized ${spec.label}。`,exportedAt:new Date().toISOString(),tool:'AssetVault · FreeStylized'};
+ const meta={uid,kind:'pack',platform:'freestylized',assetId:slug,assetType:type,url:pageUrl,license:'FreeStylized 免费资源，下载前请在官网确认授权范围',files:[{file:'pack.zip',bytes:stat.size,url:fileUrl}],note:`FreeStylized ${spec.label}。`,exportedAt:new Date().toISOString(),tool:'Arvimo · FreeStylized'};
  await fs.writeFile(path.join(output,'info.json'),JSON.stringify(meta,null,2),'utf8');
  return {zipName:`${slug}-pack`};
 }

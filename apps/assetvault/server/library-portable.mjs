@@ -90,7 +90,7 @@ export async function exportLibrary({storage, now = Date.now} = {}) {
 export function normalizeSnapshot(payload) {
   if (!isObject(payload)) throw new PortableRejected('快照格式无效：根节点必须是对象');
   if (payload.format !== PORTABLE_FORMAT) {
-    throw new PortableRejected(`不是 AssetVault 资产库快照（format=${payload.format ?? '缺失'}）`, 'format_mismatch');
+    throw new PortableRejected(`不是艺团资产库快照（format=${payload.format ?? '缺失'}）`, 'format_mismatch');
   }
   const version = Number(payload.version);
   if (!Number.isFinite(version) || version < 1 || version > PORTABLE_VERSION) {

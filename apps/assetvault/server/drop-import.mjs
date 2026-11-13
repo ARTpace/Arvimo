@@ -66,7 +66,9 @@ export function createDropImporter({dataDir, importRoots, allowLocalRoot = () =>
       });
       // 同内容重复被跳过时 asset 指向旧文件，这份新落盘的副本是多余的，清掉免得堆垃圾。
       if (result.status === 'skipped') await fs.rm(dir, {recursive: true, force: true}).catch(() => {});
-      return {ok: true, uid: result.asset?.uid, name: rel, status: result.status, bytes: total};
+      const asset=result.asset;
+      return {ok: true, uid: asset?.uid, name: rel, status: result.status, bytes: total,
+        asset:asset?{uid:asset.uid,url:asset.url,thumbnail:asset.thumbnail,name:asset.name,bytes:asset.bytes,ext:asset.ext}:null};
     } catch (error) {
       await fs.rm(dir, {recursive: true, force: true}).catch(() => {});
       throw error;

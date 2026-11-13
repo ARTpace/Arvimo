@@ -38,13 +38,13 @@ async function inspect(relative){
 
 if(apply){
  if(process.platform==='win32'){
-  const processes=execFileSync('tasklist',['/FO','CSV','/NH'],{encoding:'utf8',windowsHide:true});
+  const processes=execFileSync(path.join(process.env.SystemRoot||'C:/Windows','System32/tasklist.exe'),['/FO','CSV','/NH'],{encoding:'utf8',windowsHide:true});
   if(/^"(?:cargo|rustc|assetvault|assetvault-setup)\.exe"/im.test(processes))throw Error('Rust build or AssetVault is running; close it before cleanup.');
  }
  // A complete current release must exist before removing any build cache.
  const {version}=JSON.parse(await fs.readFile(path.join(root,'src-tauri','tauri.conf.json'),'utf8'));
- const installer=`AssetVault_${version}_x64-setup.exe`;
- const release=path.join(root,'dist');
+ const installer=`Arvimo_${version}_x64-setup.exe`;
+ const release=path.join(root,'../../../dist');
  const manifest=JSON.parse(await fs.readFile(path.join(release,'latest.json'),'utf8'));
  const signature=(await fs.readFile(path.join(release,installer+'.sig'),'utf8')).trim();
  const platform=manifest.platforms?.['windows-x86_64'];

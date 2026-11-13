@@ -8,6 +8,7 @@ import type { SkinSettingField } from '../../plugin-runtime/skin-customization';
 import { useLanguage } from '../../utils/language-store';
 import { ThemeArtwork } from './ThemePreview';
 import { UiThemeControls } from './UiThemeControls';
+import { BoardBackgroundControls } from './BoardBackgroundControls';
 import { WallpaperControls } from './WallpaperControls';
 import { Panel } from './Panel';
 import { BpIcon } from '../../components/BpIcon';
@@ -348,7 +349,7 @@ export const ThemeStudio: React.FC<PluginPanelProps> = ({ kernel, chromeless = f
         </span>
       </div>}
       <nav aria-label={text(zh, '外观分类', 'Appearance sections')} className="mb-3 flex shrink-0 gap-1 overflow-x-auto rounded-lg bg-white/[0.045] p-1">
-        {([['gallery', '主题', 'Themes'], ['controls', '界面调节', 'Interface'], ['wallpaper', '壁纸', 'Wallpaper'], ['mix', '高级混搭', 'Mix'], ['mine', '收藏与配方', 'Saved']] as const).map(([key, cn, en]) => (
+        {([['gallery', '主题', 'Themes'], ['controls', '界面调节', 'Interface'], ['wallpaper', '背景与壁纸', 'Background'], ['mix', '高级混搭', 'Mix'], ['mine', '收藏与配方', 'Saved']] as const).map(([key, cn, en]) => (
           <button key={key} type="button" aria-current={section === key ? 'page' : undefined} onClick={() => selectSection(key)}
             className={`min-w-max flex-1 whitespace-nowrap rounded-md px-2 py-2 text-[11px] font-medium transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-slate-100 ${section === key ? 'bg-white/15 text-slate-50' : 'text-slate-400 hover:bg-white/[0.08] hover:text-slate-200'}`}>{text(zh, cn, en)}</button>
         ))}
@@ -357,8 +358,8 @@ export const ThemeStudio: React.FC<PluginPanelProps> = ({ kernel, chromeless = f
       <div ref={scrollRef} data-bp-theme-scroll="" className="min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain pr-1.5 [scrollbar-width:thin] [scrollbar-color:#555_transparent]">
         {section === 'controls' && <UiThemeControls zh={zh} settings={uiSettings}
           tokens={engine.currentTokens()} onChange={previewUiSettings} onMode={previewMode} />}
-        {section === 'wallpaper' && <WallpaperControls zh={zh} kernel={kernel} engine={engine} settings={uiSettings}
-          onChange={previewUiSettings} onStage={stageWallpaper} onForget={forgetWallpaper} />}
+        {section === 'wallpaper' && <><BoardBackgroundControls kernel={kernel} language={zh ? 'zho' : 'en'} /><WallpaperControls zh={zh} kernel={kernel} engine={engine} settings={uiSettings}
+          onChange={previewUiSettings} onStage={stageWallpaper} onForget={forgetWallpaper} /></>}
         {section === 'gallery' && <div data-bp-theme-gallery-layout="" className="grid min-w-0 gap-3 min-[800px]:grid-cols-[minmax(0,1fr)_15rem]">
           <aside className="order-1 min-w-0 space-y-3 min-[800px]:order-2">
           {selected && selectedFamily && (

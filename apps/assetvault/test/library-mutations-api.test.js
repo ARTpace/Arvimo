@@ -49,29 +49,32 @@ async function seeded(t, options) {
 
 const main = async base => JSON.parse((await call(base, '/api/library-state')).data.values['sfx-library-v2']);
 
-test('一次评分只发一个 op：文件快照、附带 key、FTS 索引同步更新', async t => {
+// 评分 / 备注 / 收藏 / 用户标签在前端走的是 S3 定点通道（persistent-storage.js
+// → /api/library/tags/mutate），不是遗留的 /api/library/mutations 整块差量端点。
+// 这条端到端必须测真实路径：ADR-02 之后用户域权威在 DB，定点写不碰 blob，
+// 但 setRating/setNote/setFav 会同步刷新 assets 派生列，所以 rating:5 应立刻可检索。
+test('评分走定点通道：blob 主体不动，rating 派生列即时同步且可检索', async t => {
   const {base} = await seeded(t);
   const ops = [
-    {op: 'set', field: 'userMeta', key: a, value: {rating: 5, note: '项目A'}},
-    {op: 'set', field: 'userTags', key: a, value: ['常用']},
-    {op: 'set', field: 'favorites', value: [a]},
+    {op: 'asset.set', uid: a, field: 'rating', value: 5},
+    {op: 'asset.set', uid: a, field: 'note', value: '项目A'},
+    {op: 'asset.set', uid: a, field: 'favorite', value: true},
+    {op: 'tag.add', uid: a, source: 'user', value: '常用'},
   ];
-  const response = await call(base, '/api/library/mutations', {method: 'POST', body: {ops, values: {'sfx-library-ui': '{"linkPanelOpen":true}'}}});
-  assert.equal(response.status, 200);
-  assert.equal(response.data.saved, true);
-  assert.equal(response.data.applied, 3);
-  assert.equal(response.data.incremental, true);
-  assert.equal(response.data.engine, 'sqlite');
+  const response = await call(base, '/api/library/tags/mutate', {method: 'POST', body: {ops}});
+  assert.equal(response.status, 200, JSON.stringify(response.data));
+  assert.equal(response.data.fallback, false, '不应退回整块写入');
+  assert.ok(response.data.applied > 0, '至少有一条 op 生效');
+  assert.ok((response.data.changes || []).some(change => change.uid === a), '变更应落在目标资产上');
+
+  // 定点写不重写权威 blob，目录主体一条不少。
   const state = await main(base);
   assert.equal(state.models.length, 2, '资产主体一动没动');
-  assert.deepEqual(state.userMeta[a], {rating: 5, note: '项目A'});
-  assert.deepEqual(state.userTags[a], ['常用']);
-  assert.deepEqual(state.favorites, [a]);
-  const values = (await call(base, '/api/library-state')).data.values;
-  assert.equal(values['sfx-library-ui'], '{"linkPanelOpen":true}');
+
+  // 核心判据：派生列跟着定点写刷新，且只命中被改的那一条。
   const hit = await call(base, '/api/library/assets', {method: 'POST', body: {q: 'rating:5'}});
   assert.equal(hit.status, 200);
-  assert.deepEqual(hit.data.uids, [a], '派生索引必须跟着增量写入一起重建');
+  assert.deepEqual(hit.data.uids, [a], 'rating:5 应命中刚评分的资产');
 });
 
 test('并发的两次增量写入各自只碰自己的 key，不会互相覆盖', async t => {

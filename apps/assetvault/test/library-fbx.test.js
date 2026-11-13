@@ -108,7 +108,8 @@ test('the download queue converts with real Blender and saves an FBX that keeps 
    verify:verifyArchive,browser:()=>'/fixture/browser',blender:blenderPath,
   }).init();
   m.start('http://127.0.0.1:1');
-  m.enqueue({authorized:true,models:[{uid:FIXTURE_UID,name:'Fixture',author:'Test author'}],options:{output:'folder',format:'fbx'}});
+  // enqueue 是 async（会先等恢复队列），不 await 就 wait(m.jobs[0].state) 会读 undefined。
+  await m.enqueue({authorized:true,models:[{uid:FIXTURE_UID,name:'Fixture',author:'Test author'}],options:{output:'folder',format:'fbx'}});
   await wait(()=>['saved','failed','cancelled'].includes(m.jobs[0].state));
   const job=m.jobs[0];
   assert.equal(job.state,'saved',job.error||'任务未完成');

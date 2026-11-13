@@ -66,18 +66,24 @@ test('masonry measures only changed/new cards, then invalidates all heights when
  const root={children:[],clientWidth:800,style:style(),matches:selector=>selector.includes('model-grid'),querySelectorAll:()=>[],addEventListener:(name,fn)=>listeners[name]=fn,closest:()=>root};
  const card=height=>({height,style:style(),closest(){return this;},getBoundingClientRect(){reads++;return {height:this.height};}});
  root.children=Array.from({length:1000},(_,i)=>card(200+i%5*50));
- const context={window:{innerWidth:1000,addEventListener(){}},document:{},requestAnimationFrame:fn=>{frame=fn;return 1;},
+ const context={window:{innerWidth:1000,addEventListener(){}},document:{},
+  // 不要把 el.style 交给 getComputedStyle：那会把 CSS 变量读取计进 styleReads，
+  // 而这条用例只统计卡片 rect 的读取次数。
+  getComputedStyle:()=>({getPropertyValue:()=>''}),requestAnimationFrame:fn=>{frame=fn;return 1;},
   MutationObserver:class{constructor(fn){mutate=fn;}observe(){}},ResizeObserver:class{observe(){}},root};
  vm.runInNewContext(source+';observeMasonry(root);',context);
- frame();assert.equal(reads,1000);
- const initialWrites=writes;frame();assert.equal(reads,1000);assert.equal(writes,initialWrites);
+ // masonry.js 在列宽变化时会先读一次首卡强制 reflow，每次 resized 多 1 次 rect 读取。
+ const reflowReads=1;
+ frame();assert.equal(reads,1000+reflowReads);
+ const initialWrites=writes;frame();assert.equal(reads,1000+reflowReads);assert.equal(writes,initialWrites);
  const initialStyleReads=styleReads;
  listeners.load({target:root.children[1]});frame();
  assert.equal(styleReads,initialStyleReads,'unchanged image dimensions must skip coordinate processing');
- assert.equal(reads,1001);
- root.children[1].height=280;listeners.load({target:root.children[1]});frame();assert.equal(reads,1002);
- root.children.push(card(150));mutate([{type:'childList',target:root}]);frame();assert.equal(reads,1003);
- root.clientWidth=1100;frame();assert.equal(reads,2004);
+ assert.equal(reads,1001+reflowReads);
+ root.children[1].height=280;listeners.load({target:root.children[1]});frame();assert.equal(reads,1002+reflowReads);
+ root.children.push(card(150));mutate([{type:'childList',target:root}]);frame();assert.equal(reads,1003+reflowReads);
+ // 改宽度会再触发一次 resized：全量重测之外又多一次 reflow 探针。
+ root.clientWidth=1100;frame();assert.equal(reads,2004+reflowReads*2);
  const first=root.children[0],second=root.children[1];
  root.children[0]=second;root.children[1]=first;
  mutate([{type:'childList',target:root}]);frame();
@@ -89,7 +95,8 @@ test('3D frames coalesce, settle after damping, and wake after visibility or edi
  const loop=source.slice(source.indexOf(' function requestRender(){'),source.indexOf(' function ensureRenderer(){'));
  const listener=source.split('\n').find(line=>line.startsWith("document.addEventListener('visibilitychange'"));
  let visibility,renders=0,nextId=0,context;const frames=new Map();let changes=0;
- context={frame:0,disposed:false,renderer:{},viewW:10,viewH:10,document:{hidden:true,addEventListener:(_name,fn)=>visibility=fn},
+ // loop 的 eval 切片不含模块顶层的 `let mixer=null`，补上才能让 `mixer&&playing` 短路。
+ context={frame:0,disposed:false,renderer:{},mixer:null,viewW:10,viewH:10,document:{hidden:true,addEventListener:(_name,fn)=>visibility=fn},
   requestAnimationFrame:fn=>{frames.set(++nextId,fn);return nextId;},resize(){},
   stop(){frames.delete(context.frame);context.frame=0;},
   controls:{update(){if(changes-->0)context.requestRender();}},renderFrame:()=>renders++};
@@ -111,7 +118,7 @@ test('closed preview shrinks idle buffers; an active preview keeps them and rest
  const resize=source.slice(source.indexOf(' function resize(){'),source.indexOf('const onResize='));
  let cleared=0,draws=0;const sizes=[];
  const context={disposed:true,viewW:800,viewH:600,previewCache:{clearMemory:()=>cleared++},pfBuffers:new Map([['model',1]]),
-  renderer:{setSize:(...args)=>sizes.push(args)},camera:{updateProjectionMatrix(){}},canvas:{},
+  renderer:{setSize:(...args)=>sizes.push(args),setScissorTest:()=>{},setViewport:()=>{}},camera:{updateProjectionMatrix(){}},canvas:{},
   canvasSize:()=>({w:800,h:600}),requestRender:()=>draws++};
  vm.runInNewContext(release+resize,context);
  context.releaseIdleResources();assert.deepEqual(sizes,[[1,1,false]]);assert.equal(cleared,1);assert.equal(context.pfBuffers.size,0);

@@ -2,10 +2,14 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import {randomBytes,scryptSync,timingSafeEqual} from 'node:crypto';
+// 局域网入口页的模板单独放：样式与背景图复用本机登录页那一套（login.css / login-backdrop.svg）。
+import {lanLoginPage as loginPage} from './lan-login-page.mjs';
 
 const SESSION_MS=12*60*60*1000;
 const MAX_NAMES=6;   // one device IP can be shared by a few people; keep the most recent names
 const validPort=port=>Number.isInteger(port)&&port>0&&port<=65535;
+// 未登录也能取到的登录页资源（见 handle() 里的放行分支）。
+const LOGIN_ASSETS=new Set(['/login.css','/login-backdrop.svg','/login-peek.js','/favicon.svg']);
 const privateIP=ip=>/^10\.|^192\.168\.|^172\.(1[6-9]|2\d|3[01])\./.test(ip);
 const normalizeIP=ip=>String(ip||'').replace(/^::ffff:/,'');
 const loopback=ip=>ip==='127.0.0.1'||ip==='::1';
@@ -15,8 +19,6 @@ async function readBody(req){let text='';for await(const chunk of req){text+=chu
 // whitespace-free-ish whitelist: that also makes echoing it back into the form attribute safe.
 const NAME_RE=/^[\p{L}\p{N}_.\- ]{1,24}$/u;
 const NAME_ERROR='请填写你的名字：1–24 个字符，可用中英文、数字、空格、下划线、点或连字符。';
-const attr=value=>String(value).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-const loginPage=(error='',username='')=>`<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>AssetVault · 局域网访问</title><style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#101820;color:#dce5ee;font:15px system-ui}main{width:min(340px,80vw);padding:32px;border:1px solid #30414f;border-radius:18px;background:#17222c}h1{font-size:25px;margin:0 0 8px}p{color:#9badbc;line-height:1.7}input,button{box-sizing:border-box;width:100%;padding:13px;border-radius:9px;border:1px solid #394e5f;font:inherit}input{background:#101820;color:#eee;margin:8px 0 14px}button{background:#c9f581;color:#192613;cursor:pointer}.error{color:#edaa89}</style><main><h1>AssetVault</h1><p>填写你的名字和主机设置的共享密码，访问同一资产库。</p>${error?`<p class="error">${error}</p>`:''}<form method="post" action="/api/lan/login"><label for="username">你的名字</label><input id="username" name="username" type="text" autocomplete="nickname" required autofocus maxlength="24" value="${attr(username)}"><label for="password">访问密码</label><input id="password" name="password" type="password" autocomplete="current-password" required maxlength="128"><button type="submit">进入资产库</button></form></main></html>`;
 
 export function createLanSharing({file,interfaces=()=>os.networkInterfaces(),now=Date.now}){ let config={enabled:false,salt:'',hash:''},configError='';
  let listener=null,memberDirectory=null;
@@ -90,7 +92,7 @@ export function createLanSharing({file,interfaces=()=>os.networkInterfaces(),now
   await listener?.sync();return status(port);
  }
  // no-referrer turns an HTTP form POST's Origin into null; keep it only within this origin.
- function html(res,error='',statusCode=200,username=''){res.writeHead(statusCode,{'Content-Type':'text/html; charset=utf-8','Referrer-Policy':'same-origin','Content-Security-Policy':"default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'"});res.end(loginPage(error,username));return true;}
+ function html(res,error='',statusCode=200,username=''){res.writeHead(statusCode,{'Content-Type':'text/html; charset=utf-8','Referrer-Policy':'same-origin','Content-Security-Policy':"default-src 'none'; style-src 'self'; img-src 'self'; script-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'"});res.end(loginPage(error,username));return true;}
  async function handle(req,res){
   const port=req.socket.localPort,ip=normalizeIP(req.socket.remoteAddress),host=req.headers.host;
   const localHosts=[`127.0.0.1:${port}`,`localhost:${port}`];
@@ -167,12 +169,24 @@ export function createLanSharing({file,interfaces=()=>os.networkInterfaces(),now
   const session=sessions.get(token);
   if(!session||session.ip!==ip||session.expires<=now()){
    sessions.delete(token);
+   // 登录页本身要用的静态资源（样式表、背景图、密码显隐脚本、图标）必须放行，
+   // 否则没登录的人看到的是一张没有样式的裸 HTML。这几份都是构建产物，不含任何数据。
+   if(req.method==='GET'&&LOGIN_ASSETS.has(pathname))return false;
    return req.method==='GET'&&(pathname==='/'||pathname==='/splash.html')?html(res):reply(res,401,{error:'请刷新页面并输入共享密码'});
   }
   req.lanVisitor=true;
   // 名字仅用于展示，权限只来自主机批准的会话绑定，永不从客户端 header 导入。
   req.lanUser=session.username;
   req.lanMemberId=session.memberId||'';
+  // 访客会话=只读：共享密码页写的就是「只读权限」，所以总闸设在这里，
+  // 不再靠每个端点各自记得判断——漏一个，访客就能删除/改写主机资产库。
+  // 只放行明确只读的 POST（检索详情、导入预检、登录登出）和 AI（走主机额度、不暴露密钥）。
+  const GUEST_POST_OK=new Set(['/api/lan/login','/api/lan/logout','/api/library/assets/detail',
+   '/api/library/import-preflight','/api/library/picture-board','/api/library/browse-folder']);
+  if(req.method!=='GET'&&req.method!=='HEAD'){
+   const readOnlyPost=req.method==='POST'&&(GUEST_POST_OK.has(pathname)||pathname.startsWith('/api/ai/'));
+   if(!readOnlyPost)return reply(res,403,{error:'局域网访客为只读权限，不能修改主机内容'});
+  }
   // A shared session can use AI without reading the host's saved API secret.
   if(pathname==='/api/ai/key')return reply(res,403,{error:'仅主机本地可以查看 API 密钥'});
   const hostSettings=['/api/ai/settings','/api/ai/test','/api/downloads/settings','/api/downloads/pick-folder','/api/downloads/browse-folders','/api/downloads/reveal'];

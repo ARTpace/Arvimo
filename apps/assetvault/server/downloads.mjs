@@ -13,6 +13,7 @@ import {runKenneyJob} from './kenney.mjs';
 import {runFreestylizedJob} from './freestylized.mjs';
 import {runPolyforkJob} from './polyfork.mjs';
 import {runAmbientcgJob} from './ambientcg.mjs';
+import {runFabJob} from './fab.mjs';
 import {runUiverseJob} from './uiverse-job.mjs';
 import {runImageJob,markImageBundleIncomplete} from './image-bundle.mjs';
 import {isTransientNetworkError} from './net-errors.mjs';
@@ -41,7 +42,7 @@ const exists=p=>isFile(p)||isDir(p);
 const uidPattern=/^[a-f0-9]{32}$/;
 /** Both platforms feed one queue; the kind only decides which runner converts the model.
  *  `images` is the picture-only counterpart: no mesh, no FBX, no Blender — just the asset's pictures. */
-export const JOB_KINDS=new Set(['sketchfab','artstation','images','polyhaven','ambientcg','polypizza','kenney','freestylized','polyfork','simready','uielement']);
+export const JOB_KINDS=new Set(['sketchfab','artstation','images','polyhaven','ambientcg','polypizza','kenney','freestylized','polyfork','simready','uielement','fab']);
 export const ARTSTATION_BATCH=20;
 /** Pictures are small, so a picture batch may be as wide as a model batch; the ceiling is about
  *  keeping one request understandable, not about payload size. */
@@ -181,6 +182,12 @@ export function modelSnapshot(m,kind){
   if(!m.assetId)throw Error('ambientCG 资产 ID 缺失');
   return {...common,kind:'ambientcg',platform:'ambientcg',assetType:['hdris','models'].includes(m.assetType)?m.assetType:'textures',sourceType:String(m.sourceType||'material'),downloadable:false,url:String(m.url||`https://ambientcg.com/a/${m.assetId}`),assetId:String(m.assetId).slice(0,120)};
  }
+ // Fab：下载账号已拥有的引擎资产。assetId 是 Fab listing/asset id，随任务持久化，恢复队列时能重派；
+ // Epic 令牌不在任务里落库（走 fab/session.json），runner 从账号会话读取。引擎版本可选，随任务带上。
+ if(kind==='fab'){
+  if(!m.assetId)throw Error('Fab 资产 ID 缺失');
+  return {...common,kind:'fab',platform:'fab',downloadable:true,url:String(m.url||`https://www.fab.com/listings/${m.assetId}`),assetId:String(m.assetId).slice(0,120),engineVersion:String(m.engineVersion||'').slice(0,20)};
+ }
  return {...common,kind:'sketchfab',downloadable:m.downloadable===true,url:`https://sketchfab.com/models/${m.uid}`};
 }
 /** 命名规则搬到了 folder-name.mjs：远程收藏卡也用同一套，才能原地接管同一个目录。 */
@@ -192,8 +199,8 @@ function optionKey(value){
 }
 const sameFolder=(a,b)=>canonicalPath(a)===canonicalPath(b);
 export class DownloadManager{
- constructor({dataDir,defaultFolder,runner=runExportWorker,artRunner=runArtstationWorker,imageRunner=runImageJob,polyRunner=runPolyhavenJob,simreadyRunner=runSimreadyJob,pizzaRunner=runPolypizzaJob,kenneyRunner=runKenneyJob,freestyleRunner=runFreestylizedJob,polyforkRunner=runPolyforkJob,materialRunner=runAmbientcgJob,uiverseRunner=runUiverseJob,verify=verifyArchive,browser=browserPath,blender=blenderPath,fbxConverter=convertGlbToFbx,blenderImporter=launchBlenderImport,materialImporter=launchBlenderMaterialImport,hdriImporter=launchBlenderHdriImport,folderPicker=nativeFolderPicker,autoStart=true}={}){
-  this.instanceId=randomUUID();this.dataDir=path.resolve(dataDir);this.defaultFolder=path.resolve(defaultFolder);this.runner=runner;this.artRunner=artRunner;this.imageRunner=imageRunner;this.polyRunner=polyRunner;this.pizzaRunner=pizzaRunner;this.simreadyRunner=simreadyRunner;this.kenneyRunner=kenneyRunner;this.freestyleRunner=freestyleRunner;this.polyforkRunner=polyforkRunner;this.materialRunner=materialRunner;this.uiverseRunner=uiverseRunner;this.verify=verify;this.browser=browser;this.blender=blender;this.fbxConverter=fbxConverter;this.blenderImporter=blenderImporter;this.materialImporter=materialImporter;this.hdriImporter=hdriImporter;this.folderPicker=folderPicker;this.autoStart=autoStart;this.jobs=[];this.workers=new Map();this.transfers=new Map();this.closed=false;this.baseUrl=null;this.revision=0;this.timer=null;this.persistTimer=null;this.warning='';
+ constructor({dataDir,defaultFolder,runner=runExportWorker,artRunner=runArtstationWorker,imageRunner=runImageJob,polyRunner=runPolyhavenJob,simreadyRunner=runSimreadyJob,pizzaRunner=runPolypizzaJob,kenneyRunner=runKenneyJob,freestyleRunner=runFreestylizedJob,polyforkRunner=runPolyforkJob,materialRunner=runAmbientcgJob,uiverseRunner=runUiverseJob,fabRunner=runFabJob,verify=verifyArchive,browser=browserPath,blender=blenderPath,fbxConverter=convertGlbToFbx,blenderImporter=launchBlenderImport,materialImporter=launchBlenderMaterialImport,hdriImporter=launchBlenderHdriImport,folderPicker=nativeFolderPicker,autoStart=true}={}){
+  this.instanceId=randomUUID();this.dataDir=path.resolve(dataDir);this.defaultFolder=path.resolve(defaultFolder);this.runner=runner;this.artRunner=artRunner;this.imageRunner=imageRunner;this.polyRunner=polyRunner;this.pizzaRunner=pizzaRunner;this.simreadyRunner=simreadyRunner;this.kenneyRunner=kenneyRunner;this.freestyleRunner=freestyleRunner;this.polyforkRunner=polyforkRunner;this.materialRunner=materialRunner;this.uiverseRunner=uiverseRunner;this.fabRunner=fabRunner;this.verify=verify;this.browser=browser;this.blender=blender;this.fbxConverter=fbxConverter;this.blenderImporter=blenderImporter;this.materialImporter=materialImporter;this.hdriImporter=hdriImporter;this.folderPicker=folderPicker;this.autoStart=autoStart;this.jobs=[];this.workers=new Map();this.transfers=new Map();this.closed=false;this.baseUrl=null;this.revision=0;this.timer=null;this.persistTimer=null;this.warning='';
   this.settings={folder:this.defaultFolder,concurrency:1,retryLimit:1,paused:false};
   this.dismissedDownloads=new Set();
  }
@@ -327,12 +334,12 @@ export class DownloadManager{
   const polyHdri=kind==='polyhaven'&&Array.isArray(input.models)&&input.models.length>0&&input.models.every(m=>m?.assetType==='hdris');
   const polyMixed=kind==='polyhaven'&&Array.isArray(input.models)&&input.models.some(m=>m?.assetType==='textures'||m?.assetType==='hdris')&&!polyMaterial&&!polyHdri;
   if(polyMixed)throw Error('Poly Haven 的模型、材质和 HDRI 请分批下载');
-  const noun=kind==='artstation'?' ArtStation 作品':kind==='images'?'资产图片':kind==='uielement'?' UI 元素':polyHdri?' Poly Haven HDRI':polyMaterial?' Poly Haven 材质':kind==='polyhaven'?' Poly Haven 模型':kind==='ambientcg'?' ambientCG 材质':kind==='polypizza'?' Poly Pizza 模型':kind==='kenney'?' Kenney 资源包':kind==='polyfork'?' Polyfork 模型':kind==='freestylized'?' FreeStylized 资产':'模型';
+  const noun=kind==='artstation'?' ArtStation 作品':kind==='images'?'资产图片':kind==='uielement'?' UI 元素':polyHdri?' Poly Haven HDRI':polyMaterial?' Poly Haven 材质':kind==='polyhaven'?' Poly Haven 模型':kind==='ambientcg'?' ambientCG 材质':kind==='fab'?' Fab 资产':kind==='polypizza'?' Poly Pizza 模型':kind==='kenney'?' Kenney 资源包':kind==='polyfork'?' Polyfork 模型':kind==='freestylized'?' FreeStylized 资产':'模型';
   if(!Array.isArray(input.models)||!input.models.length||input.models.length>batch)throw Error(`每批最多添加 ${batch} 个${noun}`);
   if(kind==='ambientcg'&&new Set(input.models.map(m=>m.sourceType||'material')).size>1)throw Error('ambientCG 不同类型的资产请分批下载');
   if(this.storageError)throw Error(this.storageError);if(this.jobs.length>=500)throw Error('任务记录已达 500 条，请清理已结束记录');
   const requestedOptions=openInBlender?{...input.options,output:'folder',format:'fbx'}:input.options;
-  const options=kind==='simready'?{output:'folder',format:'usd'}:kind==='images'?imageOptions(requestedOptions):kind==='uielement'?{output:'folder'}:kind==='ambientcg'||polyMaterial?materialOptions(requestedOptions):polyHdri?{output:'folder',resolution:MATERIAL_RESOLUTIONS.has(requestedOptions?.resolution)?requestedOptions.resolution:'2K',textureFormat:'HDR'}:kind==='polypizza'||kind==='kenney'?{output:'folder',format:'glb'}:kind==='polyfork'?{output:'folder',format:requestedOptions?.format==='fbx'?'fbx':'glb'}:kind==='freestylized'?{output:'folder',format:'glb',resolution:MATERIAL_RESOLUTIONS.has(requestedOptions?.resolution)?requestedOptions.resolution:'2K'}:exportOptions(kind==='artstation'?{...requestedOptions,packMode:'glb'}:requestedOptions);
+  const options=kind==='simready'?{output:'folder',format:'usd'}:kind==='fab'?{output:'folder'}:kind==='images'?imageOptions(requestedOptions):kind==='uielement'?{output:'folder'}:kind==='ambientcg'||polyMaterial?materialOptions(requestedOptions):polyHdri?{output:'folder',resolution:MATERIAL_RESOLUTIONS.has(requestedOptions?.resolution)?requestedOptions.resolution:'2K',textureFormat:'HDR'}:kind==='polypizza'||kind==='kenney'?{output:'folder',format:'glb'}:kind==='polyfork'?{output:'folder',format:requestedOptions?.format==='fbx'?'fbx':'glb'}:kind==='freestylized'?{output:'folder',format:'glb',resolution:MATERIAL_RESOLUTIONS.has(requestedOptions?.resolution)?requestedOptions.resolution:'2K'}:exportOptions(kind==='artstation'?{...requestedOptions,packMode:'glb'}:requestedOptions);
   if(kind==='ambientcg'&&input.models.every(m=>m.sourceType==='substance'))options.textureFormat='SBSAR';
   const models=input.models.map(m=>modelSnapshot(m,kind)),added=[],duplicates=[],opened=[];
   // 已下载的重复项要「顺手送进 Blender」时，导入可能要几十秒，不能在循环里串行等：
@@ -467,6 +474,8 @@ export class DownloadManager{
      ?await this.polyforkRunner({uid:j.uid,output:staged,assetId:j.assetId,options:j.options},{signal,progress:onProgress})
     :j.kind==='uielement'
      ?await this.uiverseRunner({uid:j.uid,url:j.url,assetId:j.assetId,name:j.name,author:j.author,tags:j.tags,output:staged},{signal,progress:onProgress})
+    :j.kind==='fab'
+     ?await this.fabRunner({uid:j.uid,assetId:j.assetId,options:j.options,output:staged,deliver:looseStage?'folder':'zip',workRoot:profile},{signal,progress:onProgress})
     :await this.runner({networkToken,uid:j.uid,options:runnerOptions,baseUrl:this.baseUrl,output:staged,profile},{signal,progress:onProgress});
    signal.throwIfAborted();
 

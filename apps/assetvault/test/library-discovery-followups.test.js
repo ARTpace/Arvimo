@@ -74,7 +74,11 @@ test('预览资源跨预览复用缓存，且必须有容量上限',()=>{
  assert.ok(!/for\(const b of gltf\.buffers\)[\s\S]{0,160}await toBlobURL/.test(inline),
   '不能在循环里逐个 await，那正是串行的来源');
  // 加载反馈：有缓存后重复预览近乎瞬时，但首次仍要下载，纯黑画面没有等待感。
- assert.ok(code.includes("hint.classList.toggle('busy'"),'加载提示要能进入转圈状态');
+ // 2026-11 起改成整块加载过渡层：#state 是唯一状态源，MutationObserver 驱动
+ // #viewer-loading 显隐与文案，不再靠 hint.classList.toggle('busy')。
+ assert.ok(code.includes('function bindLoadingOverlay()'),'要有加载过渡层的绑定入口');
+ assert.ok(code.includes("document.getElementById('viewer-loading')"),'过渡层容器要接上');
+ assert.ok(code.includes('new MutationObserver(sync).observe(stateEl'),'由 #state 变化驱动，不改各处 setHint');
  assert.ok(read('src/library/app.css').includes('@keyframes viewer-spin'),'app.css 要有关联的动画');
 });
 

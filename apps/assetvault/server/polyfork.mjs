@@ -177,7 +177,7 @@ export async function runPolyforkJob({uid,output,assetId,options={}},{signal,pro
   license:String(meta?.license||LICENSE),
   exports:Object.keys(meta?.export_formats||{}),
   exportedAt:new Date().toISOString(),
-  tool:'AssetVault · Polyfork',
+  tool:'Arvimo · Polyfork',
   note:'Polyfork 低模，商用免署名，禁止把文件本身再分发。它是程序化资产：几何由参数生成，这份文件是其中一档参数的快照。GLB 与 FBX 取自同一档参数。',
  };
  await fs.writeFile(path.join(output,'info.json'),JSON.stringify(record,null,2),'utf8');

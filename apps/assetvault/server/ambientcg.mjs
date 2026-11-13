@@ -385,7 +385,7 @@ export async function runAmbientcgJob({uid,options,output,deliver='folder',workR
         maps:Array.isArray(asset.maps)?asset.maps.map(String):[],
         textures:[],
         note:'ambientCG Substance 编译包（.sbsar），CC0 1.0。用 Substance 3D Designer / Painter 打开；烘焙贴图请另选 JPG 或 PNG。',
-        exportedAt:new Date().toISOString(),tool:'AssetVault · ambientCG (CC0)',
+        exportedAt:new Date().toISOString(),tool:'Arvimo · ambientCG (CC0)',
       };
       progress({stage:'converting',message:deliver==='folder'?'正在写出 Substance 文件…':'正在打包 Substance ZIP…'});
       const written=await writeEntriesDeliverable({entries:[{name:fileName,data},{name:'info.json',data:Buffer.from(JSON.stringify(meta,null,2),'utf8')}],output,deliver,signal,progress,message:'Substance 文件已就绪'});
@@ -416,7 +416,7 @@ export async function runAmbientcgJob({uid,options,output,deliver='folder',workR
       textures:kept.map(k=>({file:k.name,map:k.map,bytes:k.bytes,sourceFile:k.sourceFile,url:chosen.url})),
       ...(skipped.length?{skippedFiles:skipped}:{}),
       note:'ambientCG 材质，CC0 1.0 通用公共领域贡献，可商用无需署名。贴图重命名自官方材质包。',
-      exportedAt:new Date().toISOString(),tool:'AssetVault · ambientCG (CC0)',
+      exportedAt:new Date().toISOString(),tool:'Arvimo · ambientCG (CC0)',
     };
     const payloadEntries=kept.map(k=>({name:k.name,data:k.data}));
     payloadEntries.push({name:'info.json',data:Buffer.from(JSON.stringify(meta,null,2),'utf8')});

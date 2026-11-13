@@ -25,7 +25,10 @@ test('写入后原字符串逐字节读回，派生索引同步生成', () => {
     db.writeValues(values, {replace: true});
     assert.equal(db.readValues()['sfx-library-v2'], values['sfx-library-v2']);
     assert.equal(db.readValues()['sfx-library-ui'], values['sfx-library-ui']);
-    assert.deepEqual(db.counts(), {assets: 2, tags: 4, assetTags: 4, collections: 0, migrations: 4});
+    // 迁移版本会随 schema 增长，只断言派生表计数与「迁移已执行」，不写死版本号。
+    const counts = db.counts();
+    assert.deepEqual({assets: counts.assets, tags: counts.tags, assetTags: counts.assetTags, collections: counts.collections}, {assets: 2, tags: 4, assetTags: 4, collections: 0});
+    assert.ok(counts.migrations >= 4, '迁移应全部执行');
     assert.equal(db.raw('SELECT rating, favorite FROM assets ORDER BY position').length, 2);
     assert.equal(db.raw(`SELECT rating FROM assets WHERE uid = '${a}'`)[0].rating, 4);
   } finally { db.close(); fs.rmSync(dir, {recursive: true, force: true}); }
@@ -63,10 +66,12 @@ test('重新打开同一个库不会重复执行迁移', () => {
   const first = createLibraryDb({Database, file});
   first.writeValues(values, {replace: true});
   first.setMeta('snapshot_at', '123');
+  const applied = first.counts().migrations;
   first.close();
   const second = createLibraryDb({Database, file});
   try {
-    assert.equal(second.counts().migrations, 4);
+    // 与首次打开后的版本数比对，而不是钉死某个版本号：新增迁移不应让这条测试变红。
+    assert.equal(second.counts().migrations, applied, '重新打开不应重复套用迁移');
     assert.equal(second.getMeta('snapshot_at'), '123');
     assert.equal(second.counts().assets, 2);
   } finally { second.close(); fs.rmSync(dir, {recursive: true, force: true}); }

@@ -18,7 +18,7 @@ const here=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const sidecar=path.join(here,'src-tauri','sidecar-server');
 const libraryProject=process.env.LIBRARY_PROJECT
   ?path.resolve(process.env.LIBRARY_PROJECT)
-  :path.resolve(here,'..','sketchfab-exporter');
+  :path.resolve(here,'..');
 const libServer=path.join(libraryProject,'server');
 const libDist=path.join(libraryProject,'dist','library');
 const libSrc=path.join(libraryProject,'src','library');

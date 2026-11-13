@@ -81,7 +81,7 @@ export async function runPolypizzaJob({uid,output,assetId},{signal,progress=()=>
  const dest=path.join(output,'model.glb');
  const fd=await fs.open(dest,'w');
  try{for await(const chunk of file.stream){signal?.throwIfAborted();await fd.write(chunk);}}finally{await fd.close();}
- const meta={uid,platform:'polypizza',assetId,url:`${SITE}/m/${assetId}`,format:'glb',exportedAt:new Date().toISOString(),tool:'AssetVault · Poly Pizza',note:'Poly Pizza 公开 glTF。许可以模型页为准，CC0 与 CC-BY 都会出现。'};
+ const meta={uid,platform:'polypizza',assetId,url:`${SITE}/m/${assetId}`,format:'glb',exportedAt:new Date().toISOString(),tool:'Arvimo · Poly Pizza',note:'Poly Pizza 公开 glTF。许可以模型页为准，CC0 与 CC-BY 都会出现。'};
  await fs.writeFile(path.join(output,'info.json'),JSON.stringify(meta,null,2),'utf8');
  return {zipName:`${String(assetId).replace(/[^\w.-]/g,'_').slice(0,80)}.zip`};
 }

@@ -617,7 +617,7 @@ function bridgeRequest(payload,{port=BRIDGE_PORT,timeout=BRIDGE_TIMEOUT}={}){
   const socket=createConnection({host:'127.0.0.1',port},()=>socket.write(JSON.stringify(payload)+'\n'));
   socket.setEncoding('utf8');
   socket.setTimeout(timeout,()=>finish(reject,bridgeError('TIMEOUT','等待已打开的 Blender 响应超时')));
-  socket.on('error',err=>finish(reject,bridgeError(err.code==='ECONNREFUSED'?'ECONNREFUSED':(err.code||'ERROR'),err.code==='ECONNREFUSED'?'未发现正在监听的 AssetVault Blender Bridge':err.message)));
+  socket.on('error',err=>finish(reject,bridgeError(err.code==='ECONNREFUSED'?'ECONNREFUSED':(err.code||'ERROR'),err.code==='ECONNREFUSED'?'未发现正在监听的 Arvimo Blender Bridge':err.message)));
   socket.on('close',()=>finish(reject,bridgeError('CLOSED','Blender 桥接连接已关闭')));
   socket.on('data',chunk=>{
    data+=chunk;
@@ -662,8 +662,8 @@ async function waitForBridge({attempts=PING_ATTEMPTS,intervalMs=PING_INTERVAL_MS
 
 function bridgeHint(install,running){
  const parts=[];
- if(running)parts.push('检测到 Blender 已经打开，但当前实例还没有启用 AssetVault Bridge。');
- else parts.push('未连接到已打开并启用 AssetVault Bridge 的 Blender。');
+ if(running)parts.push('检测到 Blender 已经打开，但当前实例还没有启用 Arvimo Bridge。');
+ else parts.push('未连接到已打开并启用 Arvimo Bridge 的 Blender。');
  if(install.installed)parts.push('已把桥接启动脚本安装到 Blender 配置目录；请重启/重新打开 Blender 一次，然后重新点击“Blender”。');
  else parts.push('没有找到可安装的 Blender 用户配置目录；请先打开一次 Blender，或把 '+bridgeScript+' 放到 Blender 的 scripts/startup 目录。');
  if(install.errors?.length)parts.push('安装提示：'+install.errors.slice(0,2).join('；'));
@@ -671,7 +671,7 @@ function bridgeHint(install,running){
  return parts.join('');
 }
 
-/** Imports into the current scene of an already-open Blender instance via AssetVault Bridge. */
+/** Imports into the current scene of an already-open Blender instance via Arvimo Bridge. */
 export async function launchBlenderImport(location,{blender=blenderPath}={}){
  const asset=resolveBlenderImport(location);
  try{
@@ -700,7 +700,7 @@ async function prepareBridge(blender){
  const ping=await waitForBridge();
  if(ping.online)return;
  if(ping.reason==='busy'){
-  throw Error('已经连上 Blender 里的 AssetVault Bridge，但它一直没有响应：Blender 可能仍在启动（正在加载插件/场景），或正在执行其它耗时操作。请等几秒后重新点击“Blender”。');
+  throw Error('已经连上 Blender 里的 Arvimo Bridge，但它一直没有响应：Blender 可能仍在启动（正在加载插件/场景），或正在执行其它耗时操作。请等几秒后重新点击“Blender”。');
  }
  const executable=blender?.();
  const hasExecutable=!!executable&&existsFile(executable);

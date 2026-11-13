@@ -13,6 +13,7 @@ import {
   CANVAS_VERSION, createCanvas, createCanvasWriter, elementsBounds,
   gridLayout, newId, normalizeCamera, normalizeElement, readCanvasDoc,
 } from './canvas-store.js';
+import {thumbSrc} from './image-src.js';
 
 const Z_MIN = 0.05;
 const Z_MAX = 6;
@@ -81,7 +82,7 @@ export function createBoardCanvas(ctx = {}) {
     if (!model) return '';
     const raw = model.thumbnail || model.thumb || '';
     if (!raw) return '';
-    return `/api/image?url=${encodeURIComponent(raw)}`;
+    return thumbSrc(raw);
   }
 
   function labelOf(element) {
@@ -727,7 +728,7 @@ export function createBoardCanvas(ctx = {}) {
     if (element.src) { win?.open?.(element.src, '_blank', 'noopener'); return; }
     if (model) {
       const raw = model.thumbnail || '';
-      if (raw) win?.open?.(`/api/image?url=${encodeURIComponent(raw)}`, '_blank', 'noopener');
+      if (raw) win?.open?.(thumbSrc(raw, {full: true}), '_blank', 'noopener');
       else toast?.('这个资产没有可打开的缩略图');
     }
   }

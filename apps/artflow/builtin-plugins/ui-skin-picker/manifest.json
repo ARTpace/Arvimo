@@ -5,7 +5,7 @@
   "minHostVersion": "1.0.0",
   "name": "主题库",
   "nameI18n": {"en": "Theme Gallery"},
-  "author": "Artflow",
+  "author": "Arvimo",
   "license": "MIT",
   "runtime": {
     "mode": "builtin",

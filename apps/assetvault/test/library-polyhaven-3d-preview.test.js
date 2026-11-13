@@ -51,7 +51,11 @@ test('Poly Haven 三类资产都走本地 3D 预览，贴图与 HDRI 不许退�
 
 test('预览容器与 three.js 依赖都到位',()=>{
  assert.ok(html.includes('id="viewer-canvas"'),'弹窗里要有 canvas 容器给本地渲染用');
- assert.ok(html.includes('id="viewer-caption"'),'底部说明要能按预览类型换文案');
+ // 2026-11 底部 caption 整块移除（gltf-preview.js:185 保留空函数只为兼容调用点），
+ // 加载说明由过渡层承载，#state 是唯一状态源。
+ assert.equal(html.includes('id="viewer-caption"'),false,'底部 caption 已按设计移除');
+ assert.ok(html.includes('id="viewer-loading-text"'),'加载说明改由过渡层文案承载');
+ assert.ok(html.includes('id="state"'),'#state 仍是唯一加载状态源');
  for(const f of ['three.module.js','loaders/GLTFLoader.js','controls/OrbitControls.js','environments/RoomEnvironment.js','utils/BufferGeometryUtils.js']){
   assert.ok(fs.existsSync(path.join(root,'vendor/three',f)),`vendor/three 缺少 ${f}`);
  }

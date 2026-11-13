@@ -14,8 +14,12 @@ import {registerFavoriteTarget,favoriteButtonHtml} from './favorite-targets.js';
 export function createCardView({icon,esc,fmt,state,queuePulse,imageDownload,sendControl,platformLabel,artstationUI=()=>null,downloadsUI=()=>null,isVisitor=false}){
 /** 封面一律走本地代理，代理负责按需降级到能取到的档位；
  *  画廊额外点名要轻一档的等比图，好让瀑布流按原图比例排且不吃带宽。 */
+/** 同源相对地址（托管副本 / 本地索引文件的缩略图，如 /api/local/thumb?…）已经是本机直出，
+ *  再套一层 /api/image 代理会被「只支持图床地址」的白名单挡下来 —— 卡片上就是一张裂图。 */
+function isLocalUrl(url){return /^\/(?!\/)/.test(String(url||''));}
 function imageUrl(model,{gallery=false}={}){
  if(!model.thumbnail)return '';
+ if(isLocalUrl(model.thumbnail))return model.thumbnail;
  const rendition=coverRendition({platform:model.platform,gallery});
  return `/api/image?url=${encodeURIComponent(model.thumbnail)}${rendition?`&rendition=${rendition}`:''}`;
 }
@@ -26,7 +30,7 @@ function isMaterial(m){return m.platform==='ambientcg'&&(!m.assetType||m.assetTy
  *  textures 近方 255×256），而卡片是 1:1 容器 + object-fit:cover —— 直接 cover 会把模型切掉上半、把全景切掉两端。
  *  Sketchfab 横幅效果图、ambientCG / FreeStylized 的贴图同理，复用 contain 并关闭悬停放大。
  *  归到独立标记而不是复用 isMaterial：那只是「是不是贴图」，与「要不要裁切」无关。 */
-function needsFullThumb(m){return m.platform==='sketchfab'||m.platform==='polyhaven'||m.platform==='ambientcg'||m.platform==='freestylized';}
+function needsFullThumb(m){return m.platform==='local'||m.platform==='sketchfab'||m.platform==='polyhaven'||m.platform==='ambientcg'||m.platform==='freestylized';}
 function isHdri(m){return ['polyhaven','ambientcg'].includes(m.platform)&&m.assetType==='hdris';}
 /** 精度下拉里给已下载的档位打勾：只下载过 4K 时，1K/2K/8K 都不该被误标。
  *  downloadedRes 由卡片侧从后端任务现算（state==='saved' 且文件还在，无 options 的老任务算默认 2K）。 */
@@ -70,8 +74,11 @@ function card(m,{gallery=false}={}){
  // Poly Haven 只有 models 有网格可转，HDRI 是全景图、贴图是平铺图，转不了视角就别写「3D 预览」。
  // FreeStylized 的资源包 / Alpha / 智能材质里没有可渲染的东西（点开是官方页面），角标跟着改。
  const fsNoScene=m.platform==='freestylized'&&!['models','textures','skybox'].includes(m.assetType||'models');
- const previewLabel=art&&!art3d?'查看作品图片':fsNoScene?'打开官方页面':'交互式 3D 预览';
- const previewIcon=art&&!art3d?'image':fsNoScene?'external':'rotate';
+ // 本地素材（拖入导入 / 导入文件夹入库，platform='local'）根本没有 3D 场景可转，
+ // 按资产形态给实话：图片就写「查看图片」，视频「播放视频」，其余「打开文件」。
+ const localLabel=m.platform==='local'?(m.assetType==='video'?'播放视频':m.assetType==='image'?'查看图片':'打开文件'):'';
+ const previewLabel=localLabel||(art&&!art3d?'查看作品图片':fsNoScene?'打开官方页面':'交互式 3D 预览');
+ const previewIcon=localLabel?(m.assetType==='video'?'play':m.assetType==='image'?'image':'external'):(art&&!art3d?'image':fsNoScene?'external':'rotate');
  // 「加入模型库」徽标和「打开下载文件夹」小图标已收进右键菜单：封面上只留预览热区、
  // 收藏心形、选择方块与资源类型角标，别让四个角各摆一颗带中文的按钮。
  // savedJob 仍供下面的导出控件 / 下载态判定使用。
@@ -93,7 +100,9 @@ function card(m,{gallery=false}={}){
  const dlAria=isVisitor?'下载到这台电脑':busy?'队列中':'下载到本地';
  // 已下载的资产不再显示那个不能点的「✓ 已下载」键（2026-10-29 用户要求）：
  // 封面上只剩一个「发送到」键 —— 已下载的资产唯一还需要做的就是导出到别的软件。
- const downloadButton=(downloaded&&!isVisitor)?'':`<button class="card-download${dlBusy?' busy':''}" data-action="download" data-uid="${m.uid}" ${dlDisabled?'disabled':''} title="${dlTitle}" aria-label="${dlAria}">${icon(busy?'clock':'download')}<span>${dlLabel}</span></button>`;
+ // 本地素材（platform='local'）文件就在本机，没有「下载」这个动作可做：给它一颗点了必然失败的键
+// 只会误导，直接不渲染 —— 打开/预览走封面热区。
+const downloadButton=(downloaded&&!isVisitor)||m.platform==='local'?'':`<button class="card-download${dlBusy?' busy':''}" data-action="download" data-uid="${m.uid}" ${dlDisabled?'disabled':''} title="${dlTitle}" aria-label="${dlAria}">${icon(busy?'clock':'download')}<span>${dlLabel}</span></button>`;
  // meta 一行化：作者与平台标签重复时（如 ambientCG）不再显示，只留「标题 · 作者 · 许可」。
  const byline=m.author&&m.author.trim()!==platformLabel(m.platform)?authorButton(m,'card-byline'):'';
  // 左上角只放资源类型标志（模型/材质/HDRI/天空盒…）。下载与导出状态由左下角「已加入模型库」、

@@ -39,7 +39,9 @@ test('ArtStation discovery opens one resolved gallery with all scenes before ima
  const originalParser=Object.getOwnPropertyDescriptor(globalThis,'DOMParser');
  globalThis.DOMParser=class {parseFromString(){return {body:{textContent:''}};}};
  t.after(()=>{if(originalParser)Object.defineProperty(globalThis,'DOMParser',originalParser);else delete globalThis.DOMParser;});
- for(const [name,value] of Object.entries({MutationObserver:class {observe(){}},ResizeObserver:class {observe(){}},requestAnimationFrame:()=>1,window:{addEventListener(){}}})){
+ const {parseHTML}=await import('linkedom');
+ const {document}=parseHTML('<!doctype html><html><body></body></html>');
+ for(const [name,value] of Object.entries({document,MutationObserver:class {observe(){}},ResizeObserver:class {observe(){}},requestAnimationFrame:()=>1,window:{addEventListener(){}}})){
   const original=Object.getOwnPropertyDescriptor(globalThis,name);
   Object.defineProperty(globalThis,name,{configurable:true,writable:true,value});
   t.after(()=>{if(original)Object.defineProperty(globalThis,name,original);else delete globalThis[name];});
@@ -48,7 +50,7 @@ test('ArtStation discovery opens one resolved gallery with all scenes before ima
  const opened=[];
  const aside={dataset:{},innerHTML:'',querySelector:()=>null};
  const state={route:'discover',favorites:new Set()};
- const view=createLibraryView({$:selector=>selector==='#preview-dialog'?{open:false}:selector==='#file-preview-details'?aside:{addEventListener(){}},state,icon:name=>`<i>${name}</i>`,esc:value=>String(value??''),sendControl:()=>'<button data-action="export-go" data-id="saved-art">导出</button>',downloadsUI:()=>({jobs:[]}),findModel:()=>model,artstationUI:()=>({isArt:()=>true}),toast:()=>{},openImageGallery:options=>opened.push(options)});
+ const view=createLibraryView({$:selector=>selector==='#preview-dialog'?{open:false}:selector==='#file-preview-details'?aside:{addEventListener(){}},state,icon:name=>`<i>${name}</i>`,esc:value=>String(value??''),sendControl:()=>'<button data-action="export-go" data-id="saved-art">导出</button>',downloadsUI:()=>({jobs:[]}),findModel:()=>model,artstationUI:()=>({isArt:()=>true,has3dScene:()=>false}),toast:()=>{},openImageGallery:options=>opened.push(options)});
  const pending=view.preview('art');
  assert.equal(opened.length,0,'must not display a temporary cover gallery');
  resolveFetch({ok:true,json:async()=>({scenes:[{id:'1',type:'3d',embedUrl:'https://www.artstation.com/embed/1'},{id:'2',type:'3d',embedUrl:'https://www.artstation.com/embed/2'}],items:[{url:'https://cdna.artstation.com/image.jpg'}]})});

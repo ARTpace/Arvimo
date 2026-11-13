@@ -112,8 +112,10 @@ test('the top-left corner shows only the asset type, never download or export st
  const saved=build(undefined,()=>({jobs:[{uid:model.uid,state:'saved',fileExists:true,id:'job-1'}]}));
  const html=saved.card(model);
  assert.equal(html.includes('已有导出记录'),false,'左上角不得再显示导出记录');
- const badge=html.match(/<div class="card-type">.*?<\/div>/s)?.[0]||'';
- assert.ok(badge.includes('PBR 材质'),'类型位只放资源类型');
+ // 2026-11 起类型角标整块撤掉：类型与许可一起收进封面上的 card-facts 弹层，
+ // 左上角只剩那颗信息键，不再有任何状态角标。
+ assert.equal(html.includes('card-type'),false,'类型角标已移除');
+ assert.ok(html.includes('card-facts-btn')&&html.includes('PBR 材质'),'类型文案收进信息弹层');
  assert.equal(/card-type">[^<]*check/.test(html),false,'已下载也不该把类型图标换成对勾');
 });
 
@@ -160,9 +162,10 @@ test('a Sketchfab asset keeps the author in the single-row meta when it differs 
 test('meta is a single row: title + license, no separate stats row',()=>{
  const html=render({uid:'sf-2',name:'Rock',author:'studio',platform:'sketchfab',faces:1234,views:1200,likes:34,thumbnail:'',license:'CC0',downloadable:true});
  assert.equal(html.includes('card-stats'),false,'统计行已随单行化移除');
- assert.ok(html.includes('card-license'),'许可在同一行内显示');
+ assert.equal(html.includes('card-license'),false,'许可说明键已撤，不再占信息行');
+ assert.ok(html.includes('card-facts')&&html.includes('CC0'),'许可全文收进封面信息弹层');
  // 动作行必须是 card-meta 的兄弟：meta 变成 flex 布局后，误嵌套会把按钮拉进信息行
- assert.match(html,/<\/div><\/div><div class="card-bottom">/,'card-bottom 必须与 card-meta 平级，不能嵌在信息行里');
+ assert.match(html,/<\/div><div class="card-bottom">/,'card-bottom 必须与 card-meta 平级，不能嵌在信息行里');
 });
 
 test('ambientCG cards carry a resolution picker left of the download button, others do not',()=>{
@@ -211,7 +214,7 @@ test('compact list view is gone: overlays stay on the thumbnail in both remainin
   assert.equal(html.includes('card-controls'),false,'不应再渲染紧凑视图的独立控件行');
   assert.equal(html.includes('compact-preview'),false,'紧凑视图专属预览键应已移除');
   const media=html.slice(html.indexOf('card-media'),html.indexOf('card-meta'));
-  assert.ok(media.includes('preview-hit')&&media.includes('favorite')&&media.includes('card-type'),'角标与按键仍叠在缩略图上');
+  assert.ok(media.includes('preview-hit')&&media.includes('favorite')&&media.includes('card-facts-btn'),'角标与按键仍叠在缩略图上');
   assert.ok(html.includes('thumbnail'),'缩略图本身要保留');
  }
 });
@@ -235,12 +238,12 @@ test('the meta row drops the downloadable tag and folds the license into a hint 
  // 2026-10-21：许可不再占一行文字（会把标题与作者一起挤成省略号），收成一枚 ? 键，悬停看全文。
  const html=render({uid:'l'.repeat(32),name:'Aerial Asphalt 01',author:'Rob Tuytel',platform:'polyhaven',assetType:'textures',thumbnail:'',license:'CC0 1.0 通用公共领域贡献',downloadable:true});
  assert.equal(html.includes('license-tag'),false,'「● 可下载」标识去掉');
- assert.ok(html.includes('license-hint'),'许可变成说明键');
+ assert.equal(html.includes('license-hint'),false,'说明键已撤：许可不再占信息行');
  assert.equal(/>CC0</.test(html),false,'许可缩写不再直接铺在信息行里');
- assert.ok(html.includes('CC0 1.0 通用公共领域贡献 · 可下载不代表可商用'),'完整许可说明留在 title 里');
- // 任何许可全称都要能被悬停读到，不能截断
+ assert.ok(html.includes('card-facts')&&html.includes('CC0 1.0 通用公共领域贡献'),'完整许可全文进信息弹层');
+ // 任何许可全称都要能在弹层里读到，不能截断
  const by=render({uid:'m'.repeat(32),name:'X',author:'a',thumbnail:'',license:'CC BY-NC-SA 4.0',downloadable:true});
- assert.ok(by.includes('CC BY-NC-SA 4.0 · 可下载不代表可商用'),'CC BY-NC-SA 全文进 title');
+ assert.ok(by.includes('CC BY-NC-SA 4.0'),'CC BY-NC-SA 全文进信息弹层');
  // 标题固定单行：长名字一律省略号截断，不再撑到两行把卡片拉高（2026-10-16 用户要求）
  // 只约束资产卡标题自身：图站搜索卡与图片包脚注标题另有两行截断需求，不该被全局断言误伤。
  const cardTitleRule=(css.match(/\.card-title\{[^}]*\}/)||[])[0]||'';

@@ -1,3 +1,4 @@
+import { createPortal } from 'react-dom';
 import React, { useState, useEffect, useLayoutEffect, useRef } from 'react';
 import type { Kernel } from '../plugin-runtime/kernel';
 import { listSettingsSectionContributions } from '../plugin-runtime/settings-contributions';
@@ -134,13 +135,59 @@ export const CanvasSettings: React.FC<CanvasSettingsProps> = ({
         isSettingsSectionId,
     );
     const settingsSections = listSettingsSectionContributions(kernel);
+    const unifiedHost = typeof window !== 'undefined' && window.parent !== window && window.parent.location.origin === window.location.origin;
+    const [hostTarget, setHostTarget] = useState<ShadowRoot | null>(null);
+    const sectionSignature = settingsSections.map(section => section.id).join('|');
+    // ponytail: reuse live components and stores; only change their rendering destination.
+    useEffect(() => {
+        if (!unifiedHost) return;
+        const parent = window.parent;
+        const select = (event: Event) => {
+            const id = (event as CustomEvent<{id: string | null}>).detail?.id;
+            const page = id ? parent.document.getElementById(`settings-page-${id}`) : null;
+            if (!page || !id) { setHostTarget(null); return; }
+            setActiveTab(id);
+            const shadow = page.shadowRoot ?? page.attachShadow({mode: 'open'});
+            shadow.querySelectorAll('[data-arvimo-style]').forEach(node => node.remove());
+            document.querySelectorAll('style,link[rel="stylesheet"]').forEach(node => {
+                const clone = node.cloneNode(true) as HTMLElement;
+                if (node instanceof HTMLLinkElement) clone.setAttribute('href', node.href);
+                clone.dataset.arvimoStyle = '';
+                shadow.append(clone);
+            });
+            const computed = getComputedStyle(document.documentElement);
+            for (let index = 0; index < computed.length; index++) {
+                const name = computed[index];
+                if (name.startsWith('--')) page.style.setProperty(name, computed.getPropertyValue(name));
+            }
+            // Host-owned style is last so canvas skins cannot recolor the unified settings.
+            parent.document.querySelectorAll('link[data-arvimo-settings-style]').forEach(node => {
+                const clone = node.cloneNode(true) as HTMLLinkElement;
+                clone.href = (node as HTMLLinkElement).href;
+                clone.dataset.arvimoStyle = '';
+                shadow.append(clone);
+            });
+            setHostTarget(shadow);
+        };
+        parent.addEventListener('arvimo:settings-select', select);
+        parent.dispatchEvent(new CustomEvent('arvimo:settings-register', {detail: {
+            source: window,
+            sections: settingsSections.map(section => ({id: section.id, label: section.value.label(language), group: section.value.navGroup, category: section.value.category})),
+        }}));
+        return () => parent.removeEventListener('arvimo:settings-select', select);
+    }, [unifiedHost, sectionSignature, language]);
+    useEffect(() => {
+        if (!unifiedHost || !isOpen) return;
+        window.parent.dispatchEvent(new CustomEvent('arvimo:settings-open', {detail: {id: requestedSectionId || 'builtin.view-tools.view'}}));
+        onClose();
+    }, [unifiedHost, isOpen, requestedSectionId]);
     const activeSettingsSection = settingsSections.find(section => section.id === activeTab);
     const ActiveSettingsSection = activeSettingsSection?.value.component;
 
     // —— settings.ui-bridge：插件 section 组件的状态桥（原地更新 + 首帧同步 provide，时序教训同 workspace.ui-bridge）——
     const bridgeRef = useRef<SettingsUiBridge>(settingsUiBridge);
     bridgeRef.current.general = { apiKey, setApiKey, language, setLanguage };
-    bridgeRef.current.appearance = { available: !!onOpenAppearance, openThemeStudio: onOpenAppearance ?? (() => {}) };
+    bridgeRef.current.appearance = { available: !!onOpenAppearance, openThemeStudio: () => { if (unifiedHost) window.parent.dispatchEvent(new CustomEvent('arvimo:settings-reveal-canvas')); onOpenAppearance?.(); } };
     bridgeRef.current.hotkeys = { wheelAction, setWheelAction, generateHotkey, setGenerateHotkey, presentationHotkeys, setPresentationHotkeys };
     bridgeRef.current.canvas = { canvasBackgroundColor, onCanvasBackgroundColorChange, onCanvasBackgroundImageChange };
     // 守卫锚定「内核里的现有登记」而非组件局部 ref —— HMR 重挂载会重置 ref，而内核单例跨挂载
@@ -256,6 +303,13 @@ export const CanvasSettings: React.FC<CanvasSettingsProps> = ({
 
     const resetWindow = () => commitGeometry(resolveGeometry({ x: null, y: null, w: DEFAULT_WINDOW.w, h: DEFAULT_WINDOW.h }));
 
+    if (unifiedHost) return hostTarget && ActiveSettingsSection ? createPortal(
+        <div data-bp-ui-settings="" data-arvimo-settings="" className="space-y-2.5 text-sm">
+            <PluginErrorBoundary key={activeTab} slot="settings_sections" pluginId={activeSettingsSection?.pluginId} language={language} minHeight={120}>
+                <ActiveSettingsSection kernel={kernel} language={language} />
+            </PluginErrorBoundary>
+        </div>, hostTarget,
+    ) : null;
     if (!isOpen) return null;
 
     // 贡献里的 label 是插件函数，宿主在 render 期调用它 —— 抛错只该降级这一条导航文案

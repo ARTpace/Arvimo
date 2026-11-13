@@ -333,7 +333,7 @@ async function runPolyhavenMaterial({uid,options,output,assetId},{signal,progres
   resolution:String(opts.resolution||'2K'),format:String(opts.textureFormat||'JPG'),
   textures:kept,
   note:'Poly Haven 材质，CC0 1.0 通用公共领域贡献，可商用无需署名。贴图按与 ambientCG 相同的 map 名保存。',
-  exportedAt:new Date().toISOString(),tool:'AssetVault · Poly Haven (CC0)',
+  exportedAt:new Date().toISOString(),tool:'Arvimo · Poly Haven (CC0)',
  };
  await fs.writeFile(path.join(output,'info.json'),JSON.stringify(meta,null,2),'utf8');
  const stem=String(assetId).replace(/[^\w.-]/g,'_').slice(0,80)||'polyhaven';
@@ -376,7 +376,7 @@ async function runPolyhavenHdri({uid,options,output,assetId},{signal,progress}){
   resolution:chosen.resolution,format:chosen.extension.toUpperCase(),
   files:[{file:name,bytes:stat.size,url:chosen.url}],
   note:'Poly Haven HDRI，CC0 1.0 通用公共领域贡献，可商用无需署名。',
-  exportedAt:new Date().toISOString(),tool:'AssetVault · Poly Haven (CC0)',
+  exportedAt:new Date().toISOString(),tool:'Arvimo · Poly Haven (CC0)',
  };
  await fs.writeFile(path.join(output,'info.json'),JSON.stringify(meta,null,2),'utf8');
  const stem=String(assetId).replace(/[^\w.-]/g,'_').slice(0,80)||'polyhaven';
@@ -451,7 +451,7 @@ export async function runPolyhavenJob({uid,options,output,profile,assetId,assetT
     uid,platform:'polyhaven',assetId,format,resolution:resName,
     files:await Promise.all(rels.map(async file=>({file,bytes:(await fs.stat(path.join(output,file))).size}))),
     url:`https://polyhaven.com/a/${assetId}`,license:'CC0 1.0 通用公共领域贡献',
-    exportedAt:new Date().toISOString(),tool:'AssetVault · Poly Haven (CC0)',
+    exportedAt:new Date().toISOString(),tool:'Arvimo · Poly Haven (CC0)',
     note:'Poly Haven 资产，CC0 1.0 通用公共领域贡献，可商用无需署名。',
   };
   await fs.writeFile(path.join(output,'info.json'),JSON.stringify(meta,null,2),'utf8');

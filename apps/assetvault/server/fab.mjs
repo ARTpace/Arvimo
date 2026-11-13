@@ -434,7 +434,7 @@ function pickVersion(item, want) {
  */
 export async function runFabJob({ uid, options = {}, output, deliver, workRoot, assetId }, { signal, progress = () => {} } = {}) {
   signal?.throwIfAborted();
-  const session = options.fabSession || { accessToken: options.accessToken, accountId: options.accountId };
+  const session = options.fabSession || (await fabLoadSession(ROOT)) || { accessToken: options.accessToken, accountId: options.accountId };
   if (!session.accessToken || !session.accountId) throw Error('Fab 需要先登录 Epic 账号');
   const id = String(assetId || '').trim();
   if (!id) throw Error('Fab 资产 ID 缺失');
@@ -477,7 +477,7 @@ export async function runFabJob({ uid, options = {}, output, deliver, workRoot, 
       engineVersions: version.engineVersions,
       license: '见 Fab 资产页',
       note: 'Fab 引擎资产（已拥有）。下载走 Epic Launcher 私有端点，请遵守 Epic 条款与资产许可。',
-      exportedAt: new Date().toISOString(), tool: 'AssetVault · Fab',
+      exportedAt: new Date().toISOString(), tool: 'Arvimo · Fab',
     };
     await fs.writeFile(path.join(output, 'info.json'), JSON.stringify(meta, null, 2), 'utf8');
   } finally {
@@ -553,39 +553,80 @@ async function assembleFiles(manifest, chunkDir, output, { signal, progress }) {
 
 // ── 搜索（网页端 /i/ 接口，cookie 认证）─────────────────────────────────────────
 
+// ── 搜索 + 详情（网页端 /i/ 接口，cookie 认证）─────────────────────────────────
+
+/** 从 thumbnails[].images[] 里挑分辨率最大的一张（Fab 封面在 media.fab.com，多尺寸）。 */
+function pickFabThumbnail(row) {
+  let best = '';
+  let bestWidth = -1;
+  for (const group of (Array.isArray(row?.thumbnails) ? row.thumbnails : [])) {
+    for (const img of (group?.images || [])) {
+      const url = String(img?.url || '');
+      if (!/^https:\/\//.test(url)) continue;
+      const width = Number(img.width) || 0;
+      if (width >= bestWidth) { best = url; bestWidth = width; }
+    }
+  }
+  return best;
+}
+function pickFabLicense(row) {
+  const list = Array.isArray(row?.licenses) ? row.licenses : [];
+  const names = list.map(item => item?.name).filter(Boolean);
+  if (names.length) return names.join(' / ');
+  return row?.isFree === true ? '免费' : '见 Fab 资产页';
+}
+function fabAssetType(listingType) {
+  const type = String(listingType || '').toLowerCase();
+  if (type.includes('material') || type.includes('texture')) return 'textures';
+  if (type.includes('hdri')) return 'hdris';
+  return 'models';
+}
+function fabRating(row) {
+  const value = Number(row?.ratings?.averageRating ?? row?.averageRating);
+  return Number.isFinite(value) && value > 0 ? Math.round(value * 10) / 10 : null;
+}
+
 /** 把搜索行归一化成统一卡片形状（与 ambientCG / Kenney 的卡片一致）。 */
 export function normalizeFabAsset(row) {
   if (!row || typeof row !== 'object') return null;
   const id = String(row.uid || row.id || '').trim();
   if (!id) return null;
+  const price = Number.isFinite(row.startingPrice?.price) ? row.startingPrice.price : null;
   return {
     uid: fabUid(id),
     platform: 'fab',
     assetId: id,
     sourceType: 'model',
-    assetType: 'models',
+    assetType: fabAssetType(row.listingType),
     name: String(row.title || id).trim().slice(0, 240) || `Fab ${id}`,
-    author: String(row.seller?.name || row.sellerName || 'Fab').slice(0, 120),
-    thumbnail: '',
+    author: String(row.user?.sellerName || row.seller?.name || 'Fab').slice(0, 120),
+    thumbnail: pickFabThumbnail(row),
     url: `https://www.fab.com/listings/${id}`,
-    license: '见 Fab 资产页',
-    downloadable: true,
-    categories: [],
-    tags: [],
+    license: pickFabLicense(row),
+    downloadable: row.isFree === true || price === 0,
+    categories: row.category?.name ? [String(row.category.name)] : [],
+    tags: (Array.isArray(row.tags) ? row.tags : []).map(tag => tag?.name).filter(Boolean).slice(0, 8),
+    isFree: row.isFree === true || price === 0,
+    price,
+    rating: fabRating(row),
     faces: null, vertices: null, likes: 0, views: 0, animations: 0,
   };
 }
 
-/** 关键词搜索 Fab 资产（走网页端 GET 接口，自动带 fab.com 域的登录 cookie）。 */
+/** 关键词 / 免费搜索 Fab 资产（网页端 GET 接口，自动带 fab.com 域的登录 cookie）。
+ *  注意：Fab 的「免费」筛选 is_free=1 只有在带 sort_by 时才生效 —— 实测无 sort_by 时会被忽略。 */
 export async function fabSearch(input = {}, { signal, open = openPublic } = {}) {
   signal?.throwIfAborted();
   const cursor = input.cursor ? (typeof input.cursor === 'string' ? JSON.parse(input.cursor) : input.cursor) : {};
   const q = String(cursor.q ?? input.q ?? '').trim();
   const page = Math.max(1, Number(cursor.page ?? input.page) || 1);
-  const query = new URLSearchParams({ count: '24' });
+  const free = input.free === true || input.isFree === true || cursor.free === true;
+  const sortBy = String(input.sortBy || cursor.sortBy || '-createdAt');
+  const query = new URLSearchParams({ count: '24', sort_by: sortBy });
   if (q) query.set('q', q);
+  if (free) query.set('is_free', '1');
   if (cursor.next) query.set('cursor', cursor.next);
-  const r = await open(`${FAB_HOST}/i/listings/search?${query}`, { signal, timeout: 45000 });
+  const r = await open(`${FAB_HOST}/i/listings/search?${query}`, { signal, timeout: 45000, headers: { Accept: 'application/json' } });
   if (r.status < 200 || r.status >= 300) { try { r.stream.destroy(); } catch {} throw Error(`Fab 搜索返回 HTTP ${r.status}`); }
   const payload = JSON.parse((await readAll(r)).toString('utf8'));
   const rows = Array.isArray(payload?.results) ? payload.results : [];
@@ -593,10 +634,62 @@ export async function fabSearch(input = {}, { signal, open = openPublic } = {}) 
   const next = (payload?.cursors || {}).next;
   return {
     models, received: models.length, total: models.length, page,
-    next: next ? JSON.stringify({ q, next, page: page + 1 }) : null,
+    next: next ? JSON.stringify({ q, free, sortBy, next, page: page + 1 }) : null,
     pending: [],
     source: 'Fab · 3D 资产商城',
-    warnings: models.length ? [] : [`Fab 上没有匹配 “${q}” 的资产`],
+    warnings: models.length ? [] : [`Fab 上没有匹配 “${q || '免费资产'}” 的资产`],
     query: q,
   };
+}
+
+function stripFabHtml(html) {
+  return String(html || '')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&quot;/g, '"')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/** 归一化资产详情（描述、媒体图、许可、评分）。 */
+export function normalizeFabDetail(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const id = String(raw.uid || '').trim();
+  if (!id) return null;
+  const images = [];
+  for (const media of (Array.isArray(raw.medias) ? raw.medias : [])) {
+    const url = media?.thumbnailUrl || media?.url || media?.source;
+    if (/^https:\/\//.test(String(url || ''))) images.push(String(url));
+  }
+  if (!images.length) { const cover = pickFabThumbnail(raw); if (cover) images.push(cover); }
+  const price = Number.isFinite(raw.startingPrice?.price) ? raw.startingPrice.price : null;
+  return {
+    uid: fabUid(id), platform: 'fab', assetId: id,
+    name: String(raw.title || id),
+    author: String(raw.user?.sellerName || 'Fab'),
+    url: `https://www.fab.com/listings/${id}`,
+    description: stripFabHtml(raw.description || '').slice(0, 4000),
+    descriptionHtml: String(raw.description || ''),
+    images: [...new Set(images)].slice(0, 24),
+    category: raw.category?.name || '',
+    tags: (Array.isArray(raw.tags) ? raw.tags : []).map(tag => tag?.name).filter(Boolean),
+    licenses: (Array.isArray(raw.licenses) ? raw.licenses : []).map(item => item?.name).filter(Boolean),
+    rating: fabRating(raw),
+    reviewCount: Number(raw.reviewCount) || 0,
+    isFree: price === 0,
+    price,
+    externalUrl: String(raw.externalUrl || ''),
+  };
+}
+
+/** 取单个 Fab 资产的详情（GET /i/listings/<uid>）。assetId 是真实 listing uuid。 */
+export async function fabDetail(input = {}, { signal, open = openPublic } = {}) {
+  signal?.throwIfAborted();
+  const id = String(input.assetId || input.id || '').trim();
+  if (!id) throw Error('Fab 资产 ID 缺失');
+  const r = await open(`${FAB_HOST}/i/listings/${encodeURIComponent(id)}`, { signal, timeout: 45000, headers: { Accept: 'application/json' } });
+  if (r.status < 200 || r.status >= 300) { try { r.stream.destroy(); } catch {} throw Error(`Fab 详情返回 HTTP ${r.status}`); }
+  const raw = JSON.parse((await readAll(r)).toString('utf8'));
+  return normalizeFabDetail(raw);
 }

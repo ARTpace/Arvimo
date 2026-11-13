@@ -1,4 +1,5 @@
 import {createPlatformSettingsCard} from './platform-settings.js';
+import {thumbSrc} from './image-src.js';
 import {enabledPlatform,platformForFeed} from './platforms.js';
 import {createDownloadUI} from './download-ui.js';
 import {isLanVisitor} from './visitor-mode.js';
@@ -28,13 +29,14 @@ import {createCardView} from './card-view.js';
 import {probeLocalBridge,importIntoLocalBlender,createLocalBlenderGuide} from './client-blender.js';
 import {openExternal} from './open-url.js';
 import {openHelp} from './help-panel.js';
+import {initFeedbackPanel} from './feedback.js';
 import {hookDiagnostics,rememberError} from './diagnostics.js';
 import {createLibraryView,FILTER_ROWS} from './library-view.js';
 import {resetPolyforkDetails} from './polyfork-params.js';
 import {createLazyPreview} from './lazy-preview.js';
 import {createLocalFiles,packageImageUrl} from './local-files.js';
 import {createLocalImport} from './local-import.js';
-import {setupDropImport} from './drop-import.js';
+import {setupDropImport,isDropImporting} from './drop-import.js';
 import {openRelinkFile} from './relink-file.js';
 import {createRangeSelect} from './range-select.js';
 import {favoriteTarget,favoriteSkipsCollect} from './favorite-targets.js';
@@ -52,6 +54,7 @@ import {filterLocalAssets,localAssetCategories} from './local-filters.js';
 import {waitForInitialCategories} from './category-options.js';
 import {createAISettings} from './ai-settings.js';
 import {setupDragOut} from './drag-out.js';
+import {createBoardDrop} from './board-drop.js';
 import {setupPictureDrag} from './picture-drag.js';
 import {setupLibraryDragWeb} from './library-drag-web.js';
 import {tagsFor,addAITags,tagPanel,addUserTag,removeUserTag,listUserTags,renameUserTag,mergeUserTag,deleteUserTag,mergeTags} from './asset-tags.js';
@@ -115,6 +118,16 @@ const newFeed=()=>({rows:[],request:null,next:null,pending:[],pages:0,busy:false
 // mode 是显式主状态：图标高亮、平台下拉池、结果流、布局全部由它决定，不再从 platform 反推。
 // contentKind 只是它在资产库页的「本地类型筛选」影子，避免 filtered() 里再分叉一次。
 const state={...initial,route:'discover',platform:DEFAULT_PLATFORM,source:'search',filter:'all',search:'',sort:'recent',selected:new Set(),gallery:false,modelOnly:false,libraryMode:'',mode:savedMode(),contentKind:'',modePlatforms:loadModePlatforms(storage),feeds:Object.fromEntries(FEEDS.map(mode=>[mode,newFeed()]))};
+// 显示模式（网格 / 瀑布流）按页面各自记一份：资产库默认瀑布流，发现页默认网格。
+// 用户手动切过就以他的选择为准，下次进来不再被默认值改回去。
+const DISPLAY_KEY='sfx-display-mode';
+const displayPrefs=(()=>{try{const raw=JSON.parse(localStorage.getItem(DISPLAY_KEY)||'{}');return raw&&typeof raw==='object'?raw:{};}catch{return {};}})();
+const displayFor=name=>displayPrefs[name==='library'?'library':'discover']||(name==='library'?'gallery':'grid');
+function rememberDisplay(view){
+ const key=state.route==='library'?'library':'discover';
+ displayPrefs[key]=view;
+ try{localStorage.setItem(DISPLAY_KEY,JSON.stringify(displayPrefs));}catch{}
+}
 // ADR-09：启动期已到的目录页在 cache 里（loadLibrary 已读进 state.models），后续页由
 // 持久化层增量投递。这里只做去重合并 + 重绘，绝不重建整张状态，也不改写入契约。
 storage?.setCatalogPageHandler?.(items=>{
@@ -341,7 +354,7 @@ function resolveCanvasAsset(uid){
  const model=findModel(uid);
  if(!model)return null;
  const raw=model.thumbnail||model.thumb||'';
- return {src:raw?`/api/image?url=${encodeURIComponent(raw)}`:'',kind:canvasKindOf(model),name:model.name||model.title||'未命名'};
+ return {src:thumbSrc(raw),kind:canvasKindOf(model),name:model.name||model.title||'未命名'};
 }
 async function enterCanvas(){
  const host=$('#cv-host');
@@ -352,11 +365,16 @@ async function enterCanvas(){
    resolve:resolveCanvasAsset,
    onCount:(count)=>{const el=$('#cv-count');if(el)el.textContent=String(count);},
    onStatus:(text)=>{if(text)toast?.(text);},
+   onSynced:()=>{boardHub?.store.refresh().catch(()=>{});},
+   onOpenLibrary:id=>boardHub?.openBoard(id,{force:true,refresh:true}),
   });
   // 暴露给调试与外部脚本。
   window.__avCanvas=boardCanvas;
- }
+ }else await boardCanvas.refresh();
 }
+window.addEventListener('assetvault:open-canvas-board',async event=>{
+ await enterCanvas();route('canvas');await boardCanvas?.openBoard(event.detail.id);
+});
 // 画板动作（铺开 / 整理 / 适应）统一交给画布自己的快捷键，侧边栏不再放动作组。
 // 图片包是边下边写的，资产库得跟着磁盘一起长：新任务一露头就强制重扫一次（绕过扫描缓存），
 // 第一张图落盘后就能出正式卡。之后进入「稳态轮询」——把频率从每 5 秒降到每 15 秒：
@@ -390,7 +408,11 @@ async function runPoll(){
 schedulePoll();
 const {counts,renderStatus,renderGrid:drawGrid,placeFilters,preview:previewAsset,syncStickyOffset}=view;
 // 每次重绘顺带刷新图标轨：新收藏了一条音频 / 文档，对应的 tab 要当场长出来（计数有长度缓存）。
-const renderGrid=()=>{drawGrid();contentModes?.render();};
+// 每次重绘顺带刷新图标轨：新收藏了一条音频 / 文档，对应的 tab 要当场长出来（计数有长度缓存）。
+// syncSelectionUI 在框选装配后填进来：重绘走的是「按 HTML 缓存做增量替换」，卡片 HTML 没变时
+// 不会重写 DOM，选中态就只能靠这一次就地同步兜住（否则取消选择后绿框会留在卡上）。
+let syncSelectionUI=()=>{};
+const renderGrid=()=>{drawGrid();contentModes?.render();syncSelectionUI();};
 const similarAssets=createSimilarAssets({dialog:$('#preview-dialog'),state,
  candidates:()=>[...state.models,...Object.values(state.feeds).flatMap(feed=>feed.rows)],
  imageUrl:model=>cardView.imageUrl(model),onPreview:uid=>preview(uid)});
@@ -412,7 +434,10 @@ function refreshPreviewTags(uid){
  const source=details.querySelector('.source-link');if(source)details.append(source);
 }
 function preview(uid){
+ const model=findModel(uid);
  previewAsset(uid);
+ // Fab 的预览在 view.preview 里已走图片画廊（多图 + 描述 + 下载），这里不再往 3D 详情面板补内容。
+ if(model?.platform==='fab')return;
  $('#model-details').dataset.tagUid=uid;
  refreshPreviewTags(uid);
  similarAssets.show(findModel(uid));
@@ -460,6 +485,8 @@ async function deleteLibraryAsset(payload){
   const response=await fetch('/api/library/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...payload,thumbnail:model?.thumbnail||''})});
   const data=await response.json().catch(()=>({}));
   if(!response.ok)throw Error(data.error||'删除失败');
+  // 没删到任何文件、也没有资产记录可摘：说清楚，别弹「已删除」之后卡片还好好待在那儿。
+  if(!data.removed?.length&&!uid)throw Error('这个文件不在可删除的目录里，请手动到文件夹中删除');
   if(uid){
    state.models=state.models.filter(item=>item.uid!==uid);
    if(state.trashed)state.trashed=state.trashed.filter(item=>item.uid!==uid);
@@ -643,6 +670,8 @@ function route(name){
  // 画廊只画在线 A 站结果，本地库与收藏里混着两个平台，离开发现页就退出画廊。
  // 图站结果不在这里丢掉：切去下载页 / 资产库再切回来，要直接回到刚才那屏（缓存命中，不重新抓）。
  if(name==='downloads')state.gallery=false;
+ // 资产库默认瀑布流：本地图片长宽比各异，按原比例排比裁成统一方格更可看（见 displayFor）。
+ if(name==='library')state.gallery=galleryAvailable({route:name})&&displayFor('library')==='gallery';
  if(name!=='discover')searchHistory?.close();
   document.querySelectorAll('aside nav button[data-route]').forEach(b=>b.classList.toggle('active',b.dataset.route===name));
   // 选中项配一条会滑动的强调条：和平台模块 Tab 同一套手感，跟着高亮项上下移动。
@@ -913,6 +942,8 @@ function skipFeed(mode,reason){
   // 所以「全部平台」下就按同一个关键词原样搜，不走 plan 的分类对齐。
   if(mode==='simready'){if(refuse())return null;return {q:baseQ.slice(0,200)};}
   if(mode==='polyfork')return {q:baseQ.slice(0,200),assetClass:'',sort:''};
+  // Fab：默认只看免费（is_free 需配合 sort_by 才生效），用户可在筛选里取消「仅免费」看全部。
+  if(mode==='fab')return {q:baseQ.slice(0,200),free:$('#fab-free')?$('#fab-free').checked:true,sortBy:$('#fab-sort')?.value||'-createdAt'};
   // UI 元素：类型与主题是站点自己的维度（按钮 / 加载动画 / 开关…，浅色 / 深色），
   // 与 3D 资产的统一题材树不是一回事，所以不走 plan 的分类对齐，按站点语义原样传。
   if(mode==='uiverse')return {q:baseQ.slice(0,200),type:$('#uiverse-type')?.value||'',theme:$('#uiverse-theme')?.value||''};
@@ -1304,7 +1335,9 @@ async function setup(){
  refreshTopicStrip();
  downloads=createDownloadUI({$,icon,esc,toast,legacy:()=>state.tasks,requestLegacy:uid=>requestDownload([uid]),isVisible:()=>state.route==='downloads',onUpdate:changed=>{assistantDownloads(downloads.jobs);counts();if(changed&&state.route!=='downloads')renderGrid();}});downloads.setup();
  // 桌面版：卡片可以直接拖到别的软件里（浏览器版这里会自己跳过，什么都不挂）。
- setupDragOut({toast,jobs:()=>downloads.jobs,download:uid=>downloads.saveToClient(uid),send:sendToTarget,targetById,packages:()=>localFiles.packages()});
+ setupDragOut({toast,jobs:()=>downloads.jobs,download:uid=>downloads.saveToClient(uid),send:sendToTarget,targetById,packages:()=>localFiles.packages(),
+  // 普通资产在窗口内拖到画板；到窗口边缘交给系统拖放，Alt 可立即拖出。
+  deferNativeDrag:(event,source)=>!!source.uid&&!event.altKey&&event.clientX>8&&event.clientY>8&&event.clientX<innerWidth-8&&event.clientY<innerHeight-8});
  // 网页版兜底：缩略图拖出去只能得到小图，改挂原图地址。桌面版由上面的原生拖放接管，这里自动跳过。
  setupPictureDrag();
  // 网页版兜底：资产库图片卡拖出去给原文件（预取字节塞进 HTML5 拖拽）。桌面版同样自动跳过。
@@ -1322,6 +1355,7 @@ storePanel.setup();
  // 网格框选 / Shift 连选：只加高亮 class，pointerup 才提交 state.selected，拖动中不重绘卡片。
  const rangeSelect=createRangeSelect({grid:$('#grid'),state,renderGrid});
  rangeSelect.setup();
+ syncSelectionUI=rangeSelect.syncSelection;
  $('#local-rescan')?.addEventListener('click',()=>scanLibraryFiles(true));
  artstation=createArtstationUI({enabled:()=>platformEnabled('artstation'),$,icon,esc,toast,state,requestFeed});const artFilters=artstation.setup();
  // ambientCG 侧栏（分类 / 精度 / 输出方式）：分类清单开页就拉一次，静态 facets 不常变。
@@ -1459,6 +1493,8 @@ themeResults.addEventListener('click',event=>{
   for(const id of ['online-category','unified-category','online-category-group','online-sort','online-downloadable','online-animated','online-staffpicked'])if($('#'+id))$('#'+id).onchange=()=>restartSearch();
   // Uiverse 的类型与主题：站点只认路径段过滤类型，所以这两个直接重发检索流。
   for(const id of ['uiverse-type','uiverse-theme'])if($('#'+id))$('#'+id).onchange=()=>{if(state.platform==='uiverse')requestFeed('uiverse',readRequest('uiverse'));};
+  // Fab：「仅免费」与排序改变后重发检索流（当前平台含 fab 才触发）。
+  for(const id of ['fab-free','fab-sort'])if($('#'+id))$('#'+id).onchange=()=>{if(activeModes().includes('fab'))requestFeed('fab',readRequest('fab'));};
  $('#unified-sort').onchange=()=>{
   const next=$('#unified-sort').value;
   if(next==='name'){renderGrid();return;}
@@ -1653,15 +1689,18 @@ $('#tm-clear-ai').onclick=()=>{
   toast(tagAbort?`已停止，整理 ${done} 个资产`:`完成，共为 ${done} 个资产补充标签`);
  }
  // 展示只有网格 / 瀑布流两种（紧凑列表视图已移除）；按钮高亮由 renderGrid 从 state 推出。
- const setDisplay=view=>{state.gallery=view==='gallery'&&galleryAvailable(state);contentModes?.render();renderPlatformOptions();renderGrid();};
+ const setDisplay=view=>{state.gallery=view==='gallery'&&galleryAvailable(state);rememberDisplay(state.gallery?'gallery':'grid');contentModes?.render();renderPlatformOptions();renderGrid();};
  const displayMode=$('#display-mode');
  if(displayMode)displayMode.onclick=()=>{if(!galleryAvailable(state))return;setDisplay(state.gallery?'grid':'gallery');};
  const cardSize=$('#card-size');
  if(cardSize){
-  const saved=Number(localStorage.getItem('assetvault-card-size'));
-  if(saved>=140&&saved<=340)cardSize.value=String(saved);
+  // 尺寸区间整体下调（110–240，默认 150）：原来的 140–340 在库内偏大，一屏放不下几张。
+  // 顺带换 key（v2）：旧值 190/340 是按老区间调的，留着会显得「还是很大」。
+  const SIZE_MIN=110,SIZE_MAX=240,SIZE_DEFAULT=150,SIZE_KEY='assetvault-card-size-v2';
+  const saved=Number(localStorage.getItem(SIZE_KEY));
+  if(saved>=SIZE_MIN&&saved<=SIZE_MAX)cardSize.value=String(saved);
   const paintSize=()=>{
-   const size=Math.max(140,Math.min(340,Number(cardSize.value)||190));
+   const size=Math.max(SIZE_MIN,Math.min(SIZE_MAX,Number(cardSize.value)||SIZE_DEFAULT));
    const style=document.documentElement.style;
    style.setProperty('--lib-col-min',`${size}px`);
    style.setProperty('--lib-gap-x',`${Math.round(size*.045)}px`);
@@ -1671,7 +1710,7 @@ $('#tm-clear-ai').onclick=()=>{
   cardSize.addEventListener('input',()=>{
    paintSize();
    window.dispatchEvent(new Event('resize'));
-   localStorage.setItem('assetvault-card-size',cardSize.value);
+   localStorage.setItem(SIZE_KEY,cardSize.value);
   });
  }
  // 「继续检索」推进当前平台的每个源；链接解析结果只有 web 一个源。
@@ -1716,9 +1755,16 @@ $('#load-more').onclick=()=>more({more:true});$('#load-all').onclick=()=>more({m
    if(r.ok){const data=await r.json();if(Array.isArray(data.uids))serverUids=data.uids;}
   }catch{}
   (serverUids?serverUids.filter(uid=>visible.has(uid)):[...visible]).forEach(uid=>state.selected.add(uid));
-  renderGrid();
+  syncSelectionUI();
  };
- $('#deselect').onclick=()=>{state.selected.clear();renderGrid();};$('#collect-selected').onclick=()=>collect([...state.selected]);$('#download-selected').onclick=()=>requestDownload([...state.selected]);$('#download-images-selected').onclick=()=>imageDownload.requestImages([...state.selected]);
+ // 多选栏只保留「选择当前结果 / 取消选择」+ 画板与批量整理（后两个由 board-hub / batch-edit 自己挂）。
+ // 原先的加入模型库 / 下载高清图 / 下载选中已按需求移除，这里写成可选链，别让按钮缺席炸掉启动。
+ // 取消选择只同步选中态：走 renderGrid 的话，卡片 HTML 与缓存一致时不会重写 DOM，
+ // 就地加上去的 selected 反而留在卡上（用户看到「取消了还是绿框」就是这么来的）。
+ $('#deselect').onclick=()=>{state.selected.clear();syncSelectionUI();};
+ $('#collect-selected')?.addEventListener('click',()=>collect([...state.selected]));
+ $('#download-selected')?.addEventListener('click',()=>requestDownload([...state.selected]));
+ $('#download-images-selected')?.addEventListener('click',()=>imageDownload.requestImages([...state.selected]));
 
 // 关弹窗要停掉 three.js 的渲染循环并释放 GPU 资源 —— 只清iframe 的 src 的话，Poly Haven
 // 的 canvas 会继续每帧渲染，白烧 CPU/GPU 直到页面刷新。
@@ -1740,6 +1786,7 @@ $('#preview-dialog').addEventListener('close',()=>{
  document.querySelectorAll('dialog').forEach(d=>d.addEventListener('click',e=>{if(e.target===d){const r=d.getBoundingClientRect();if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom)d.close();}}));
  $('#settings-button').onclick=$('#download-settings').onclick=openSettings;$('#help').onclick=()=>openHelp();
  hookDiagnostics();
+ initFeedbackPanel();
  const aiSettings=createAISettings({$,toast});
  appUpdates=createAppUpdates({hasActiveTasks:()=>downloads.activeCount()>0,onState:detail=>assistant.notify({type:'update',detail})});
  const sharing=createLanSharingSettings({toast});
@@ -1751,7 +1798,7 @@ const autostart=visitor?null:createAutostartCard({toast});
 const appearance=createAppearanceCard({toast});
 // 云同步是主机级配置（凭据 + 整库快照），访客不该看到，也不该能触发同步。
 const cloudSync=visitor?null:createCloudSyncCard({toast});
-settingsPanel=createSettingsPanel({$,loadAI:()=>aiSettings.load(),updateCard:appUpdates.card,sharing,team,migrate:backupPanel?.card,stores:storePanel?.card,desktop:autostart,appearance,sync:cloudSync,platformCard:createPlatformSettingsCard({settings:platformSettings,toast}),autoSave:commitSettings});
+settingsPanel=createSettingsPanel({$,ensureCanvas:enterCanvas,loadAI:()=>aiSettings.load(),updateCard:appUpdates.card,sharing,team,migrate:backupPanel?.card,stores:storePanel?.card,desktop:autostart,appearance,sync:cloudSync,platformCard:createPlatformSettingsCard({settings:platformSettings,toast}),autoSave:commitSettings});
  // 高级检索 / 合集：面板自建 DOM，只把命中集合注入 state.queryUids（见 filtered()）。
  // 局域网访客不挂本地库专用入口，避免出现点了却被服务端拒绝的死按钮。
  if(!visitor){
@@ -1767,6 +1814,14 @@ settingsPanel=createSettingsPanel({$,loadAI:()=>aiSettings.load(),updateCard:app
   boardHub=createBoardHub({$,state,esc,icon,toast,storage,persistNow,renderGrid,controls:query.controls});
   // 画板卡片区挂在主网格上方：每帧 renderGrid 顺带重画它（路由切换 / 画板集合变化都要跟）。
   view.setBoardDeck(boardHub.deck);
+  // 卡片直接拖到画板卡上 = 加入该画板。
+  createBoardDrop({
+    api: boardHub.api,
+    toast,
+    selected: () => state.selected,
+    boards: () => boardHub.store.list(),
+    onAdded: () => boardHub.store.refresh().catch(() => {}),
+  }).setup();
   // 外部文件 / 文件夹拖入：弹面板选画板后上传入库。挂在画板中枢之后，直接复用它的 store。
   setupDropImport({toast,visitor,store:boardHub.store,onImported:()=>scanLibraryFiles(true)});
  }
@@ -1780,7 +1835,7 @@ settingsPanel=createSettingsPanel({$,loadAI:()=>aiSettings.load(),updateCard:app
    // 文件夹实时监控：磁盘上的资产根变了（拖进一个包 / 删掉一个文件），立刻按增量重扫。
    // 不传 force —— 服务端缓存层已经知道哪些路径变了，全量重扫在几十万资产下会卡住主线程。
    if(change.local)scanLibraryFiles(false);
-   if(change.all){state.onRemoteRefresh?.();return;}
+   if(change.all){if(isDropImporting())return;state.onRemoteRefresh?.();return;}
    if(!change.uids.length)return;
    try{
     const response=await fetch('/api/library/assets/detail',{method:'POST',headers:{'X-SFX-Local':'1','Content-Type':'application/json'},body:JSON.stringify({uids:change.uids})});

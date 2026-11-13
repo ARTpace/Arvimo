@@ -4,7 +4,7 @@ const pad=value=>String(value).padStart(2,'0');
 const stamp=ms=>{const d=new Date(ms);return `${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;};
 // 说明文字全部收进 ? 按钮的悬浮提示里，面板只留控件本身。
 const HINTS={
- access:'其他用户共享这台电脑的资产库、下载目录与 Blender。仅在可信局域网开启；访问走 HTTP，不要填其他账号的密码。连不上时请在 Windows 防火墙中允许 AssetVault / Node.js 使用专用网络。',
+ access:'其他用户共享这台电脑的资产库、下载目录与 Blender。仅在可信局域网开启；访问走 HTTP，不要填其他账号的密码。连不上时请在 Windows 防火墙中允许 Arvimo · 艺团 / Node.js 使用专用网络。',
  password:'至少 8 个字符。首次开启必须设置；留空表示保留原密码。修改密码或关闭共享会让其他设备重新登录。',
  devices:'按 IP 统计访问过的设备（含未登录）。圆点亮起＝已登录且近 5 分钟有请求；悬停名字看全部用过的人，悬停时间看首次访问。禁用立即拦截后续请求，已开始的任务不会取消；解除禁用后需重新登录。IP 变化视为新设备。'
 };

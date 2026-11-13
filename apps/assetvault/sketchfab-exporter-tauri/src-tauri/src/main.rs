@@ -95,6 +95,21 @@ fn show_main_window(app: &tauri::AppHandle) {
     }
 }
 
+fn restart_app(app: &AppHandle) {
+    // 开发版由启动器重启 CLI，保留开发服务器与热更新监听。
+    #[cfg(debug_assertions)]
+    if let Some(marker) = std::env::var_os("ARVIMO_DEV_RESTART_FILE") {
+        if let Err(error) = std::fs::write(marker, b"restart") {
+            eprintln!("无法请求重启开发版：{error}");
+            return;
+        }
+        app.exit(0);
+        return;
+    }
+    // 原生退出事件会先回收 NodeGuard，再启动新的应用进程。
+    app.request_restart();
+}
+
 /// 「缩到托盘」：只把窗口藏起来，node 服务与后台下载照常跑，点托盘图标随时叫回来。
 #[tauri::command]
 fn hide_to_tray(app: AppHandle) {
@@ -313,6 +328,8 @@ fn start_backend(app: &AppHandle) -> Result<(), String> {
     let port = 4179;
     let (ready_tx, ready_rx) = std::sync::mpsc::channel::<u16>();
     let mut cmd = Command::new(&backend.node_exe);
+    #[cfg(debug_assertions)]
+    cmd.arg("--watch");
     let group = process_group::ProcessGroup::new().map_err(|e| format!("无法创建后台进程组：{e}"))?;
     cmd.arg(&backend.entry)
         .env("SFX_STATIC_ROOT", &backend.static_root)
@@ -373,7 +390,7 @@ fn start_backend(app: &AppHandle) -> Result<(), String> {
                 let details = lines.join("\n");
                 let _ = std::fs::write(&log, &details);
                 let message = if details.contains("另一个服务使用") {
-                    "启动失败：另一个 AssetVault 后台服务正在使用下载记录。请退出旧版软件或源码启动的服务后重新打开。".to_string()
+                    "启动失败：另一个艺团后台服务正在使用下载记录。请退出旧版软件或源码启动的服务后重新打开。".to_string()
                 } else { format!("本地服务启动失败：{}。日志：{}", lines.last().unwrap(), log.display()) };
                 *handle.state::<BootError>().0.lock().unwrap() = Some(message);
             }
@@ -391,11 +408,27 @@ fn start_backend(app: &AppHandle) -> Result<(), String> {
             eprintln!("[node] 本地服务未报告就绪端口，界面会停在等待页。");
             let state = handle.state::<BootError>();
             let mut error = state.0.lock().unwrap();
-            if error.is_none() { *error = Some("本地服务启动超时，请关闭旧版 AssetVault 后重新打开。".into()); }
+            if error.is_none() { *error = Some("本地服务启动超时，请关闭旧版艺团 后重新打开。".into()); }
         }
     });
 
     Ok(())
+}
+
+#[tauri::command]
+fn desktop_window_action(window: tauri::WebviewWindow, action: String) -> Result<(), String> {
+    let result = match action.as_str() {
+        "drag" => window.start_dragging(),
+        "minimize" => window.minimize(),
+        "maximize" => match window.is_maximized() {
+            Ok(true) => window.unmaximize(),
+            Ok(false) => window.maximize(),
+            Err(error) => return Err(error.to_string()),
+        },
+        "close" => window.close(),
+        _ => return Err("Unknown window action".into()),
+    };
+    result.map_err(|error| error.to_string())
 }
 
 fn main() {
@@ -408,9 +441,17 @@ fn main() {
         .manage(BackendReady::default())
         .setup(|app| {
             // 资源随安装包解压：node.exe 运行时 + sidecar-server 目录。
+            #[cfg(not(debug_assertions))]
             let resource_dir = app.path().resource_dir()?;
+            #[cfg(debug_assertions)]
+            let library_project = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+            #[cfg(debug_assertions)]
+            let resource_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
             // 数据与下载目录放到应用数据目录，避免写入安装目录（可能无写权限）。
+            #[cfg(not(debug_assertions))]
             let app_data = data_path::resolve(&app.path().app_data_dir()?)?;
+            #[cfg(debug_assertions)]
+            let app_data = library_project.join("../../_local/desktop-dev");
 
             let data_dir = app_data.join("data");
             let download_dir = app_data.join("downloads");
@@ -432,8 +473,18 @@ fn main() {
                 node_exe: resource_dir
                     .join("binaries")
                     .join("node-x86_64-pc-windows-msvc.exe"),
-                entry: resource_dir.join("sidecar-server").join("server").join("library.mjs"),
-                static_root: resource_dir.join("sidecar-server").join("dist").join("library"),
+                entry: {
+                    #[cfg(debug_assertions)]
+                    { library_project.join("server/library.mjs") }
+                    #[cfg(not(debug_assertions))]
+                    { resource_dir.join("sidecar-server/server/library.mjs") }
+                },
+                static_root: {
+                    #[cfg(debug_assertions)]
+                    { library_project.join("dist/library") }
+                    #[cfg(not(debug_assertions))]
+                    { resource_dir.join("sidecar-server/dist/library") }
+                },
                 browser_exe: browser_root
                     .join("chrome-headless-shell-win64")
                     .join("chrome-headless-shell.exe"),
@@ -447,11 +498,14 @@ fn main() {
             // 授权闸门：没通过就完全不拉起本地服务，界面会停在 waiting.html 显示激活面板。
             // 这是整套授权的落点 —— 即使有人改了前端 JS，服务没起来也拿不到任何数据。
             // LICENSE_GATE=false 时闸门整体跳过（免激活发布），服务照常拉起。
+            // Let the event loop paint waiting.html while licensing and Node start in the background.
+            let handle = app.handle().clone();
+            std::thread::spawn(move || {
             let factors = licensing::machine_factors();
-            let license_path = app.state::<Backend>().license_path.clone();
+            let license_path = handle.state::<Backend>().license_path.clone();
             match licensing::load(&license_path, &factors) {
                 Ok(_) => {
-                    if let Err(error) = start_backend(app.handle()) {
+                    if let Err(error) = start_backend(&handle) {
                         eprintln!("[license] {error}");
                     }
                 }
@@ -461,24 +515,28 @@ fn main() {
                     } else {
                         // 免激活：授权状态只留痕，不再挡在启动前面。
                         println!("[license] 免激活模式（本机未授权：{reason}），直接启动本地服务。");
-                        if let Err(error) = start_backend(app.handle()) {
+                        if let Err(error) = start_backend(&handle) {
                             eprintln!("[license] {error}");
                         }
                     }
                 }
             }
 
+            });
+
             // 常驻托盘：关窗口后后台服务继续运行。
-            // 左键单击 = 唤起窗口；右键 = 弹出菜单（打开 / 退出）。
-            let show_item = MenuItem::with_id(app, "show", "打开 AssetVault", true, None::<&str>)?;
+            // 左键单击 = 唤起窗口；右键 = 弹出菜单（打开 / 重启 / 退出）。
+            let show_item = MenuItem::with_id(app, "show", "打开 Arvimo · 艺团", true, None::<&str>)?;
+            let restart_item = MenuItem::with_id(app, "restart", "重启应用（含后端）", true, None::<&str>)?;
             let quit_item = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&show_item, &quit_item])?;
+            let menu = Menu::with_items(app, &[&show_item, &restart_item, &quit_item])?;
             let mut tray = TrayIconBuilder::with_id("main-tray")
                 .menu(&menu)
                 .show_menu_on_left_click(false)
-                .tooltip("AssetVault · 本地 3D 模型库")
+                .tooltip("Arvimo · 艺团")
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "show" => show_main_window(app),
+                    "restart" => restart_app(app),
                     "quit" => app.exit(0),
                     _ => {}
                 })
@@ -511,6 +569,24 @@ fn main() {
 
             Ok(())
         })
+        .on_page_load(|webview, payload| {
+            if webview.label() == "main" && payload.event() == tauri::webview::PageLoadEvent::Finished {
+                #[cfg(debug_assertions)]
+                let chrome = std::fs::read_to_string(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/desktop-chrome.js"))
+                    .unwrap_or_else(|_| include_str!("desktop-chrome.js").into());
+                #[cfg(not(debug_assertions))]
+                let chrome = include_str!("desktop-chrome.js");
+                if let Err(error) = webview.eval(&chrome) {
+                    eprintln!("Window chrome: {error}");
+                }
+                #[cfg(debug_assertions)]
+                if let Ok(port) = std::env::var("ARVIMO_DEV_RELOAD_PORT") {
+                    if let Ok(port) = port.parse::<u16>() {
+                        let _ = webview.eval(format!("new EventSource('http://127.0.0.1:{port}/events').onmessage=()=>location.reload();"));
+                    }
+                }
+            }
+        })
         // 原生处理关闭，启动页或前端异常时也能保持后台任务运行。
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
@@ -521,6 +597,7 @@ fn main() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            desktop_window_action,
             hide_to_tray,
             quit_app,
             open_external,

@@ -8,7 +8,7 @@
   "description": "抠图：本地算法（魔术棒按颜色选区、擦除/恢复笔刷、收缩与羽化）+ 可选「AI 一键抠图」（本机 ComfyUI 的 BiRefNet 软边基底，经主进程代理调用）。输出带 alpha 的 PNG 并原地替换图片（committed 历史可撤销）。AI 不可用时纯前端离线可用。",
   "descriptionI18n": {"en": "Cutout: local algorithms (magic-wand color selection, erase/restore brushes, shrink and feather) plus an optional \"AI one-click cutout\" (BiRefNet soft-edge matting on the local ComfyUI, proxied through the main process). Writes alpha PNGs and replaces images in place, revertible through committed history. Fully offline when AI is unavailable."},
   "category": "canvas",
-  "author": "Artflow",
+  "author": "Arvimo",
   "license": "MIT",
   "host": "renderer",
   "runtime": { "mode": "builtin", "entry": "./index.tsx" },

@@ -30,11 +30,19 @@ test('mode switches reuse results by filters, preserve pagination, and refresh a
  assert.equal(calls,5,'explicit search refreshes immediately');
 });
 
-test('image discovery defaults to latest curated projects across all asset types',()=>{
+test('explicit all-asset-types scope obeys the user; default facet still gets curated picks',()=>{
+ // #art-type 的「全部作品」就是 value=''，resetFilters() 会把它设回 marmoset：
+ // 空串是用户主动选的分面，不是没传控件值 —— 不该被当成浏览态注入精选 / 改成最新发布。
  const params=artSearchParams({q:'',assetType:'',sort:'relevance',picked:false});
- assert.equal(params.sort,'newest');
- assert.equal(params.picked,true);
+ assert.equal(params.sort,'relevance');
+ assert.equal(params.picked,false);
  assert.equal(params.assetType,'');
+ // 未传分面 / 默认 marmoset 仍是浏览态：给最新精选，避免固定历史榜单。
+ for(const input of [{q:'',sort:'relevance',picked:false},{q:'',assetType:'marmoset',sort:'relevance',picked:false}]){
+  const browsing=artSearchParams(input);
+  assert.equal(browsing.sort,'newest');
+  assert.equal(browsing.picked,true);
+ }
 });
 
 test('Chinese searches query original, translation and synonyms independently with the same filters',async t=>{

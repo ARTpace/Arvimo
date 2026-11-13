@@ -70,7 +70,7 @@ export const loadMoreLabel=({source,platform})=>source==='link'?'解析下一页
  * 内部实现，又没给出路：用户不知道这句话意味着该去做什么。所以这里保证每一句都能照做。
  */
 export function feedErrorMessage({mode,status,error}){
- if(status===404)return `后台服务还是旧版本，没有「${feedLabel(mode)}」的检索接口；重新打开 AssetVault 更新后台服务后即可使用。`;
+ if(status===404)return `后台服务还是旧版本，没有「${feedLabel(mode)}」的检索接口；重新打开 Arvimo · 艺团 更新后台服务后即可使用。`;
  return error||`检索失败 HTTP ${status}`;
 }
 

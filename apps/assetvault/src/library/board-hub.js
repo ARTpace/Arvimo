@@ -28,7 +28,7 @@ export function createBoardHub({
   const gotoLibrary = () => doc.querySelector('[data-route="library"]')?.click();
   // 进出画板都同步 store.activeId：它是「当前画板」的持久化真值，
   // 断线重开要能回到原处，删除当前板时也靠它判断要不要退回全部资产。
-  const openBoard = id => { store.setActive(id); gotoLibrary(); controls?.applyCollection?.(id); };
+  const openBoard = (id,options) => { store.setActive(id); gotoLibrary(); return controls?.applyCollection?.(id,options); };
   const openAll = () => { store.setActive(''); gotoLibrary(); controls?.clearCollection?.(); };
   const actions = createBoardActions({store, win, toast, openBoard});
   // 智能画板规则：新建 / 用当前筛选覆盖，走同一个对话框；保存后按新规则重算并进入该板。
@@ -45,6 +45,7 @@ export function createBoardHub({
   const deck = createBoardDeck({
     doc, win, esc, icon, toast, store, api,
     onOpen: openBoard,
+    onCanvas: id => { store.use(id);emit('assetvault:open-canvas-board',{id}); },
     onAll: openAll,
     onNew: () => actions.createManual(),
     onSmart: () => { gotoLibrary(); rule.openNew(); },
@@ -109,7 +110,7 @@ export function createBoardHub({
   controls?.setOnBoardDirty?.(() => { store.refresh().catch(() => {}); });
 
   return {
-    api, store, picker, collect, deck, rule, actions, batchEdit,
+    api, store, picker, collect, deck, rule, actions, batchEdit, openBoard,
     pickBoards: (uids, options) => picker.open(uids, options),
     openCollect: () => collect.open(),
     syncPending: sync,

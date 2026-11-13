@@ -90,7 +90,8 @@ test('unified sorts are the two orders every platform can share',()=>{
 test('scope is asset kind, and one kind locks a single-type platform',()=>{
  assert.equal(kindAllows([],'ambientcg'),true);
  assert.equal(kindAllows(['textures'],'ambientcg'),true);
- assert.equal(kindAllows(['models'],'ambientcg'),false);
+ // ambientCG 现在也供 3D 模型（ASSET_KINDS.models.ambientcg='3d-model,terrain'），不再是纯材质站。
+ assert.equal(kindAllows(['models'],'ambientcg'),true);
  assert.equal(kindAllows(['models'],'search'),true);
  assert.equal(kindAllows(['hdris'],'polyhaven','hdris'),true);
  assert.equal(kindAllows(['textures'],'polyhaven','models'),false);

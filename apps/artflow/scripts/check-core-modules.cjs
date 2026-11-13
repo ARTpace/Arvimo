@@ -31,9 +31,10 @@ const dispose = activateCoreModules(kernel);
 loadBuiltinPlugins(kernel, []);
 assert.equal(activatedPlugins, 0, 'host modules must not enter the optional loader lifecycle');
 const sections = kernel.contributions.list('settings_sections').map(item => item.id);
-for (const id of ['builtin.settings-plugins', 'builtin.core-settings.general', 'builtin.core-settings.appearance', 'builtin.core-settings.canvas', 'builtin.core-settings.hotkeys', 'builtin.config-manager.presets', 'builtin.config-manager.storage']) {
+for (const id of ['builtin.settings-plugins', 'builtin.core-settings.general', 'builtin.core-settings.ai', 'builtin.core-settings.hotkeys', 'builtin.config-manager.presets', 'builtin.config-manager.storage']) {
   assert.ok(sections.includes(id), `missing host recovery section: ${id}`);
 }
+for (const id of ['builtin.core-settings.appearance', 'builtin.core-settings.canvas']) assert.ok(!sections.includes(id), 'visual controls belong in Theme Studio');
 assert.ok(kernel.contributions.get('canvas_widgets', 'builtin.ui-shell.topbar'));
 assert.ok(kernel.contributions.get('ui_panels', 'builtin.panel-plugin-manager'));
 const startup = fs.readFileSync(path.join(__dirname, '../index.tsx'), 'utf8');

@@ -2,6 +2,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import type { Board } from '../types';
 import { useTranslation } from '../utils/language-store';
+import { BoardThumbnail } from './BoardThumbnail';
 
 interface BoardPanelProps {
     isOpen: boolean;
@@ -10,21 +11,20 @@ interface BoardPanelProps {
     activeBoardId: string;
     onSwitchBoard: (id: string) => void;
     onAddBoard: () => void;
+    onOpenLibraryBoard?: () => void;
     onRenameBoard: (id: string, name: string) => void;
     onDuplicateBoard: (id: string) => void;
     onDeleteBoard: (id: string) => void;
-    generateBoardThumbnail: (elements: Board['elements']) => string;
 }
 
 const BoardItem: React.FC<{
     board: Board;
     isActive: boolean;
-    thumbnail: string;
     onClick: () => void;
     onRename: (name: string) => void;
     onDuplicate: () => void;
     onDelete: () => void;
-}> = ({ board, isActive, thumbnail, onClick, onRename, onDuplicate, onDelete }) => {
+}> = ({ board, isActive, onClick, onRename, onDuplicate, onDelete }) => {
     const { t } = useTranslation();
     const [isEditing, setIsEditing] = useState(false);
     const [name, setName] = useState(board.name);
@@ -85,7 +85,7 @@ const BoardItem: React.FC<{
             className={`group relative p-2 rounded-lg cursor-pointer transition-colors ${isActive ? 'bg-[var(--bp-accent-soft)]' : 'hover:bg-[var(--ui-hover)]'}`}
         >
             <div className={`aspect-[3/2] w-full rounded-md mb-2 overflow-hidden border-2 ${isActive ? 'border-[var(--bp-accent)]' : 'border-transparent'}`}>
-                <img src={thumbnail} alt={t('board.thumbnailAlt', board.name)} className="w-full h-full object-cover" />
+                <BoardThumbnail board={board} label={t('board.thumbnailAlt', board.name)} />
             </div>
             <div className="flex items-center justify-between">
                 {isEditing ? (
@@ -127,14 +127,14 @@ const BoardItem: React.FC<{
 
 export const BoardPanel: React.FC<BoardPanelProps> = ({ 
     isOpen, onClose, boards, activeBoardId, onSwitchBoard, onAddBoard, 
-    onRenameBoard, onDuplicateBoard, onDeleteBoard, generateBoardThumbnail 
+    onRenameBoard, onDuplicateBoard, onDeleteBoard, onOpenLibraryBoard
 }) => {
     const { t } = useTranslation();
     if (!isOpen) return null;
 
     return (
          <div 
-            data-bp-ui-floating-shell="" className="absolute left-4 top-16 z-20 flex h-[min(40rem,calc(100vh-8rem))] w-64 flex-col overflow-hidden rounded-[18px] border border-[var(--ui-border)] text-[var(--ui-text)]"
+            data-bp-ui-floating-shell="" className="absolute left-4 top-28 z-20 flex h-[min(40rem,calc(100vh-8rem))] w-64 flex-col overflow-hidden rounded-[18px] border border-[var(--ui-border)] text-[var(--ui-text)]"
             style={{ backgroundColor: 'var(--ui-bg-color)' }}
         >
             <div className="flex-shrink-0 flex justify-between items-center p-3 border-b border-[var(--ui-border)]">
@@ -148,13 +148,13 @@ export const BoardPanel: React.FC<BoardPanelProps> = ({
                     </button>
                 </div>
             </div>
+            {onOpenLibraryBoard && <button onClick={onOpenLibraryBoard} className="mx-2 mt-2 rounded-lg px-3 py-2 text-sm text-[var(--ui-text)] hover:bg-[var(--ui-hover)]" title="打开当前画布对应的资产库画板">资产库画板 ↗</button>}
             <div className="flex-grow p-2 overflow-y-auto grid grid-cols-2 gap-2 content-start">
                  {boards.map(board => (
                      <BoardItem 
                         key={board.id}
                         board={board}
                         isActive={board.id === activeBoardId}
-                        thumbnail={generateBoardThumbnail(board.elements)}
                         onClick={() => onSwitchBoard(board.id)}
                         onRename={(name) => onRenameBoard(board.id, name)}
                         onDuplicate={() => onDuplicateBoard(board.id)}

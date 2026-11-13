@@ -5,7 +5,7 @@
   "minHostVersion": "1.0.0",
   "name": "内置文本阅读器",
   "nameI18n": {"en": "Built-in Text Reader"},
-  "author": "Artflow",
+  "author": "Arvimo",
   "license": "MIT",
   "runtime": {
     "mode": "builtin",

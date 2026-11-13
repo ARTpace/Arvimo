@@ -268,7 +268,7 @@ export function createAdvancedQuery({$, state, renderGrid, toast, esc, icon, res
       await apply();
       return;
     }
-    activeCollection = activeCollection === id ? '' : id;
+    activeCollection = !force && activeCollection === id ? '' : id;
     activeBoard = activeCollection ? {id: item.id, name: item.name, smart: false, assetCount: item.assetCount} : null;
     // 打开手动画板时默认按画板里保存的顺序显示；用户仍可在排序下拉里换成别的。
     if (activeCollection && sort.value === 'recent') sort.value = 'collection';

@@ -5,7 +5,7 @@
   "minHostVersion": "1.0.0",
   "name": "Plugin Manager",
   "nameI18n": {"zho": "插件管理器"},
-  "author": "Artflow",
+  "author": "Arvimo",
   "license": "MIT",
   "runtime": {
     "mode": "builtin",

@@ -7,7 +7,7 @@
 // CF_HDROP 把目录交给 Photoshop / PureRef 之后它们都不知道该拿它怎么办；摊成里面每一张图，
 // 才等于「从资源管理器多选拖过去」。3D 导出包是单个 zip / glb，原样给，不能拆。
 import path from 'node:path';
-import {expandDragFiles} from './drag-stage.mjs';
+import {expandDragFiles,expandModelFiles} from './drag-stage.mjs';
 
 /**
  * @param {object} options
@@ -24,7 +24,16 @@ export function createAssetResolver({jobs = () => [], roots = () => [], scanPack
     // 「已保存且文件还在」的任务才是可拖的；同一 uid 可能有多条（重下过），取最新的一条。
     const saved = jobs().filter(job => job && job.uid === id && job.state === 'saved' && job.filePath);
     const job = saved.findLast(item => item.fileExists !== false) || saved[saved.length - 1] || null;
-    if (job) return job.kind === 'images' ? expand(job.filePath, {maxItems}) : [job.filePath];
+    if (job) {
+      if (job.kind === 'images') return expand(job.filePath, {maxItems});
+      // Fab 落盘是「引擎工程目录」：整个目录交给 Blender 没法用，挑出里面的模型文件
+      // （glb/fbx/obj/blend/uasset…）再拖；挑不到就退回整目录（至少能拖进资源管理器）。
+      if (job.kind === 'fab') {
+        const models = await expandModelFiles(job.filePath, {maxItems});
+        if (models.length) return models;
+      }
+      return [job.filePath];
+    }
     // 托管/链接导入不产生下载任务，按权威资产记录解析原件，不能降级成文本拖放。
     const imported = findAsset ? await findAsset(id) : null;
     if (imported?.filePath && resolveImported) {

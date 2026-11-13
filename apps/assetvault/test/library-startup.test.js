@@ -4,7 +4,7 @@ import {readFileSync} from 'node:fs';
 import vm from 'node:vm';
 
 const source=readFileSync(new URL('../src/library/splash.js',import.meta.url),'utf8');
-function boot(invoke,{interfaceStage=false}={}){
+function boot(invoke,{interfaceStage=false,preRendered=false}={}){
  const nodes=new Map();
  const get=id=>{
   if(!nodes.has(id))nodes.set(id,{style:{},textContent:'',classList:{add(){},remove(){}},addEventListener(){}});
@@ -13,13 +13,14 @@ function boot(invoke,{interfaceStage=false}={}){
  let now=0,removed=false;
  const listeners=new Map();
  const screen={style:{},attachShadow:()=>({getElementById:get}),remove(){removed=true;}};
+ if(preRendered)screen.shadowRoot={getElementById:get};
  const timers=[],frames=[],navigations=[];
  vm.runInNewContext(source,{
   document:{getElementById:id=>id==='startup-screen'?(interfaceStage?screen:null):get(id),documentElement:{dataset:{}}},window:{__TAURI__:{core:{invoke}},addEventListener:(name,fn)=>listeners.set(name,fn)},URL,
   DOMParser:class{parseFromString(){return {querySelector:selector=>selector==='style'?{textContent:'body{}'}:{outerHTML:'<main></main>'}};}},
   location:{pathname:'/waiting.html',replace:url=>navigations.push(url)},
   Date:{now:()=>now},setTimeout:fn=>timers.push(fn),requestAnimationFrame:fn=>frames.push(fn),
-  fetch:()=>{if(interfaceStage)return Promise.resolve({ok:true,text:async()=>'<main></main>'});throw Error('桌面加载页不应跨源请求后端');},
+  fetch:()=>{if(preRendered)throw Error('预渲染启动界面不应再次请求模板');if(interfaceStage)return Promise.resolve({ok:true,text:async()=>'<main></main>'});throw Error('桌面加载页不应跨源请求后端');},
  });
  return {get,timers,frames,navigations,listeners,get removed(){return removed;},frame(time){now=time;frames.shift()?.();}};
 }
@@ -70,4 +71,16 @@ test('本地加载页复用吉祥物布局和脚本，不再显示蓝色圆点�
  const rust=readFileSync(new URL('../sketchfab-exporter-tauri/src-tauri/src/main.rs',import.meta.url),'utf8');
  assert.match(rust,/fn open_ready_library/);
  assert.doesNotMatch(source,/location\.replace\(home\)/);
+});
+
+
+test('预渲染首页立即使用已有加载界面，不再次取模板或替换图标',async()=>{
+ const b=boot(async()=>null,{interfaceStage:true,preRendered:true});
+ await flush();
+ assert.equal(b.get('pct').textContent,'70%');
+ assert.equal(b.removed,false);
+ b.listeners.get('assetvault:ui-ready')();
+ b.frame(100);b.frame(600);
+ for(const timer of b.timers.splice(0))timer();
+ assert.equal(b.removed,true);
 });

@@ -28,6 +28,7 @@ import {resolveUserPaths} from '../server/data-dir.mjs';
 import {G, artifactIssues, checkServerExtras, checkRuntime, checkRegression,
   checkStorageIntegrity, checkCredentials, checkDownloadsDeep, checkPreviewMatrix,
   checkLinkRouting} from './self-check-extra.mjs';
+import {checkFrontendArtifacts, checkLanSharing, checkInteractionGuards} from './self-check-frontend.mjs';
 import {SERVER_VERSION} from '../server/capabilities.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -42,15 +43,55 @@ const fixMode = !argv.includes('--no-fix');           // 默认就修，--no-fix
 const apply = fixMode && !argv.includes('--dry-run'); // --dry-run 只列计划（--fix/--apply 兼容旧调用，无需再传）
 const explicitUrl = arg('url') || (arg('port') ? `http://127.0.0.1:${arg('port')}` : '');
 
-const token = (() => {
+// 令牌候选：同一台机器上可能并存「已安装版（APPDATA）」和「开发版 / 便携实例（_local/<实例>）」，
+// 两边账号目录不同、令牌也不同。只读默认目录时，对着开发版实例跑自检会满屏「请先登录」，
+// 组 4 / 6 / 11 / 12 全部失真。所以先收所有候选，再用闸门（/api/downloads）验一发，谁能过用谁。
+function tokenCandidates() {
+  const seen = new Set();
+  const out = [];
+  const add = (file, primary) => {
+    try {
+      const value = fs.readFileSync(file, 'utf8').trim();
+      if (!value || seen.has(value)) return;
+      seen.add(value);
+      out.push({token: value, from: file, primary: !!primary});
+    } catch { /* 继续找下一处 */ }
+  };
   // ADR-13：账号/令牌住在库外面（多个资源库共用一个账号），老数据目录留作退路。
   const paths = resolveUserPaths();
-  for (const file of [path.join(paths.accountsDir, 'auth-token'), path.join(paths.dataDir, 'auth-token')]) {
-    try { const value = fs.readFileSync(file, 'utf8').trim(); if (value) return value; } catch { /* 继续找下一处 */ }
+  add(path.join(paths.accountsDir, 'auth-token'), true);
+  add(path.join(paths.dataDir, 'auth-token'), true);
+  try {
+    // _local 可能挂在 app 目录，也可能挂在仓库根（Arvimo/apps/assetvault ← ../../_local），往上找三层。
+    for (const base of [root, path.join(root, '..'), path.join(root, '..', '..')]) {
+      const local = path.join(base, '_local');
+      let names = [];
+      try { names = fs.readdirSync(local); } catch { continue; }
+      for (const name of names) {
+        add(path.join(local, name, 'accounts', 'auth-token'));
+        add(path.join(local, name, 'auth-token'));
+      }
+    }
+  } catch { /* 没有 _local 目录就是纯安装版 */ }
+  return out;
+}
+
+/** 用闸门现状选令牌：返回第一个能过鉴权的候选；都过不了就退回主候选（保留原行为）。 */
+async function resolveToken(base) {
+  const list = tokenCandidates();
+  for (const item of list) {
+    try {
+      const r = await fetch(`${base}/api/downloads`, {
+        headers: {'X-SFX-Local': '1', 'X-AV-Token': item.token},
+        signal: AbortSignal.timeout(4000),
+      });
+      if (r.ok) return item;
+    } catch { /* 网络异常就试下一个 */ }
   }
-  return '';
-})();
-const HEADERS = {'X-SFX-Local': '1', ...(token ? {'X-AV-Token': token} : {})};
+  return list[0] || null;
+}
+
+const HEADERS = {'X-SFX-Local': '1'};
 
 const log = (...args) => { if (!jsonMode) console.info(...args); };
 const results = {OK: 0, WARN: 0, FAIL: 0};
@@ -112,7 +153,7 @@ async function checkServer(base) {
   report(h?.name ? 'OK' : 'FAIL', '本地服务', h?.name ? `${h.version} · 引擎 ${h.engine}` : `HTTP ${health.status}`);
   report(h?.storage?.healthy === false ? 'FAIL' : 'OK', '资产索引',
     h?.storage ? `${h.storage.engine}/${h.storage.catalog} · ${h.storage.healthy ? '健康' : h.storage.reason}` : '无状态');
-  if (!token) report('WARN', '机器令牌', '没读到 auth-token，需要登录的接口会返回 401');
+  if (!HEADERS['X-AV-Token']) report('WARN', '机器令牌', '没读到可用的 auth-token，需要登录的接口会返回 401');
 
   try {
     const caps = await api(`${base}/api/downloads/capabilities`, {timeout: 5000});
@@ -415,6 +456,15 @@ async function applyProbeRetry(base, failures) {
 
 const base = await findServer();
 log(`AssetVault 自检  ·  ${base || '服务未运行'}  ·  ${new Date().toLocaleString('zh-CN')}`);
+if (base) {
+  const picked = await resolveToken(base);
+  if (picked?.token) {
+    HEADERS['X-AV-Token'] = picked.token;
+    if (!picked.primary) log(`  · 令牌对齐    ${picked.from}（与默认账号目录不同，按能过闸门的那份走）`);
+  } else {
+    log('  · 没找到 auth-token：需要鉴权的接口都会 401，组 4 / 6 / 10 / 11 / 12 的结论不可信');
+  }
+}
 if (!base) {
   log('\n本地服务没探到。先启动 AssetVault，再用 --url / --port 指过去。');
   log('离线静态检查照跑：');
@@ -426,6 +476,9 @@ if (!base) {
   await checkStorageIntegrity({report, group, log, root, base: null});
   await checkCredentials({report, group, log, root, base: null, api, LABELS});
   await checkDownloadsDeep({report, group, log, root, base: null, api});
+  await checkFrontendArtifacts({report, group, log, root, base: null});
+  await checkLanSharing({report, group, log, root, base: null});
+  await checkInteractionGuards({report, group, log, root, base, api});
 } else {
   const csp = (await checkServer(base)) || {csp: '', missing: [], health: {}};
   checkServerExtras({report, root, base, cspInfo: csp});
@@ -443,6 +496,10 @@ if (!base) {
   await checkStorageIntegrity(ctx);
   await checkCredentials(ctx);
   await checkDownloadsDeep(ctx);
+  // 13–15：这几组正是「修完又被改回去」的高发区，静态断言 + 只读 GET，秒级。
+  await checkFrontendArtifacts({report, group, log, root, base});
+  await checkLanSharing({report, group, log, root, base});
+  await checkInteractionGuards({report, group, log, root, base, api});
 }
 
 const fixes = fixMode ? planFixes() : [];

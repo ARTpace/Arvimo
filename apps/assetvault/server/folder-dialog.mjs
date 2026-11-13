@@ -82,7 +82,7 @@ export function nativeFolderPicker(initial){
   const script=`Add-Type -AssemblyName System.Windows.Forms
 [Console]::OutputEncoding=[System.Text.Encoding]::UTF8
 $dialog = New-Object System.Windows.Forms.FolderBrowserDialog
-$dialog.Description = '选择 AssetVault 下载目录'
+$dialog.Description = '选择艺团下载目录'
 $dialog.ShowNewFolderButton = $true
 $initial = ${psQuote(selected)}
 if ($initial -and [System.IO.Directory]::Exists($initial)) { $dialog.SelectedPath = $initial }

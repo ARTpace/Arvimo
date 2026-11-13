@@ -67,7 +67,7 @@ function pictureSource(card) {
 function uidSource(card) {
   const uid = card.dataset.uid || '';
   if (!uid) return null;
-  return {uid, label: card.querySelector?.('.card-title')?.textContent?.trim() || 'AssetVault 资产', items: [{type: 'asset', uid}]};
+  return {uid, label: card.querySelector?.('.card-title')?.textContent?.trim() || 'Arvimo · 艺团 资产', items: [{type: 'asset', uid}]};
 }
 
 /** 匹配顺序即优先级：本地包与图站卡互不重叠，uid 放最后兜底。 */

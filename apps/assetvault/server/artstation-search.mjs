@@ -60,7 +60,9 @@ export function artSearchParams(input={}){
   const browsing=!q.trim()&&!category
     &&(input.sort===undefined||input.sort==='relevance')
     &&(input.picked===undefined||input.picked===false)
-    &&(!assetType||assetType===ARTSTATION_ASSET_TYPE_DEFAULT);
+    // 空串是用户主动选了「全部作品」（不带 asset_types 分面），不是没传控件值；
+    // 用 !assetType 会把它误判成浏览态，强行注入精选并改成最新发布。
+    &&assetType===ARTSTATION_ASSET_TYPE_DEFAULT;
   // 浏览态要真的覆盖掉控件上的默认值（前端送来的 sort 是 'relevance'，那是真值，
   // 不能写 input.sort||… 否则浏览态永远排不到前面）。
   return {q:q.trim(),sort:browsing?'newest':input.sort||'relevance',category,picked:input.picked===true||browsing,assetType};

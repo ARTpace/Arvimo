@@ -50,6 +50,9 @@ function makeGrid(width){
   querySelectorAll:()=>[],addEventListener:(name,fn)=>{listeners[name]=fn;},closest:()=>root};
  const card=height=>({height,style:style(),closest(){return this;},getBoundingClientRect(){return {height:this.height};}});
  const context={window:{innerWidth:1200,addEventListener(){}},document:{},
+  // masonry.js 读 --lib-gap-x/y 与 --lib-col-min 用 getComputedStyle；沙箱里给个回落，
+  // 缺变量时 masonry 自己会走 12/14/190 默认值，不影响这里对坐标写入时机的断言。
+  getComputedStyle:el=>el.style||{getPropertyValue:()=>''},
   requestAnimationFrame:fn=>{frame=fn;return 1;},MutationObserver:class{constructor(fn){this.fn=fn;}observe(){}},
   ResizeObserver:class{observe(){}},root};
  vm.runInNewContext(masonrySource+';this.__api=observeMasonry(root);',context);

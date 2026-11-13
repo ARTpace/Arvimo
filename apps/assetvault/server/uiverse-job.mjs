@@ -114,7 +114,7 @@ export async function runUiverseJob({ uid, url, output, options, name, author, t
       { file: 'README.md', bytes: Buffer.byteLength(readme(meta, code)) },
     ],
     exportedAt: new Date().toISOString(),
-    tool: 'AssetVault · Uiverse',
+    tool: 'Arvimo · Uiverse',
   };
   await fs.writeFile(path.join(dir, 'info.json'), JSON.stringify(metaJson, null, 2), 'utf8');
 

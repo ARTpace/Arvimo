@@ -226,6 +226,10 @@ export const SERVER_CAPABILITIES = Object.freeze({
   // ADR-15：语义搜索 / 找相似（schema v6 的 asset_vectors + /api/library/semantic/*）。
   // 老进程没有这张表和这几个路由，语义开关点下去只会 404。
   semanticSearch: true,
+  // Fab（Epic 3D 资产商城）：搜索 + 已拥有资产下载。老进程没有 /api/fab/* 路由，
+  // 卡片搜索与下载会撞 404 —— 必须靠这一位让启动器换掉旧进程。
+  fabSearch: true,
+  fabDownload: true,
 });
 
 /** 必须为 true 的能力位（version 单独比）。从契约派生，不手抄，免得再漏一个。 */

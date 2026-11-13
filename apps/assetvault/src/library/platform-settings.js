@@ -241,26 +241,37 @@ const paintLogin=(button,hosts)=>{
 };
  const watchers=new Map();
  // 登录窗口可能开很久，轮询到「窗口关了」为止再落一次状态，中间每次拿到新 cookie 也立刻回写。
- function watchLogin(button){
-  const id=button.dataset.login;
-  if(watchers.has(id))return;
-  const started=Date.now();
-  const timer=setInterval(async()=>{
-   const hosts=await readCookieHosts();
-   if(hosts)paintLogin(button,hosts);
-   let open=false;
+  // Fab 走 Epic OAuth（不是 cookie）：登录态从 /api/fab/session 读，单独染色。
+  async function paintFabLogin(button){
+   if(!button||button.dataset.login!=='fab')return;
    try{
-    const response=await fetch('/api/browser/login',{headers:{'X-SFX-Local':'1'}});
-    open=Boolean((await response.json())?.open);
-   }catch{open=false;}
-   if(open&&Date.now()-started<15*60*1000)return;
-   clearInterval(timer);watchers.delete(id);button.dataset.busy='0';
-   const finalHosts=await readCookieHosts();
-   if(finalHosts)paintLogin(button,finalHosts);
-   if(!['ok','have','warn'].includes(button.dataset.state||''))toast(`${button.dataset.label||''} 还没拿到 cookie，可以再点一次登录`);
-  },3000);
-  watchers.set(id,timer);
- }
+    const r=await fetch('/api/fab/session',{headers:{'X-SFX-Local':'1'}});
+    if(!r.ok)return;
+    const d=await r.json().catch(()=>({}));
+    const name=button.dataset.label||'Fab';
+    if(d.loggedIn){button.dataset.state='ok';button.title=`${name}：已登录${d.displayName?`（${d.displayName}）`:''}。点一下重新登录 / 换账号`;}
+    else{button.removeAttribute('data-state');button.title=`打开 Epic 登录窗口登录 ${name}，登录成功后再搜 Fab 资产`;}
+   }catch{/* 状态读不到就保持默认可点 */}
+  }
+  function watchLogin(button){
+   const id=button.dataset.login;
+   if(watchers.has(id))return;
+   const started=Date.now();
+   const timer=setInterval(async()=>{
+    if(id==='fab'){await paintFabLogin(button);}
+    else{const hosts=await readCookieHosts();if(hosts)paintLogin(button,hosts);}
+    let open=false;
+    try{
+     const response=await fetch('/api/browser/login',{headers:{'X-SFX-Local':'1'}});
+     open=Boolean((await response.json())?.open);
+    }catch{open=false;}
+    if(open&&Date.now()-started<15*60*1000)return;
+    clearInterval(timer);watchers.delete(id);button.dataset.busy='0';
+    if(id==='fab'){await paintFabLogin(button);if(button.dataset.state!=='ok')toast(`${button.dataset.label||'Fab'} 还没登录成功，可以再点一次`);}
+    else{const finalHosts=await readCookieHosts();if(finalHosts)paintLogin(button,finalHosts);if(!['ok','have','warn'].includes(button.dataset.state||''))toast(`${button.dataset.label||''} 还没拿到 cookie，可以再点一次登录`);}
+   },3000);
+   watchers.set(id,timer);
+  }
  async function openLogin(button){
   if(button.dataset.busy==='1')return;
   const id=button.dataset.login,name=button.dataset.label||id;
@@ -280,7 +291,8 @@ const paintLogin=(button,hosts)=>{
   }
  }
  // 卡片渲染完先对一次账，把已有 cookie 的站直接标成「已登录」（不点也不影响解析）。
- readCookieHosts().then(hosts=>{if(hosts)card.querySelectorAll('[data-login]').forEach(button=>paintLogin(button,hosts));});
+  readCookieHosts().then(hosts=>{if(hosts)card.querySelectorAll('[data-login]').forEach(button=>{if(button.dataset.login!=='fab')paintLogin(button,hosts);});});
+  card.querySelectorAll('[data-login="fab"]').forEach(button=>paintFabLogin(button));
  // ---- 卡片上的「测试」：只读一次请求，不写缓存、不入队，也不会因为平台被关掉就拒绝测试（关掉也要能自证好坏）。----
  async function testOne(id,url){
   const response=await fetch('/api/platforms/test',{method:'POST',headers:{'Content-Type':'application/json','X-SFX-Local':'1'},body:JSON.stringify({id,url:url||''})});

@@ -20,6 +20,8 @@ export interface SettingsSectionContribution {
   component: ComponentType<SettingsSectionProps>;
   /** 侧栏分组：core=核心设置组（优先展示），extensions=扩展组。缺省 extensions。 */
   navGroup?: 'core' | 'extensions';
+  /** Optional destination in the unified Arvimo settings. */
+  category?: 'general' | 'assets' | 'canvas' | 'extensions' | 'data';
 }
 
 export type SettingsSectionRegistryEntry = Contribution<SettingsSectionContribution>;

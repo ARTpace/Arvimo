@@ -2285,6 +2285,9 @@ export const PICTURE_LOGIN_URLS = Object.freeze({
   artstation: 'https://www.artstation.com/',
   // 单篇笔记不需要登录；这里给的是「主页 / 关键词搜索 / 过验证码」用的入口。
   xiaohongshu: 'https://www.xiaohongshu.com/',
+  // Fab 用 Epic OAuth：登录页会把浏览器送到 /id/api/redirect 显示含 authorizationCode 的 JSON，
+  // 服务端（/api/browser/login 的 fab 分支）从那里提取授权码换 token。clientId 是 Epic 启动器的公开客户端。
+  fab: 'https://www.epicgames.com/id/login?redirectUrl=https%3A%2F%2Fwww.epicgames.com%2Fid%2Fapi%2Fredirect%3FclientId%3D34a02cf8f4414e29b15921876da36f9a%26responseType%3Dcode',
 });
 
 export const PICTURE_SITES = Object.freeze({

@@ -6,8 +6,9 @@
 // 桌面版由 sidecar-server/node_modules 提供原生模块（装配见 desktop scripts/copy-sqlite-native.mjs）；
 // 默认裸导入让 Node 自己逐级向上解析，不写死任何绝对路径。
 import {createRequire} from 'node:module';
-import {MIGRATIONS, SUPPORTED_SCHEMA_VERSION, MAIN_STATE_KEY, STATE_KEYS, STATE_STAMP_PREFIX, stateStampKey, planMigrations} from './library-schema.mjs';
+import {MIGRATIONS, SUPPORTED_SCHEMA_VERSION, MAIN_STATE_KEY, PROBE_STATE_KEY, STATE_KEYS, STATE_STAMP_PREFIX, stateStampKey, planMigrations} from './library-schema.mjs';
 import {assembleState, splitState, categoryTextOf} from './library-blob.mjs';
+import {probeOfModel} from './model-probe.mjs';
 import {syncVocab} from './vocab-sync.mjs';
 import {createTagWriter} from './library-tags-write.mjs';
 // 归一化键必须与词表种子用同一套规则（NFKC + 压空白 + 小写），
@@ -406,6 +407,34 @@ export function createLibraryDb({Database, file, now = Date.now, onWarn = WARN} 
     }
   }
 
+  /**
+   * 探测缓存增量回填：前端后台扫描只写「探测域」，不带目录域。
+   * 走 mergeDerived 会整库重算（50 万资产要几百秒），所以这里只重写被采到的那几行，
+   * 只动 probe 派生的 5 列 + payload.probe —— 用户域（评分 / 备注 / 标签）一律不碰。
+   * 少了这一步，颜色 / 尺寸筛选对本地资产完全无效：payload 里没有 probe，匹配直接落空。
+   */
+  const selProbeRow = db.prepare('SELECT payload FROM assets WHERE uid = ?');
+  const patchProbeRow = db.prepare(`UPDATE assets SET payload = ?, width = ?, height = ?, long_edge = ?,
+    color_h = ?, duration = ?, updated_at = ? WHERE uid = ?`);
+  function patchProbes(json, stamp) {
+    let probes;
+    try { probes = JSON.parse(json); } catch { return; }
+    if (!probes || typeof probes !== 'object' || Array.isArray(probes)) return;
+    for (const [uid, probe] of Object.entries(probes)) {
+      if (!uid || !probe || typeof probe !== 'object' || Array.isArray(probe)) continue;
+      const row = selProbeRow.get(uid);
+      if (!row) continue;
+      let model;
+      try { model = JSON.parse(row.payload); } catch { continue; }
+      if (!model || typeof model !== 'object') continue;
+      const info = probeOfModel({...model, probe});
+      if (!info) continue;
+      const width = info.width ?? null, height = info.height ?? null;
+      const longEdge = width && height ? Math.max(width, height) : null;
+      patchProbeRow.run(JSON.stringify({...model, probe}), width, height, longEdge, info.h ?? null, info.duration ?? null, stamp, uid);
+    }
+  }
+
   const write = db.transaction((values, {replace = false, stamp = now(), stamps = null, derived = true, syncUser = false} = {}) => {
     // 逐域精确时间戳：一次提交若同时写了目录域与会话域，用同一个 max stamp 会让
     // 目录域的戳虚高于它自己的文件 mtime，读权威时误判「DB 更新」而白搬 209MB。
@@ -435,6 +464,8 @@ export function createLibraryDb({Database, file, now = Date.now, onWarn = WARN} 
     // derived=false 用于「派生表已经定点改过了」的场合：S3 的增量写路径
     // 已经逐条更新了 assets / tags / asset_tags，再合并一次就是纯浪费。
     if (derived && Object.hasOwn(values, MAIN_STATE_KEY)) mergeDerived(values, stamp, syncUser);
+    // 只写了探测域时不会进 mergeDerived（它会整库重算），改走按 uid 的定点回填。
+    else if (derived && typeof values[PROBE_STATE_KEY] === 'string') patchProbes(values[PROBE_STATE_KEY], stamp);
   });
 
   // S3：集合语义写入器。定点改派生表，不重建整表。

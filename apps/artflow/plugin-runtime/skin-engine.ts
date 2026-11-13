@@ -290,7 +290,7 @@ export class SkinEngine {
     const next = normalizeUiThemeSettings(patch, this.uiSettings);
     if (JSON.stringify(next) === JSON.stringify(this.uiSettings)) return;
     this.uiSettings = next;
-    if (this.baseTokens) this.applyUiSettings(this.baseTokens);
+    this.applyUiSettings(this.currentTokens());
     if (this.currentId) { this.syncSystemMode(); this.persistState(); }
   }
 
@@ -380,7 +380,13 @@ export class SkinEngine {
     const validComposite = selection.composite && has(selection.composite.baseSkinId) ? selection.composite : null;
     const fallback = [selection.skinId, session.baseline.composite?.baseSkinId, session.baseline.skinId, this.listSkins()[0]?.id]
       .find((id): id is string => typeof id === 'string' && has(id));
-    if (!validComposite && !fallback) return; // all contributors were unloaded
+    // UI controls still operate on the built-in token defaults when all skin plugins are disabled.
+    if (!validComposite && !fallback) {
+      this.uiSettings = normalizeUiThemeSettings(selection.uiSettings);
+      this.applyUiSettings(this.currentTokens());
+      this.updatePreviewMarker(session);
+      return;
+    }
     const tokenId = validComposite ? COMPOSITE_ID : fallback!;
     const tokenChanged = this.currentId !== tokenId || JSON.stringify(this.composite) !== JSON.stringify(validComposite);
     // Resolve before touching live state so a bad source cannot leave a half-applied preview.
@@ -418,7 +424,7 @@ export class SkinEngine {
       });
     } else {
       this.uiSettings = { ...baseline.uiSettings };
-      if (this.baseTokens) this.applyUiSettings(this.baseTokens);
+      this.applyUiSettings(this.currentTokens());
       if (this.cssSkinId !== null) this.updateCssSkin(null, false);
     }
     document.documentElement.removeAttribute('data-bp-appearance-preview');

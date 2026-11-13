@@ -92,7 +92,7 @@
   },
   "build": {
     "appId": "com.artflow.app",
-    "productName": "ArtFlow",
+    "productName": "Arvimo",
     "electronDist": "node_modules/electron/dist",
     "directories": {
       "output": "release-v018b"
@@ -138,8 +138,8 @@
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
-      "shortcutName": "ArtFlow",
-      "artifactName": "ArtFlow-Setup-${version}.exe"
+      "shortcutName": "Arvimo",
+      "artifactName": "Arvimo-Setup-${version}.exe"
     }
   }
 }

@@ -1,0 +1,186 @@
+// A canvas board and a manual library collection share one ID and one membership set.
+// The old JSON file is read only for migration; it remains an untouched recovery copy.
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import {createHash, randomUUID} from 'node:crypto';
+import {listCollections, saveCollection, deleteCollection, collectionUids, setCollectionItems} from './library-collections.mjs';
+import {importLibrary, PORTABLE_FORMAT, PORTABLE_VERSION} from './library-portable.mjs';
+
+const clone = value => structuredClone(value);
+const hash = value => createHash('sha256').update(value).digest('hex');
+const empty = () => ({format:'artflow-project',version:2,boards:[],nodes:[],assets:[]});
+const board = (id,name) => ({id,name,panOffset:{x:0,y:0},zoom:1,canvasBackgroundColor:'#18181b',operationHistory:[],operationHistoryIndex:-1});
+const valid = doc => doc?.format==='artflow-project' && doc.version===2 && ['boards','nodes','assets'].every(key=>Array.isArray(doc[key]));
+const same = (a,b) => JSON.stringify(a)===JSON.stringify(b);
+const byId = list => new Map(list.map(item=>[item.id,item]));
+const unresolved = asset => sourceOf(asset).startsWith('blob:');
+const refs = (doc,id) => {
+  const pending=new Set(doc.assets.filter(unresolved).map(asset=>asset.id));
+  return new Set(doc.nodes.filter(node=>node.boardId===id && node.assetId && !pending.has(node.assetId)).map(node=>node.assetId));
+};
+const sourceOf = asset => asset.locator?.originalRef || asset.locator?.fileRef || asset.locator?.previewRef || '';
+const stableUrl = source => String(source).replace(/^http:\/\/(?:127\.0\.0\.1|localhost):\d+(?=\/api\/)/,'');
+function remapIds(value, ids) {
+  if (!value || typeof value!=='object') return;
+  if (typeof value.assetId==='string' && ids.has(value.assetId)) value.assetId=ids.get(value.assetId);
+  for (const child of Object.values(value)) if (child && typeof child==='object') remapIds(child,ids);
+}
+
+export function createCanvasBoards({storage,dataDir,dropImporter,localImporter,onChanged=()=>{}}) {
+  let queue=Promise.resolve();
+  const serial = fn => {const result=queue.then(fn);queue=result.catch(()=>{});return result;};
+  async function state() {
+    return storage.withDbWrite(conn=>{
+      conn.run('CREATE TABLE IF NOT EXISTS canvas_project (id INTEGER PRIMARY KEY CHECK(id=1), payload TEXT NOT NULL)',[]);
+      const row=conn.all('SELECT payload FROM canvas_project WHERE id=1',[])[0];
+      return row ? JSON.parse(row.payload) : null;
+    });
+  }
+  const assetModel = uid => storage.withDb(conn=>{
+    const row=conn.all("SELECT payload FROM assets WHERE uid=? AND state='active'",[uid])[0];
+    return row ? JSON.parse(row.payload) : null;
+  });
+  async function normalize(input,links,importNew=true) {
+    if (!valid(input)) throw Object.assign(Error('画布文档格式无效'),{status:400});
+    const doc=clone(input), ids=new Map(), assets=new Map();
+    for (const asset of doc.assets) {
+      const source=stableUrl(sourceOf(asset));
+      if (!source) { assets.set(asset.id,asset); continue; }
+      // 旧存档的 blob 属于旧 WebView，服务端无法恢复字节。保留节点，不能阻塞其他画板迁移。
+      if (source.startsWith('blob:')) { assets.set(asset.id,asset); continue; }
+      const key=hash(`${asset.kind}:${source}`);
+      const hinted=doc.nodes.find(node=>node.assetId===asset.id)?.properties?.assetRef?.uid;
+      let uid=asset.metadata?.libraryUid || hinted || links[key];
+      let model=uid ? await assetModel(uid) : null;
+      if (!model && uid?.startsWith('local:') && importNew && localImporter) {
+        const [folder,...parts]=uid.slice(6).split('|');
+        const result=await localImporter.importFile({folder,rel:parts.join('|'),mode:'linked',duplicate:'skip',nameConflict:'keep-both'});
+        uid=result.asset?.uid;model=result.asset;
+      }
+      if (uid && !model && !links[key] && !await storage.withDb(conn=>conn.all('SELECT uid FROM assets WHERE uid=?',[uid])[0])) uid=undefined;
+      if (!model && !uid && await assetModel(asset.id)) {uid=asset.id;model=await assetModel(uid);}
+      if (!uid && importNew) {
+        const node=doc.nodes.find(item=>item.assetId===asset.id);
+        const mime=asset.locator.mimeType || 'application/octet-stream';
+        const extension=asset.locator.extension || ({'image/png':'png','image/jpeg':'jpg','image/webp':'webp','image/gif':'gif','video/mp4':'mp4','audio/mpeg':'mp3','image/svg+xml':'svg'}[mime]) || asset.kind;
+        const name=String(node?.properties?.name || `画布素材.${extension}`);
+        if (source.startsWith('data:')) {
+          const match=/^data:([^,]*),(.*)$/s.exec(source);
+          if (!match) throw Error('画布素材编码无效');
+          const bytes=match[1].includes(';base64') ? Buffer.from(match[2],'base64') : Buffer.from(decodeURIComponent(match[2]));
+          const result=await dropImporter.save({name:/\.[a-z0-9]+$/i.test(name)?name:`${name}.${extension}`,stream:[bytes],size:bytes.length});
+          uid=result.uid;
+          if (!uid) throw Error('画布素材入库失败');
+          model=await assetModel(uid);
+        } else if (/^(https?:\/\/|\/api\/)/.test(source)) {
+          uid=key.slice(0,32);
+          model={uid,name,url:source,previewUrl:source,thumbnail:asset.locator.thumbnailRef || asset.locator.previewRef || '',assetType:asset.kind==='image'?'image':asset.kind==='video'?'video':'file',platform:'local',source:'canvas',addedAt:Date.now(),downloadable:false};
+          await importLibrary({storage,payload:{format:PORTABLE_FORMAT,version:PORTABLE_VERSION,assets:[model]},mode:'merge',actor:'canvas'});
+        } else throw Error('画布素材尚未持久化，请先完成文件导入');
+      }
+      if (!uid) continue;
+      links[key]=uid;
+      ids.set(asset.id,uid);
+      asset.id=uid;
+      asset.metadata={...asset.metadata,libraryUid:uid};
+      if (model && source.startsWith('data:')) {
+        const file=stableUrl(model.previewUrl || model.url);
+        asset.sourceKind='external-reference';
+        asset.locator=asset.kind==='image'
+          ? {previewRef:file,originalRef:file,thumbnailRef:stableUrl(model.thumbnail || file),mimeType:asset.locator.mimeType || 'image/png',byteSize:model.bytes}
+          : {...asset.locator,fileRef:file};
+        links[hash(`${asset.kind}:${sourceOf(asset)}`)]=uid;
+      }
+      assets.set(uid,asset);
+    }
+    remapIds(doc,ids);
+    doc.assets=[...assets.values()];
+    for (const node of doc.nodes) if (node.assetId && assets.get(node.assetId)?.metadata?.libraryUid) {
+      node.properties.assetRef={...node.properties.assetRef,uid:node.assetId};
+    }
+    return doc;
+  }
+  function persist(conn,doc,links) {
+    conn.run('INSERT INTO canvas_project(id,payload) VALUES(1,?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload',[JSON.stringify({document:doc,links})]);
+  }
+  function reconcile(conn,doc) {
+    const collections=listCollections(conn).filter(item=>!item.smart), existing=byId(doc.boards);
+    const assets=byId(doc.assets), names=new Map();
+    doc.boards=collections.map(item=>({...existing.get(item.id) || board(item.id,item.name),name:item.name}));
+    const allowed=new Map(collections.map(item=>[item.id,collectionUids(conn,item.id)]));
+    const pending=new Set(doc.assets.filter(unresolved).map(asset=>asset.id));
+    doc.nodes=doc.nodes.filter(node=>allowed.has(node.boardId) && (!node.assetId || pending.has(node.assetId) || allowed.get(node.boardId).has(node.assetId)));
+    for (const collection of collections) {
+      const present=refs(doc,collection.id);
+      for (const uid of allowed.get(collection.id)) {
+        const row=conn.all("SELECT payload FROM assets WHERE uid=? AND state='active'",[uid])[0];
+        if (!row) continue; // A deleted/trashed asset must not remain visible on the canvas.
+        const model=JSON.parse(row.payload);names.set(uid,model.name || model.title || uid);
+        if (present.has(uid)) continue;
+        const src=stableUrl(model.previewUrl || model.thumbnail || model.url || '');
+        const image=!!model.thumbnail || /\.(png|jpe?g|gif|webp|svg|avif|bmp)(?:[?#]|$)/i.test(src) || model.assetType==='images';
+        const kind=image?'image':'file';
+        assets.set(uid,{id:uid,kind,sourceKind:'external-reference',locator:image?{previewRef:stableUrl(model.thumbnail || src),mimeType:'image/png'}:{fileRef:src,extension:model.ext || 'bin',mimeType:'application/octet-stream'},metadata:{libraryUid:uid}});
+        const index=doc.nodes.filter(node=>node.boardId===collection.id).length;
+        doc.nodes.push({id:`library-${randomUUID()}`,boardId:collection.id,assetId:uid,nodeType:kind,x:(index%4)*352,y:Math.floor(index/4)*272,width:320,height:240,zIndex:index,properties:{name:names.get(uid),assetRef:{uid,src}}});
+      }
+    }
+    doc.nodes=doc.nodes.filter(node=>!node.assetId || pending.has(node.assetId) || names.has(node.assetId));
+    for (const node of doc.nodes) if (node.assetId && names.has(node.assetId)) node.properties.name=names.get(node.assetId);
+    doc.assets=[...assets.values()];
+    if (!doc.boards.length) {
+      const id=`canvas-${randomUUID()}`;saveCollection(conn,{id,name:'画布 1'});doc.boards=[board(id,'画布 1')];
+    }
+    return doc;
+  }
+  async function load() {
+    const saved=await state();
+    if (saved) return saved;
+    let legacy=null;
+    try {legacy=JSON.parse(await fs.readFile(path.join(dataDir,'artflow-board.json'),'utf8'));}
+    catch(error) {if (error.code!=='ENOENT') throw Error('旧画布存档无法读取，已保留原文件');}
+    if (Array.isArray(legacy)) return {legacy};
+    const links={};
+    const doc=legacy ? await normalize(legacy,links) : empty();
+    await storage.withDbWrite(conn=>{
+      for (const item of doc.boards) {saveCollection(conn,{id:item.id,name:item.name});setCollectionItems(conn,item.id,[...refs(doc,item.id)],'set');}
+      reconcile(conn,doc);persist(conn,doc,links);
+    });
+    return {document:doc,links};
+  }
+  return {
+    read: () => serial(async()=>{
+      const saved=await load();if (saved.legacy) return saved.legacy;
+      return storage.withDbWrite(conn=>{const before=JSON.stringify(saved.document),doc=reconcile(conn,saved.document);if(JSON.stringify(doc)!==before)persist(conn,doc,saved.links);return doc;});
+    }),
+    save: input => serial(async()=>{
+      const saved=await load(), links=saved.links || {};
+      const incoming=await normalize(input.document || input,links);
+      const base=valid(input.base) ? await normalize(input.base,links,false) : empty();
+      return storage.withDbWrite(conn=>{
+        const current=saved.document ? reconcile(conn,saved.document) : empty(), previous=byId(base.boards), next=byId(incoming.boards);
+        const collections=byId(listCollections(conn));
+        for (const old of base.boards) if (!next.has(old.id)) deleteCollection(conn,old.id);
+        for (const item of incoming.boards) {
+          const before=previous.get(item.id), collection=collections.get(item.id);
+          if (before && !collection) continue; // Library deletion wins over a stale canvas save.
+          if (!collection || before?.name!==item.name) saveCollection(conn,{...collection,id:item.id,name:item.name});
+          const oldRefs=refs(base,item.id), newRefs=refs(incoming,item.id);
+          setCollectionItems(conn,item.id,[...oldRefs].filter(uid=>!newRefs.has(uid)),'remove');
+          setCollectionItems(conn,item.id,[...newRefs].filter(uid=>!oldRefs.has(uid)),'add');
+        }
+        // Three-way merge keeps library additions and other canvases intact during delayed saves.
+        const merge=(oldList,newList,currentList)=>{
+          const old=byId(oldList), next=byId(newList), result=byId(currentList);
+          for (const id of old.keys()) if (!next.has(id)) result.delete(id);
+          for (const [id,value] of next) if (!same(old.get(id),value)) result.set(id,value);
+          return [...result.values()];
+        };
+        current.boards=merge(base.boards,incoming.boards,current.boards);
+        current.nodes=merge(base.nodes,incoming.nodes,current.nodes);
+        current.assets=[...new Map([...current.assets,...incoming.assets].map(item=>[item.id,item])).values()];
+        const doc=reconcile(conn,current);persist(conn,doc,links);return doc;
+      }).then(document=>{onChanged();return {ok:true,document};});
+    }),
+  };
+}

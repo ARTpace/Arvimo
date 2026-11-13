@@ -41,7 +41,9 @@ test('共享端口固定，冲突时仅本机可用，显式换端口后显示�
  assert.equal((await request(false,6000)).code,200);
  service=createLanSharing(options);attach();
  assert.equal(service.startupPort(4178),6000);
- assert.equal(service.status(5000).portChanged,true,'重启不能清掉未确认的提醒');
+ // 待确认提示由换端口那次 POST 的响应负责，落盘的 previousPort 在 startupPort 里被消费掉，
+ // 否则每次启动都会把设置页掀开（见 lan-sharing.mjs:69-72）。
+ assert.equal(service.status(5000).portChanged,false,'重启消费掉待确认提醒，不再每次启动掀设置页');
  await request(true,5000,{enabled:true,acknowledgePortChange:true});
  assert.equal(service.status(5000).portChanged,false);
  await request(true,5000,{enabled:false});
@@ -56,8 +58,10 @@ test('旧版共享配置迁移时固定原端口，不更改密码',t=>{
  fs.writeFileSync(file,JSON.stringify(saved));
  const service=createLanSharing({file});
  assert.equal(service.startupPort(5000),5000);
- assert.equal(createLanSharing({file}).startupPort(4178),5000);
- assert.equal(createLanSharing({file}).status(5000).portChanged,true,'旧版未记录分享端口时必须提示核对链接');
+ assert.equal(service.status(5000).portChanged,true,'旧版迁移当次必须提示核对链接');
+ const restarted=createLanSharing({file});
+ assert.equal(restarted.startupPort(4178),5000);
+ assert.equal(restarted.status(5000).portChanged,false,'提示只在迁移当次显示，重启后不再骚扰');
  assert.equal(JSON.parse(fs.readFileSync(file)).hash,saved.hash);
 });
 

@@ -1,6 +1,6 @@
 [package]
 name = "assetvault"
-version = "0.1.15"
+version = "0.1.18"
 description = "AssetVault - Sketchfab 模型导出与本地库桌面版"
 authors = ["AssetVault"]
 edition = "2021"

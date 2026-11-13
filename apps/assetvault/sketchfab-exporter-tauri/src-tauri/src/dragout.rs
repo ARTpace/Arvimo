@@ -23,7 +23,7 @@ use windows::Win32::Foundation::{
 };
 use windows::Win32::System::Com::{
     IAdviseSink, IDataObject, IDataObject_Impl, IEnumFORMATETC, IEnumSTATDATA, STGMEDIUM,
-    STGMEDIUM_0, TYMED_HGLOBAL, FORMATETC,
+    STGMEDIUM_0, TYMED_HGLOBAL, FORMATETC, DATADIR_GET, DVASPECT_CONTENT,
 };
 use windows::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
 use windows::Win32::System::Ole::{
@@ -35,7 +35,7 @@ use windows::Win32::System::Threading::{
     OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
     PROCESS_QUERY_LIMITED_INFORMATION,
 };
-use windows::Win32::UI::Shell::DROPFILES;
+use windows::Win32::UI::Shell::{DROPFILES, SHCreateStdEnumFmtEtc};
 use windows::Win32::UI::WindowsAndMessaging::{
     GetAncestor, GetCursorPos, GetWindowTextW, GetWindowThreadProcessId, WindowFromPoint, GA_ROOT,
 };
@@ -190,8 +190,27 @@ impl IDataObject_Impl for AssetDrag_Impl {
         Err(E_NOTIMPL.into())
     }
 
-    fn EnumFormatEtc(&self, _direction: u32) -> windows::core::Result<IEnumFORMATETC> {
-        Err(E_NOTIMPL.into())
+    fn EnumFormatEtc(&self, direction: u32) -> windows::core::Result<IEnumFORMATETC> {
+        if direction != DATADIR_GET.0 as u32 {
+            return Err(E_NOTIMPL.into());
+        }
+        // 接收方可能先枚举格式，再请求 CF_HDROP；不能在这里返回未实现。
+        let mut formats = Vec::new();
+        for (format, available) in [
+            (CF_HDROP, !self.payload.files.is_empty()),
+            (CF_UNICODETEXT, !self.payload.text.is_empty()),
+        ] {
+            if available {
+                formats.push(FORMATETC {
+                    cfFormat: format.0,
+                    ptd: std::ptr::null_mut(),
+                    dwAspect: DVASPECT_CONTENT.0,
+                    lindex: -1,
+                    tymed: TYMED_HGLOBAL.0 as u32,
+                });
+            }
+        }
+        unsafe { SHCreateStdEnumFmtEtc(&formats) }
     }
 
     fn DAdvise(
@@ -276,8 +295,13 @@ fn process_of_window(hwnd: windows::Win32::Foundation::HWND) -> (String, String)
 
 fn drag_blocking(files: Vec<String>, text: String) -> Result<DragOutcome, String> {
     unsafe {
-        // DoDragDrop 要求调用线程初始化过 OLE。这里跑在阻塞线程池上，不碰界面线程。
-        let initialized = OleInitialize(None).is_ok();
+        // 必须在窗口线程启动：它拥有本次鼠标按下对应的输入队列。
+        OleInitialize(None).map_err(|error| format!("初始化系统拖放失败：{error}"))?;
+        struct OleScope;
+        impl Drop for OleScope {
+            fn drop(&mut self) { unsafe { OleUninitialize(); } }
+        }
+        let _ole = OleScope;
         let data = AssetDrag {
             payload: DragPayload { files, text },
         };
@@ -289,9 +313,7 @@ fn drag_blocking(files: Vec<String>, text: String) -> Result<DragOutcome, String
         // 库里的任务会指向一个空路径。链接同理，谁都别想让文件凭空消失。
         let mut effect = DROPEFFECT_COPY;
         let hr = DoDragDrop(&object, &source, DROPEFFECT_COPY, &mut effect);
-        if initialized {
-            OleUninitialize();
-        }
+        hr.ok().map_err(|error| format!("系统拖放失败：{error}"))?;
 
         // 拖放结束后光标停在落点上：立刻反查那个窗口属于谁。
         let mut point = POINT::default();
@@ -313,10 +335,44 @@ fn drag_blocking(files: Vec<String>, text: String) -> Result<DragOutcome, String
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn receiver_can_enumerate_and_read_file_drop() {
+        use windows::Win32::System::Ole::ReleaseStgMedium;
+        use windows::Win32::UI::Shell::DragQueryFileW;
+        let file = "H:\\素材库\\测试图片.png";
+        let object: IDataObject = AssetDrag {
+            payload: DragPayload { files: vec![file.into()], text: String::new() },
+        }.into();
+        unsafe {
+            // 模拟接收软件的标准流程：枚举格式，再读取真实 CF_HDROP。
+            let formats = object.EnumFormatEtc(DATADIR_GET.0 as u32).unwrap();
+            let mut offered = [FORMATETC::default()];
+            formats.Next(&mut offered, None).ok().unwrap();
+            assert_eq!(offered[0].cfFormat, CF_HDROP.0);
+            let mut data = object.GetData(&offered[0]).unwrap();
+            let drop = windows::Win32::UI::Shell::HDROP(data.u.hGlobal.0);
+            let mut path = [0u16; 260];
+            assert_eq!(DragQueryFileW(drop, u32::MAX, None), 1);
+            let len = DragQueryFileW(drop, 0, Some(&mut path));
+            assert_eq!(String::from_utf16_lossy(&path[..len as usize]), file);
+            ReleaseStgMedium(&mut data);
+        }
+    }
+}
+
 /// 前端 dragstart 时调用：把卡片对应的本地文件交给系统拖放，返回落点软件的进程名。
 #[tauri::command]
-pub async fn start_file_drag(files: Vec<String>, text: String) -> Result<DragOutcome, String> {
-    tauri::async_runtime::spawn_blocking(move || drag_blocking(files, text))
+pub async fn start_file_drag(app: tauri::AppHandle, files: Vec<String>, text: String) -> Result<DragOutcome, String> {
+    let (sender, receiver) = std::sync::mpsc::channel();
+    app.run_on_main_thread(move || {
+        let _ = sender.send(drag_blocking(files, text));
+    }).map_err(|error| error.to_string())?;
+    // 等待结果可以放在线程池，OLE 操作本身不能放在线程池。
+    tauri::async_runtime::spawn_blocking(move || receiver.recv().map_err(|error| error.to_string()))
         .await
-        .map_err(|error| error.to_string())?
+        .map_err(|error| error.to_string())??
 }

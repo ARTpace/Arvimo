@@ -3,7 +3,7 @@
  * 组件语义与迁移前一致（保护条款）；状态经 settings.ui-bridge 服务读写，
  * 共享 UI 原语来自 plugins/settings-ui。侧栏 navGroup='core'。
  */
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import type { Effect, Kernel } from '../../plugin-runtime/kernel';
 import { SETTINGS_UI_BRIDGE_SERVICE, type SettingsUiBridge } from '../../plugin-runtime/settings-bridge';
 import type { SettingsSectionContribution, SettingsSectionProps } from '../../plugin-runtime/settings-contributions';
@@ -11,7 +11,6 @@ import { SectionBlock, SettingsRow, Segmented } from '../../plugin-runtime/setti
 import { listAvailableLanguages } from '../../utils/language-store';
 import { buildShortcutRegistry, findShortcutConflicts, bindingIdentity, type ShortcutRegistryEntry } from '../../plugin-runtime/shortcut-arbitration';
 import { resolveCommandText } from '../../plugin-runtime/commands';
-import { ACCEPTED_FILE_TYPES_STRING } from '../../utils/formatDetector';
 import { HOST_PLATFORM_SERVICE, type HostPlatformService } from '../../plugin-runtime/host-platform';
 import type { Hotkey, PresentationHotkeys, WheelAction } from '../../types';
 
@@ -50,8 +49,10 @@ const useHotkeyRecorder = (
         altKey: e.altKey,
       });
     };
-    window.addEventListener('keydown', handleKeyDown, true);
-    return () => window.removeEventListener('keydown', handleKeyDown, true);
+    // Unified settings render in the host document; record keys in that window.
+    const target = window.parent !== window && window.parent.location.origin === window.location.origin ? window.parent : window;
+    target.addEventListener('keydown', handleKeyDown, true);
+    return () => target.removeEventListener('keydown', handleKeyDown, true);
   }, [recordingKey, onRecord]);
 };
 
@@ -73,14 +74,11 @@ const languageLabel = (code: string): string => {
   return code;
 };
 
-const GeneralSection: React.FC<SettingsSectionProps> = ({ kernel, language }) => {
+const CoreAiSection: React.FC<SettingsSectionProps> = ({ kernel, language }) => {
   const bridge = useBridge(kernel).general;
   const fileLabel = language === 'zho';
-  // 选项来自「内置底座 + 已注册语言包」，而不是写死两档 —— 注册语言包的插件会自动出现在这里。
-  const languageOptions = listAvailableLanguages().map(code => ({ value: code, label: languageLabel(code) }));
   return (
-    <>
-      <SectionBlock title={fileLabel ? 'API 密钥' : 'API Key'}>
+      <SectionBlock title={fileLabel ? 'Gemini API 密钥' : 'Gemini API Key'}>
         <input
           type="password"
           value={bridge.apiKey}
@@ -89,9 +87,19 @@ const GeneralSection: React.FC<SettingsSectionProps> = ({ kernel, language }) =>
           className="w-full px-3 py-2 text-sm bg-black/20 border border-white/10 rounded-md focus:outline-none focus:ring-2 focus:ring-violet-500 focus:border-transparent"
         />
         <div className="text-xs text-gray-400">
-          {bridge.apiKey ? (fileLabel ? '密钥已设置' : 'API key is set') : (fileLabel ? '需要配置 API 密钥后才能使用 AI 功能' : 'An API key is required for AI features')}
+          {bridge.apiKey ? (fileLabel ? '密钥已设置' : 'API key is set') : (fileLabel ? '用于画布的 Gemini 生成功能；资产库搜索连接单独设置' : 'Used for canvas Gemini generation; library search uses its own connection')}
         </div>
       </SectionBlock>
+  );
+};
+
+const GeneralSection: React.FC<SettingsSectionProps> = ({ kernel, language }) => {
+  const bridge = useBridge(kernel).general;
+  const fileLabel = language === 'zho';
+  // 选项来自「内置底座 + 已注册语言包」，而不是写死两档 —— 注册语言包的插件会自动出现在这里。
+  const languageOptions = listAvailableLanguages().map(code => ({ value: code, label: languageLabel(code) }));
+  return (
+    <>
       <SectionBlock title={fileLabel ? '语言' : 'Language'}>
         <SettingsRow label={fileLabel ? '语言' : 'Language'}>
           <Segmented
@@ -101,8 +109,8 @@ const GeneralSection: React.FC<SettingsSectionProps> = ({ kernel, language }) =>
           />
         </SettingsRow>
       </SectionBlock>
-      {/* 应用级操作放通用页末尾：与 API 密钥/语言同属"会话级"设置，且便于随手重启。 */}
-      <AppSessionSection kernel={kernel} language={language} />
+      {/* 嵌入时由主应用管理会话，独立运行保留重启操作。 */}
+      {(typeof window === 'undefined' || window.parent === window) && <AppSessionSection kernel={kernel} language={language} />}
     </>
   );
 };
@@ -121,8 +129,8 @@ const AppSessionSection: React.FC<SettingsSectionProps> = ({ kernel, language })
   const handleRestart = async (): Promise<void> => {
     if (restarting) return;
     const confirmed = window.confirm(zho
-      ? '重启会关闭当前窗口并重新启动 Artflow，未保存的改动将丢失。确定要重启吗？'
-      : 'Restart closes this window and relaunches Artflow; unsaved changes will be lost. Continue?');
+      ? '重启会关闭当前窗口并重新启动 Arvimo，未保存的改动将丢失。确定要重启吗？'
+      : 'Restart closes this window and relaunches Arvimo; unsaved changes will be lost. Continue?');
     if (!confirmed) return;
     setNotice(null);
     setRestarting(true);
@@ -140,7 +148,7 @@ const AppSessionSection: React.FC<SettingsSectionProps> = ({ kernel, language })
   };
   return (
     <SectionBlock title={zho ? '应用重启' : 'Application Restart'}>
-      <SettingsRow label={zho ? '重启 Artflow' : 'Restart Artflow'}>
+      <SettingsRow label={zho ? '重启 Arvimo' : 'Restart Arvimo'}>
         <button
           type="button"
           disabled={restarting || !host.canRestartApp}
@@ -157,57 +165,6 @@ const AppSessionSection: React.FC<SettingsSectionProps> = ({ kernel, language })
           : 'Restart reloads the main process and every plugin; unsaved changes are discarded.'}
       </div>
       {notice && <div className="text-xs text-amber-100">{notice}</div>}
-    </SectionBlock>
-  );
-};
-
-const AppearanceSection: React.FC<SettingsSectionProps> = ({ kernel, language }) => {
-  const { available, openThemeStudio } = useBridge(kernel).appearance;
-  const zho = language === 'zho';
-  return (
-    <SectionBlock title={zho ? '主题与界面外观' : 'Themes & interface'}>
-      <div className="space-y-3 text-sm text-[var(--bp-ui-muted)]">
-        <p>{zho
-          ? '在主题工作台选择整套主题，或分别调节界面配色、控件、字体和工作区背景。预览满意后再应用。'
-          : 'Choose a theme or adjust interface colors, controls, fonts and the workspace background. Preview before applying.'}</p>
-        <button type="button" disabled={!available} onClick={openThemeStudio} data-bp-ui-action="primary"
-          className="rounded-lg border px-3 py-2 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-40">
-          {zho ? '打开主题工作台 ↗' : 'Open Theme Studio ↗'}
-        </button>
-      </div>
-    </SectionBlock>
-  );
-};
-
-const CanvasSection: React.FC<SettingsSectionProps> = ({ kernel, language }) => {
-  const bridge = useBridge(kernel).canvas;
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const zho = language === 'zho';
-  return (
-    <SectionBlock title={zho ? '当前画板背景' : 'Current board background'}>
-      <p className="text-xs leading-5 text-[var(--bp-ui-muted)]">{zho ? '仅修改当前画板，优先于主题的工作区背景。主题壁纸与默认点阵请到主题工作台设置。' : 'Only affects this board and overrides the theme workspace background. Theme wallpapers and default dots are in Theme Studio.'}</p>
-      <SettingsRow label={zho ? '背景颜色' : 'Background Color'}>
-        <div className="relative h-7 w-9 overflow-hidden rounded border border-white/15" style={{ backgroundColor: bridge.canvasBackgroundColor.startsWith('url') ? '#111827' : bridge.canvasBackgroundColor }}>
-          <input type="color" value={bridge.canvasBackgroundColor.startsWith('url') ? '#111827' : bridge.canvasBackgroundColor} onChange={e => bridge.onCanvasBackgroundColorChange(e.target.value)} className="absolute inset-0 h-full w-full cursor-pointer opacity-0" />
-        </div>
-      </SettingsRow>
-      <SettingsRow label={zho ? '上传背景图' : 'Upload Background'}>
-        <input
-          type="file"
-          ref={fileInputRef}
-          onChange={(e) => {
-            if (e.target.files && e.target.files[0]) {
-              bridge.onCanvasBackgroundImageChange(e.target.files[0]);
-              e.target.value = '';
-            }
-          }}
-          accept={ACCEPTED_FILE_TYPES_STRING}
-          className="hidden"
-        />
-        <button onClick={() => fileInputRef.current?.click()} className="rounded-md bg-white/10 px-3 py-1.5 text-sm hover:bg-white/20">
-          {zho ? '上传' : 'Upload'}
-        </button>
-      </SettingsRow>
     </SectionBlock>
   );
 };
@@ -310,9 +267,8 @@ const HotkeysSection: React.FC<SettingsSectionProps> = ({ kernel, language }) =>
 };
 
 const SECTIONS: { id: string; navPriority: number; label: (language: 'en' | 'zho') => string; component: React.FC<SettingsSectionProps> }[] = [
+  { id: 'ai', navPriority: 0, label: lang => (lang === 'zho' ? 'Gemini 密钥' : 'Gemini API Key'), component: CoreAiSection },
   { id: 'general', navPriority: 40, label: lang => (lang === 'zho' ? '通用' : 'General'), component: GeneralSection },
-  { id: 'appearance', navPriority: 30, label: lang => (lang === 'zho' ? '外观' : 'Appearance'), component: AppearanceSection },
-  { id: 'canvas', navPriority: 20, label: lang => (lang === 'zho' ? '画布' : 'Canvas'), component: CanvasSection },
   { id: 'hotkeys', navPriority: 10, label: lang => (lang === 'zho' ? '快捷键' : 'Hotkeys'), component: HotkeysSection },
 ];
 
@@ -326,7 +282,8 @@ export function activateCoreSettings(ctx: Kernel): Effect {
       value: {
         label: section.label,
         component: section.component,
-        navGroup: 'core',
+        navGroup: section.id === 'ai' ? 'extensions' : 'core',
+        category: section.id === 'ai' ? 'extensions' : 'general',
       },
     }),
   );

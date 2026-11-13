@@ -82,6 +82,12 @@ const SPECS=[
   {key:'type',label:'类型',icon:'cube',control:'#uiverse-type'},
   {key:'theme',label:'主题',icon:'image',control:'#uiverse-theme'},
  ]},
+ // Fab 是后加的平台：index.html 的 #filters-fab、platforms.js 的 filters 映射、FILTER_ROWS
+ // 都已登记，只有筛选树漏了这一行，导致它的价格/排序控件退回裸下拉框。补齐保持十站一致。
+ {row:'#filters-fab',plate:{icon:'cube',label:'Fab',tone:'#e8b48c'},fields:[
+  {key:'free',label:'价格',icon:'check',checks:[{label:'仅免费',selector:'#fab-free'}]},
+  {key:'sort',label:'排序',icon:'list',control:'#fab-sort'},
+ ]},
 ];
 
 const el=(tag,className,text)=>{const node=document.createElement(tag);if(className)node.className=className;if(text!=null)node.textContent=text;return node;};

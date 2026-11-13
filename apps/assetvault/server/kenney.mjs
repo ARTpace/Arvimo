@@ -123,7 +123,7 @@ export async function runKenneyJob({uid,output,assetId},{signal,progress=()=>{}}
  const fd=await fs.open(dest,'w');
  try{for await(const chunk of file.stream){signal?.throwIfAborted();await fd.write(chunk);}}finally{await fd.close();}
  const stat=await fs.stat(dest);
- const meta={uid,kind:'pack',platform:'kenney',assetId:slug,url:`${SITE}/assets/${slug}`,license:'CC0 1.0 通用公共领域贡献',files:[{file:'pack.zip',bytes:stat.size,url:zip}],note:'Kenney 资源包，CC0，可商用无需署名。',exportedAt:new Date().toISOString(),tool:'AssetVault · Kenney'};
+ const meta={uid,kind:'pack',platform:'kenney',assetId:slug,url:`${SITE}/assets/${slug}`,license:'CC0 1.0 通用公共领域贡献',files:[{file:'pack.zip',bytes:stat.size,url:zip}],note:'Kenney 资源包，CC0，可商用无需署名。',exportedAt:new Date().toISOString(),tool:'Arvimo · Kenney'};
  await fs.writeFile(path.join(output,'info.json'),JSON.stringify(meta,null,2),'utf8');
  return {zipName:`${slug}-pack`};
 }

@@ -9,8 +9,12 @@
 import {icon} from './icon-set.js';
 import {esc} from './html-esc.js';
 import {searchBoards} from './board-store.js';
+import {formatKind} from './format-registry.js';
 
-const MAX_FILES = 200;
+const MAX_FILES = 1000;
+const CONCURRENCY = 4;
+// 拖整个文件夹时顺带进来的系统垃圾，直接跳过，不占名额也不报错。
+const JUNK = /^(thumbs\.db|desktop\.ini|\.ds_store|\.localized)$/i;
 const fmtBytes = value => {
   const bytes = Number(value) || 0;
   if (bytes < 1024) return `${bytes} B`;
@@ -21,6 +25,31 @@ const fmtBytes = value => {
 const safeName = name => String(name || 'file').replace(/[<>:"|?*\x00-\x1f]/g, '_').replace(/\\/g, '/').split('/').pop() || 'file';
 const isFilesDrag = dt => Array.from(dt?.types || []).includes('Files');
 
+// 批量导入期间屏蔽「远端资产变更 → 全量刷新」：一次 100 个文件会连续广播，
+// 每来一次就整库重绘的话面板会一直闪，导入结束我们自己刷一次就够了。
+let importing = false;
+export const isDropImporting = () => importing;
+
+// 一长串文件名（upscaled_e4b3bc32-8da8-…jpeg）在面板里既读不出信息又挤成一坨，
+// 批量导入时按「格式 + 个数 + 总大小」归并展示更清楚；文件名塞进 tooltip 备查。
+function formatGroups(list) {
+  const groups = new Map();
+  for (const item of list) {
+    const base = String(item.rel || '').split('/').pop();
+    const dot = base.lastIndexOf('.');
+    const ext = dot > 0 ? base.slice(dot + 1).toUpperCase() : '其他';
+    let row = groups.get(ext);
+    if (!row) {
+      row = {ext, kind: formatKind(item.rel), count: 0, bytes: 0, samples: []};
+      groups.set(ext, row);
+    }
+    row.count++;
+    row.bytes += item.file.size || 0;
+    if (row.samples.length < 5) row.samples.push(item.rel);
+  }
+  return [...groups.values()].sort((a, b) => b.count - a.count || a.ext.localeCompare(b.ext));
+}
+
 /** 单张图片落在搜索面板 = 以图搜图，别抢它的事件。 */
 function keepForImageSearch(event, dt) {
   if (event.shiftKey) return false;
@@ -30,39 +59,66 @@ function keepForImageSearch(event, dt) {
   return items.length === 1 && items[0].kind === 'file' && /^image\//.test(items[0].type || '');
 }
 
-/** DataTransferItem.webkitGetAsEntry() 递归展开文件夹，保留相对目录层级。 */
-async function collect(dataTransfer) {
+// 关键：条目必须在 drop 事件同步阶段全部取出来。
+// DataTransfer 只在事件派发期间有效，一进 await，items 就整体失效 —— 之前一次拖 100 个
+// 文件只有第一个能读出来（后面的 webkitGetAsEntry() 全返回 null），文件夹同理。
+function snapshot(dataTransfer) {
+  const picked = [];
+  for (const item of Array.from(dataTransfer.items || [])) {
+    if (item.kind !== 'file') continue;
+    let entry = null;
+    try { entry = item.webkitGetAsEntry?.() || null; } catch { /* 合成事件 / 老内核 */ }
+    if (entry) { picked.push(entry); continue; }
+    let file = null;
+    try { file = item.getAsFile?.() || null; } catch { /* 同上 */ }
+    if (file) picked.push(file);
+  }
+  // 老浏览器没有 items/webkitGetAsEntry 时退回 files（文件夹会退化成第一个文件）。
+  if (!picked.length) for (const file of Array.from(dataTransfer.files || [])) picked.push(file);
+  return picked;
+}
+
+/** 递归展开文件夹，保留相对目录层级；单个文件读失败不拖累整批。 */
+async function collect(dataTransfer, onProgress) {
+  const picked = snapshot(dataTransfer);
   const out = [];
+  let skipped = 0;
+  let unreadable = 0;
   const push = (file, rel) => {
-    if (out.length >= MAX_FILES) throw Error(`一次最多拖入 ${MAX_FILES} 个文件，请分批`);
+    if (out.length >= MAX_FILES) { skipped++; return; }
     out.push({file, rel});
+    if (out.length % 25 === 0) onProgress?.(out.length);
   };
+  const readable = name => !JUNK.test(name) && !name.startsWith('.');
+
   async function walk(entry, prefix) {
     if (entry.isFile) {
       const file = await new Promise((resolve, reject) => entry.file(resolve, reject));
       push(file, prefix + safeName(entry.name));
-    } else if (entry.isDirectory) {
-      const reader = entry.createReader();
-      let batch = [];
-      do {
-        batch = await new Promise((resolve, reject) => reader.readEntries(resolve, reject));
-        for (const child of batch) await walk(child, prefix + safeName(entry.name) + '/');
-      } while (batch.length);
+      return;
+    }
+    if (!entry.isDirectory) return;
+    const reader = entry.createReader();
+    const dirPrefix = prefix + safeName(entry.name) + '/';
+    for (;;) {
+      const batch = await new Promise((resolve, reject) => reader.readEntries(resolve, reject));
+      if (!batch.length) break;
+      for (const child of batch) {
+        if (!readable(child.name)) continue;
+        try { await walk(child, dirPrefix); } catch { unreadable++; }
+      }
     }
   }
-  for (const item of Array.from(dataTransfer.items || [])) {
-    if (item.kind !== 'file') continue;
-    let entry = null;
-    try { entry = item.webkitGetAsEntry?.(); } catch { /* 合成事件 / 老内核不给 entry，退回 getAsFile */ }
-    if (entry) await walk(entry, '');
-    else {
-      const file = item.getAsFile();
-      if (file) push(file, safeName(file.name));
+
+  for (const item of picked) {
+    if (item?.isFile || item?.isDirectory) {
+      try { await walk(item, ''); } catch { unreadable++; }
+    } else if (item?.size >= 0 && item?.name) {
+      if (readable(item.name)) push(item, safeName(item.name));
     }
   }
-  // 老浏览器没有 items/webkitGetAsEntry 时退回 files（文件夹会退化成第一个文件）。
-  if (!out.length) for (const file of Array.from(dataTransfer.files || [])) push(file, safeName(file.name));
-  return out;
+  onProgress?.(out.length);
+  return {files: out, skipped, unreadable, truncated: skipped};
 }
 
 export function setupDropImport({toast, visitor, store, onImported, document: doc = globalThis.document} = {}) {
@@ -73,7 +129,7 @@ export function setupDropImport({toast, visitor, store, onImported, document: do
   const overlay = doc.createElement('div');
   overlay.className = 'av-drop-overlay';
   overlay.hidden = true;
-  overlay.innerHTML = `<div class="av-drop-overlay-card">${icon('download')}<strong>松手导入到资产库</strong><span>文件 / 文件夹都会入库，随后可选择加入画板</span></div>`;
+  overlay.innerHTML = `<div class="av-drop-overlay-card">${icon('download')}<strong>松手导入到资产库</strong><span class="av-drop-overlay-hint">文件 / 文件夹都会入库，随后可选择加入画板</span></div>`;
   doc.body.appendChild(overlay);
 
   const dialog = doc.createElement('dialog');
@@ -85,6 +141,7 @@ export function setupDropImport({toast, visitor, store, onImported, document: do
       <button type="button" class="icon-button" data-act="close" aria-label="关闭">${icon('close')}</button></div>
     <div class="av-drop-summary" role="status"></div>
     <div class="av-drop-files"></div>
+    <div class="av-drop-bar" hidden><i></i></div>
     <label class="av-drop-board-toggle"><input type="checkbox" class="av-drop-use-board"> 同时加入画板</label>
     <div class="av-drop-boards" hidden>
       <div class="bd-picker-search"><label>${icon('search')}<input type="search" class="av-drop-search" placeholder="搜索画板" aria-label="搜索画板"></label>
@@ -108,6 +165,8 @@ export function setupDropImport({toast, visitor, store, onImported, document: do
   const newBox = dialog.querySelector('.bd-new');
   const newName = dialog.querySelector('.av-drop-new-name');
   const status = dialog.querySelector('.av-drop-status');
+  const bar = dialog.querySelector('.av-drop-bar');
+  const barFill = bar.querySelector('i');
   const applyButton = dialog.querySelector('[data-act="apply"]');
 
   let pending = [];
@@ -124,7 +183,7 @@ export function setupDropImport({toast, visitor, store, onImported, document: do
       : `<div class="bd-empty">${icon('layers')}<span>还没有画板，点 + 新建一个</span></div>`;
   }
 
-  async function open(list) {
+  async function open(list, meta = {}) {
     if (busy) return;
     pending = list;
     chosen = new Set();
@@ -134,14 +193,24 @@ export function setupDropImport({toast, visitor, store, onImported, document: do
     newName.value = '';
     search.value = '';
     status.textContent = '';
+    bar.hidden = true;
+    barFill.style.width = '0%';
     const total = list.reduce((sum, item) => sum + (item.file.size || 0), 0);
-    summary.textContent = `${list.length} 个文件 · 共 ${fmtBytes(total)}`;
-    fileList.innerHTML = list.slice(0, 8).map(item => `<div class="av-drop-file"><span title="${esc(item.rel)}">${esc(item.rel)}</span><small>${fmtBytes(item.file.size)}</small></div>`).join('')
-      + (list.length > 8 ? `<div class="av-drop-file av-drop-more">…还有 ${list.length - 8} 个文件</div>` : '');
+    const groups = formatGroups(list);
+    const notes = [];
+    if (meta.truncated) notes.push(`超出单次上限 ${MAX_FILES} 个，先导入前 ${list.length} 个`);
+    if (meta.unreadable) notes.push(`${meta.unreadable} 个读不出来已跳过`);
+    summary.textContent = `${list.length} 个文件${groups.length > 1 ? ` · ${groups.length} 种格式` : ''} · 共 ${fmtBytes(total)}${notes.length ? `（${notes.join('，')}）` : ''}`;
+    const shown = groups.slice(0, 8);
+    fileList.innerHTML = shown.map(row => `<div class="av-drop-file av-drop-group" title="${esc(row.samples.join('\n'))}">
+      <i class="av-drop-badge" data-kind="${esc(row.kind || 'other')}">${esc(row.ext)}</i>
+      <span class="av-drop-group-count">${row.count} 个</span>
+      <small>${fmtBytes(row.bytes)}</small></div>`).join('')
+      + (groups.length > shown.length ? `<div class="av-drop-file av-drop-more">…还有 ${groups.length - shown.length} 种格式</div>` : '');
     applyButton.textContent = `导入 ${list.length} 个`;
+    dialog.showModal?.();
     try { await store.refresh?.(); } catch { /* 画板接口暂时不可用时仍允许不归类导入 */ }
     renderBoards();
-    dialog.showModal?.();
   }
 
   async function run() {
@@ -149,23 +218,46 @@ export function setupDropImport({toast, visitor, store, onImported, document: do
     const boardIds = useBoard.checked ? [...chosen] : [];
     if (useBoard.checked && !boardIds.length) { say('先选一个画板，或取消勾选「同时加入画板」'); return; }
     busy = true;
+    importing = true;
     applyButton.disabled = true;
     const uids = [];
     let failed = 0;
-    for (let i = 0; i < pending.length; i++) {
-      const item = pending[i];
-      status.textContent = `正在导入 ${i + 1}/${pending.length}：${item.rel}`;
-      try {
-        const response = await fetch('/api/library/drop-import', {
-          method: 'POST',
-          headers: {'x-sfx-local': '1', 'Content-Type': 'application/octet-stream', 'x-av-drop-name': encodeURIComponent(item.rel)},
-          body: item.file,
-        });
-        const data = await response.json().catch(() => ({}));
-        if (!response.ok || data.ok !== true || !data.uid) throw Error(data.error || `HTTP ${response.status}`);
-        uids.push(data.uid);
-      } catch (error) { failed++; status.textContent = `第 ${i + 1} 个失败：${error.message}`; }
-    }
+    let lastError = '';
+    let done = 0;
+    let skipped = 0;
+    const queue = pending.slice();
+    bar.hidden = false;
+    barFill.style.width = '0%';
+    status.textContent = `正在导入 0/${pending.length}…`;
+    const step = () => {
+      done++;
+      barFill.style.width = `${Math.round((done / pending.length) * 100)}%`;
+      status.textContent = queue.length
+        ? `正在导入 ${done}/${pending.length}：${queue[0].rel}`
+        : `已完成 ${done}/${pending.length}`;
+    };
+    // 每个请求自己流式落盘，服务端串行入库；并发 4 路只为把网络与哈希时间叠起来，
+    // 一次 100 个文件不用排队等 100 个来回。
+    const upload = async item => {
+      const response = await fetch('/api/library/drop-import', {
+        method: 'POST',
+        headers: {'x-sfx-local': '1', 'Content-Type': 'application/octet-stream', 'x-av-drop-name': encodeURIComponent(item.rel)},
+        body: item.file,
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || data.ok !== true || !data.uid) throw Error(data.error || `HTTP ${response.status}`);
+      if (data.status === 'skipped') skipped++;
+      uids.push(data.uid);
+    };
+    const worker = async () => {
+      while (queue.length) {
+        const item = queue.shift();
+        try { await upload(item); }
+        catch (error) { failed++; lastError = `${item.rel}：${error.message}`; }
+        step();
+      }
+    };
+    await Promise.all(Array.from({length: Math.min(CONCURRENCY, pending.length)}, worker));
     if (boardIds.length && uids.length) {
       status.textContent = `正在把 ${uids.length} 个资产加入 ${boardIds.length} 个画板…`;
       for (const id of boardIds) {
@@ -175,10 +267,13 @@ export function setupDropImport({toast, visitor, store, onImported, document: do
     }
     try { await onImported?.(); } catch {}
     busy = false;
+    importing = false;
     applyButton.disabled = false;
     status.textContent = '';
+    bar.hidden = true;
     dialog.close();
-    say(`已导入 ${uids.length} 个文件${boardIds.length && uids.length ? `，加入 ${boardIds.length} 个画板` : ''}${failed ? `，失败 ${failed} 个` : ''}`);
+    const dup = skipped;
+    say(`已导入 ${uids.length} 个文件${boardIds.length && uids.length ? `，加入 ${boardIds.length} 个画板` : ''}${dup > 0 ? `，${dup} 个重复已跳过` : ''}${failed ? `，失败 ${failed} 个${lastError ? `（${lastError}）` : ''}` : ''}`);
   }
 
   dialog.addEventListener('click', async event => {
@@ -224,9 +319,22 @@ export function setupDropImport({toast, visitor, store, onImported, document: do
     if (!isFilesDrag(dt) || keepForImageSearch(event, dt)) return;
     event.preventDefault();
     event.stopPropagation();     // 挡住 #search-panel 的以图搜图 drop
-    overlay.hidden = true;
     clearTimeout(hideTimer);
-    collect(dt).then(list => { if (list.length) open(list); }).catch(error => say(error.message));
+    // 展开文件夹可能几百毫秒，期间把浮层当进度条用，免得界面像卡死。
+    const hint = overlay.querySelector('.av-drop-overlay-hint');
+    const collecting = n => {
+      overlay.hidden = false;
+      hint.textContent = n ? `正在读取 ${n} 个文件…` : '正在读取文件…';
+    };
+    collecting(0);
+    collect(dt, n => collecting(n))
+      .then(result => {
+        overlay.hidden = true;
+        hint.textContent = '文件 / 文件夹都会入库，随后可选择加入画板';
+        if (!result.files.length) { say(result.unreadable ? '这些文件读不出来，换个位置再试' : '没有可导入的文件'); return; }
+        open(result.files, result);
+      })
+      .catch(error => { overlay.hidden = true; hint.textContent = '文件 / 文件夹都会入库，随后可选择加入画板'; say(error.message); });
   }, true);
   doc.addEventListener('dragend', () => { overlay.hidden = true; clearTimeout(hideTimer); }, true);
 

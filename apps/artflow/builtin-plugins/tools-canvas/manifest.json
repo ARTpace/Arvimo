@@ -5,7 +5,7 @@
   "minHostVersion": "1.0.0",
   "name": "画布工具集",
   "nameI18n": {"en": "Canvas Tools"},
-  "author": "Artflow",
+  "author": "Arvimo",
   "license": "MIT",
   "runtime": {
     "mode": "builtin",

@@ -130,7 +130,9 @@ test('装配契约：图标条 → store → 扩展缝 → 高级检索 → 面�
 });
 
 test('命令条：1440 不折行、图标带悬停短标签、长状态压成「图标 + 数字」', () => {
+  // 抽屉的 DOM 模板已拆到 filter-panel-drawer.js；filter-dock.js 只管状态编排。
   const dock = read('filter-dock.js');
+  const drawer = read('filter-panel-drawer.js');
   const css = read('app.css');
   const html = read('index.html');
   const app = read('app.js');
@@ -142,9 +144,9 @@ test('命令条：1440 不折行、图标带悬停短标签、长状态压成「
   }
   // 维度键从命令条的横排改成抽屉里的竖排轨道：抽屉头部已经写着维度全名，
   // 轨道上只留 title 提示（2026-11-12 把九颗图标收进抽屉）。
-  assert.match(dock, /class="fd-rail-btn"/, '维度轨道要有按键');
-  assert.match(dock, /title="\$\{esc\(PANEL_TIPS\[dim\.id\] \|\| dim\.hint\)\}"/, '轨道键要带 title 提示');
-  assert.match(dock, /<strong>\$\{esc\(dim\.label\)\}<\/strong>/, '抽屉头部要写维度全名');
+  assert.match(drawer, /class="fd-rail-btn"/, '维度轨道要有按键');
+  assert.match(drawer, /title="\$\{esc\(PANEL_TIPS\[row\.id\] \|\| row\.hint\)\}"/, '轨道键要带 title 提示');
+  assert.match(drawer, /<strong>\$\{esc\(dim\.label\)\}<\/strong>/, '抽屉头部要写维度全名');
 
   // 2) 标签必须绝对定位：宽度展开会推开邻居，正是之前「弹开其他按键」的突兀来源。
   assert.match(css, /\.fd-label,[\s\S]{0,120}position:absolute/, '悬停标签要脱离 flex 流');

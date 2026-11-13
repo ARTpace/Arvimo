@@ -50,7 +50,7 @@ export function createLocalBlenderGuide({toast}) {
       <ol class="client-blender-steps">
        <li>下载插件：<a href="/api/lan/blender-addon" download="assetvault_blender_bridge.py">assetvault_blender_bridge.py</a></li>
        <li>Blender ▸ 编辑 ▸ 偏好设置 ▸ 插件 ▸ 右上角 <b>▾</b> ▸ 从磁盘安装，选刚下载的文件</li>
-       <li>在插件列表里勾选 <b>AssetVault Bridge</b> 启用它</li>
+       <li>在插件列表里勾选 <b>Arvimo Bridge</b> 启用它</li>
        <li>保持 Blender 开着，回到这里点「重新检测」</li>
       </ol>
       <p class="compact-note" data-guide-status role="status"></p>

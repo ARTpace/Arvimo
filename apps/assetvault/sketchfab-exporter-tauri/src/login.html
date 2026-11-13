@@ -9,46 +9,10 @@
 <link rel="stylesheet" href="/login.css">
 </head>
 <body>
-<!-- 背景：等距立方体线稿 + 两层荧光绿光晕，全部画成矢量，随窗口缩放不糊。
-     透明度压得很低（描边 6%、光晕 9%），只负责给卡片垫一层「空间」，不抢内容。 -->
+<!-- 背景：等距立方体线稿 + 两层荧光绿光晕，画在一张 SVG 里（/login-backdrop.svg）。
+     局域网入口页复用同一个文件，改背景只改那一张图。 -->
 <div class="backdrop" aria-hidden="true">
-  <svg class="backdrop-art" viewBox="0 0 1440 900" preserveAspectRatio="xMidYMid slice">
-    <defs>
-      <pattern id="bg-grid" width="48" height="48" patternUnits="userSpaceOnUse">
-        <path d="M48 0H0V48" fill="none" stroke="#ffffff" stroke-opacity=".028" stroke-width="1"/>
-      </pattern>
-      <radialGradient id="bg-glow-a" cx="16%" cy="14%" r="58%">
-        <stop offset="0" stop-color="#c9f581" stop-opacity=".17"/>
-        <stop offset="55%" stop-color="#c9f581" stop-opacity=".05"/>
-        <stop offset="100%" stop-color="#c9f581" stop-opacity="0"/>
-      </radialGradient>
-      <radialGradient id="bg-glow-b" cx="86%" cy="84%" r="52%">
-        <stop offset="0" stop-color="#9cc7ff" stop-opacity=".085"/>
-        <stop offset="100%" stop-color="#9cc7ff" stop-opacity="0"/>
-      </radialGradient>
-      <radialGradient id="bg-vignette" cx="50%" cy="48%" r="72%">
-        <stop offset="55%" stop-color="#0d1117" stop-opacity="0"/>
-        <stop offset="100%" stop-color="#0d1117" stop-opacity=".85"/>
-      </radialGradient>
-      <g id="bg-cube">
-        <path d="M0 -60 L52 -30 L52 30 L0 60 L-52 30 L-52 -30 Z"/>
-        <path d="M0 -60 V0 M0 0 L-52 -30 M0 0 L52 -30"/>
-      </g>
-    </defs>
-
-    <rect width="1440" height="900" fill="#0d1117"/>
-    <rect width="1440" height="900" fill="url(#bg-grid)"/>
-    <g class="cubes" fill="none" stroke="#c9f581" stroke-width="1.4" stroke-linejoin="round" stroke-linecap="round">
-      <use href="#bg-cube" transform="translate(1160 232) scale(2.5)"/>
-      <use href="#bg-cube" transform="translate(292 726) scale(1.55)"/>
-      <use href="#bg-cube" transform="translate(1332 700) scale(.95)"/>
-      <use href="#bg-cube" transform="translate(158 196) scale(.8)"/>
-      <use href="#bg-cube" transform="translate(-30 690) scale(2.1)"/>
-    </g>
-    <rect width="1440" height="900" fill="url(#bg-glow-a)"/>
-    <rect width="1440" height="900" fill="url(#bg-glow-b)"/>
-    <rect width="1440" height="900" fill="url(#bg-vignette)"/>
-  </svg>
+  <img class="backdrop-art" src="/login-backdrop.svg" alt="">
 </div>
 
 <main class="stage">
@@ -74,7 +38,7 @@
           <div class="field-label"><label for="account-password">密码</label><small id="pass-hint">至少 6 位</small></div>
           <div class="pass-wrap">
             <input id="account-password" name="password" type="password" autocomplete="current-password" autocapitalize="none" autocorrect="off" spellcheck="false" maxlength="64" placeholder="输入密码" required>
-            <button class="peek" id="peek" type="button" aria-pressed="false">显示</button>
+            <button class="peek" id="peek" type="button" data-peek="account-password" aria-pressed="false">显示</button>
           </div>
         </div>
 
@@ -82,12 +46,13 @@
         <button class="primary" id="submit" type="submit"><span id="submit-label">进入工作台</span></button>
       </form>
 
-      <p class="footnote" id="footnote">账号和密码只留在本机的 AssetVault 数据目录，不上传、不同步。</p>
+      <p class="footnote" id="footnote">账号和密码只留在本机的 Arvimo · 艺团 数据目录，不上传、不同步。</p>
     </div>
   </section>
   <p class="stage-note">本机工具 · 不上传任何登录信息</p>
 </main>
 
+<script src="/login-peek.js" defer></script>
 <script type="module" src="/login.js"></script>
 </body>
 </html>

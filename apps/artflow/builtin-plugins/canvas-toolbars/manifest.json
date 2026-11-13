@@ -7,7 +7,7 @@
   "description": "选区工具条、元素工具条和智能工具条（原本体挂接迁移）。",
   "descriptionI18n": {"en": "Selection, element, and smart toolbars (migrated from the original app hooks)."},
   "category": "ui",
-  "author": "Artflow",
+  "author": "Arvimo",
   "license": "MIT",
   "host": "renderer",
   "runtime": { "mode": "builtin", "entry": "./index.tsx" },

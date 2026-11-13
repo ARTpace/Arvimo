@@ -3,14 +3,14 @@ import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const {version}=JSON.parse(await fs.readFile(path.join(root,'src-tauri/tauri.conf.json'),'utf8'));
-const name=`AssetVault_${version}_x64`;
+const name=`Arvimo_${version}_x64`;
 const engine=path.join(root,`src-tauri/target/release/bundle/nsis/${name}-setup.exe`);
-const signature=(await fs.readFile(path.join(root,'dist',`${name}-setup.exe.sig`),'utf8')).trim();
+const signature=(await fs.readFile(path.join(root,'../../../dist',`${name}-setup.exe.sig`),'utf8')).trim();
 if(!signature)throw Error('Missing updater signature');
-// 安装包统一落在桌面工程的 dist/ 根目录（2026-10-20 用户要求）：
+// 安装包统一落在仓库根目录 dist/（统一发行产物）：
 // 最终安装器（首次安装和在线更新共用）、其签名与更新清单
 // latest.json 都放这里，不再有 dist/release/<版本>/ 第二处副本。
-const output=path.join(root,'dist');
+const output=path.join(root,'../../../dist');
 const setup=path.join(output,`${name}-setup.exe`);
 try{
   const stat=await fs.stat(setup);

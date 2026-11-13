@@ -115,7 +115,7 @@ test('一次失败的检索要把用户送到下一步，而不是复述服务�
  const stale=feedErrorMessage({mode:'polyhaven',status:404,error:'不存在的页面或接口'});
  assert.equal(stale.includes('不存在的页面或接口'),false,'不能把服务端内部文案照抄给用户');
  assert.match(stale,/Poly Haven/,'要说清是哪个来源没被支持');
- assert.match(stale,/重新打开 AssetVault/,'要给出可照做的下一步');
+ assert.match(stale,/重新打开 Arvimo/,'要给出可照做的下一步（品牌已改名）');
  // 其它失败照旧透出服务端给的原因；没有原因时兜底带上状态码，不能显示空白。
  assert.equal(feedErrorMessage({mode:'search',status:500,error:'上游超时'}),'上游超时');
  assert.equal(feedErrorMessage({mode:'search',status:502}),'检索失败 HTTP 502');

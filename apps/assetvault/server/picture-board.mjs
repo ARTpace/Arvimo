@@ -92,7 +92,7 @@ export async function writePictureBoardCard({
     ...(merged.length ? { tags: merged } : {}),
     note: '远程收藏：只记录了平台页面信息（标题 / 作者 / 封面 / 张数），图片还没有下载到本机。',
     exportedAt: new Date().toISOString(),
-    tool: 'AssetVault / picture board',
+    tool: 'Arvimo / picture board',
   };
   await writeImageManifest(dir, manifest);
   return { dir, title: manifest.title, imageCount: count, skipped: false };

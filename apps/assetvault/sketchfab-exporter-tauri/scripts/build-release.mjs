@@ -11,18 +11,24 @@ if(!env.TAURI_SIGNING_PRIVATE_KEY){
  try{await fs.access(key);env.TAURI_SIGNING_PRIVATE_KEY=key;env.TAURI_SIGNING_PRIVATE_KEY_PASSWORD??='';}
  catch{throw Error('Set TAURI_SIGNING_PRIVATE_KEY before building a release; never generate a replacement key for an existing app.');}
 }
-const run=(script,args=[])=>{
- const result=spawnSync(process.execPath,[script,...args],{cwd:root,env,stdio:'inherit'});
+const run=(script,args=[],cwd=root)=>{
+ const result=spawnSync(process.execPath,[script,...args],{cwd,env,stdio:'inherit'});
  if(result.error)throw result.error;
  if(result.status!==0)process.exit(result.status??1);
 };
+const library=path.resolve(root,'..');
+const artflow=path.resolve(library,'../artflow');
+run(path.join(artflow,'node_modules/vite/bin/vite.js'),['build'],artflow);
+run(path.join(library,'scripts/build-library.mjs'),[],library);
+run('scripts/build-sidecar.mjs');
 run(path.join(root,'node_modules/@tauri-apps/cli/tauri.js'),['build']);
 run('scripts/build-custom-installer.mjs');
 const {version}=JSON.parse(await fs.readFile(path.join(root,'src-tauri/tauri.conf.json'),'utf8'));
 // Sign the final wrapper: first installs and in-app updates now download identical bytes.
 let keyArgs=[];try{await fs.access(env.TAURI_SIGNING_PRIVATE_KEY);keyArgs=['--private-key-path',env.TAURI_SIGNING_PRIVATE_KEY];delete env.TAURI_SIGNING_PRIVATE_KEY;}catch{}
-run(path.join(root,'node_modules/@tauri-apps/cli/tauri.js'),['signer','sign',...keyArgs,'--app-version',version,path.join(root,'dist',`AssetVault_${version}_x64-setup.exe`)]);
+run(path.join(root,'node_modules/@tauri-apps/cli/tauri.js'),['signer','sign',...keyArgs,'--app-version',version,path.join(root,'../../../dist',`Arvimo_${version}_x64-setup.exe`)]);
 run('scripts/prepare-release.mjs');
+run('scripts/verify-release.mjs');
 run('scripts/clean-installers.mjs',['--apply']);
 // Only after packaging, signing and preparing the release have all succeeded.
 const cleanup=spawnSync(process.execPath,['scripts/clean-build-cache.mjs','--apply'],{cwd:root,env,stdio:'inherit'});

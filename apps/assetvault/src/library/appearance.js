@@ -40,17 +40,42 @@ export function readAppearance(storage = globalThis.localStorage) {
   }
 }
 
+/** '#rrggbb' → [r,g,b]（调用方已用正则校验过）。 */
+function channels(hex) {
+  const value = String(hex).replace('#', '');
+  return [0, 2, 4].map(index => parseInt(value.slice(index, index + 2), 16));
+}
+
+const shift = (rgb, delta) => rgb.map(channel => Math.max(0, Math.min(255, channel + delta)));
+const fade = (rgb, alpha) => `rgba(${rgb[0]}, ${rgb[1]}, ${rgb[2]}, ${Math.round(alpha * 1000) / 1000})`;
+
 /**
  * 把外观写进根元素。幂等，可在首帧前、保存后、别的标签页改动时重复调用。
- * 图片走 multiply 混合：亮色壁纸不会把深色卡片衬成灰白，文字对比度始终由底色兜住。
+ *
+ * 面板色不是简单「给底色加 alpha」：底色是“页面纸”，面板要略亮一档才看得出层次，
+ * 所以派生三档（--av-panel / --av-panel-raised / --av-panel-hover，分别给大容器、
+ * 卡片、hover）。弹窗要更实（半透明正文压不住壁纸），吸顶条要几乎不透明
+ * （不然下面滚上来的卡片会透出来），因此再拆 solid / modal 两档。
+ * 壁纸额外加一层本色 veil：亮色壁纸直接铺满会让浅色字彻底看不清。
  */
 export function applyAppearance(view) {
   const root = globalThis.document?.documentElement;
   if (!root) return;
   const state = { ...DEFAULT_APPEARANCE, ...(view || {}) };
+  const alpha = clampAlpha(state.alpha);
+  const rgb = channels(state.color);
   root.style.setProperty('--av-bg-color', state.color);
   root.style.setProperty('--av-bg-image', state.image ? `url("${state.image}")` : 'none');
-  root.style.setProperty('--av-panel-alpha', String(clampAlpha(state.alpha)));
+  root.style.setProperty('--av-panel-alpha', String(alpha));
+  root.style.setProperty('--av-panel', fade(shift(rgb, 4), alpha));
+  root.style.setProperty('--av-panel-raised', fade(shift(rgb, 18), alpha));
+  root.style.setProperty('--av-panel-hover', fade(shift(rgb, 28), alpha));
+  // 输入区比面板再深一档，保住「凹进去」的层次；聚焦时再亮一点。
+  root.style.setProperty('--av-field', fade(shift(rgb, -4), alpha));
+  root.style.setProperty('--av-field-focus', fade(rgb, alpha));
+  root.style.setProperty('--av-panel-solid', fade(rgb, Math.max(alpha, 0.94)));
+  root.style.setProperty('--av-modal', fade(rgb, 0.55 + alpha * 0.45));
+  root.style.setProperty('--av-veil', state.image ? `linear-gradient(${fade(rgb, 0.7)},${fade(rgb, 0.7)})` : 'none');
 }
 
 /** 把图片缩到 1920 宽并转 JPEG：原图直接塞 localStorage 会因为 5MB 配额整块保存失败。 */

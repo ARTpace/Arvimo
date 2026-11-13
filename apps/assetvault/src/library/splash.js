@@ -4,7 +4,8 @@
   const startupScreen=document.getElementById('startup-screen');
   let root=document;
   if(startupScreen){
-    try{
+    if(startupScreen.shadowRoot)root=startupScreen.shadowRoot;
+    else try{
       const response=await fetch('/splash.html');
       if(!response.ok)throw Error('启动界面加载失败');
       const template=new DOMParser().parseFromString(await response.text(),'text/html');
@@ -20,10 +21,10 @@
   }
   const desktop = location.pathname.endsWith('/waiting.html') && window.__TAURI__?.core;
   const interfaceStage = !!startupScreen;
-  const MIN_MS = interfaceStage ? 650 : desktop ? 650 : 1900;
+  const MIN_MS = interfaceStage || desktop ? 0 : 650;
   const RAMP_MS = 1400;   // 第一段自然爬升的时间常数
   const BURST_MS = 420;   // 最后冲满的时长
-  const HOLD_MS = 900;    // 等完成弹跳与粒子动画展示后进入界面。
+  const HOLD_MS = 180;    // 等完成弹跳与粒子动画展示后进入界面。
 
   const el = id => root.getElementById(id);
   const bits=[...(root.querySelectorAll?.('.bit')||[])];
@@ -111,7 +112,7 @@
       if (url) {
         const target = new URL(url);
         if (target.protocol !== 'http:' || target.hostname !== '127.0.0.1' || target.pathname !== '/') {
-          throw new Error('本地服务地址无效，请重新启动 AssetVault。');
+          throw new Error('本地服务地址无效，请重新启动 Arvimo。');
         }
         home = target.href;
         msg.textContent = '本地服务已就绪，正在准备界面…';
@@ -179,15 +180,15 @@
       .catch(() => {
         if (attempt < 2) return setTimeout(() => goHome(attempt + 1), 700);
         msg.textContent = '咦，后台服务好像被关掉了';
-        tip.textContent = '重新双击 AssetVault 图标就能再启动一次';
+        tip.textContent = '重新双击 Arvimo 图标就能再启动一次';
         if(ver)ver.textContent = '';
       });
   }
 
   if (interfaceStage) {
-    shown=70;
+    shown=70;paint(shown);
     msg.textContent='正在准备分类、配置与界面布局…';
-    tip.textContent='准备完成后将直接显示完整界面';
+    tip.textContent='';
     warm=!!document.documentElement.dataset.uiReady;
     window.addEventListener('assetvault:ui-ready',()=>{warm=true;},{once:true});
     window.addEventListener('assetvault:ui-error',event=>{

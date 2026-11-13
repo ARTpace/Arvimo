@@ -9,9 +9,9 @@ export const ALL='all';
 // Result-feed registry. A platform only names feeds; anything that has to *do* something per feed
 // (which endpoint it hits, what it is called in the status line, that its skeleton exists in state)
 // is looked up here instead of being an if/else somewhere in app.js.
-export const FEEDS=['search','art','web','polyhaven','ambientcg','polypizza','kenney','freestylized','polyfork','simready','uiverse'];
-export const FEED_LABELS={search:'Sketchfab',art:'ArtStation',web:'链接解析',polyhaven:'Poly Haven',ambientcg:'ambientCG',polypizza:'Poly Pizza',kenney:'Kenney',freestylized:'FreeStylized',polyfork:'Polyfork',simready:'NVIDIA SimReady',uiverse:'Uiverse'};
-export const FEED_ENDPOINTS={search:'/api/search',art:'/api/artstation/search',web:'/api/scan',polyhaven:'/api/polyhaven/search',ambientcg:'/api/ambientcg/search',polypizza:'/api/polypizza/search',kenney:'/api/kenney/search',freestylized:'/api/freestylized/search',polyfork:'/api/polyfork/search',simready:'/api/simready/search',uiverse:'/api/uiverse/search'};
+export const FEEDS=['search','art','web','polyhaven','ambientcg','polypizza','kenney','freestylized','polyfork','simready','uiverse','fab'];
+export const FEED_LABELS={search:'Sketchfab',art:'ArtStation',web:'链接解析',polyhaven:'Poly Haven',ambientcg:'ambientCG',polypizza:'Poly Pizza',kenney:'Kenney',freestylized:'FreeStylized',polyfork:'Polyfork',simready:'NVIDIA SimReady',uiverse:'Uiverse',fab:'Fab'};
+export const FEED_ENDPOINTS={search:'/api/search',art:'/api/artstation/search',web:'/api/scan',polyhaven:'/api/polyhaven/search',ambientcg:'/api/ambientcg/search',polypizza:'/api/polypizza/search',kenney:'/api/kenney/search',freestylized:'/api/freestylized/search',polyfork:'/api/polyfork/search',simready:'/api/simready/search',uiverse:'/api/uiverse/search',fab:'/api/fab/search'};
 export const feedEndpoint=mode=>FEED_ENDPOINTS[mode]||FEED_ENDPOINTS.web;
 export const feedLabel=mode=>FEED_LABELS[mode]||mode;
 
@@ -127,6 +127,7 @@ export const ORIGIN_COPY={
  polyfork:'Polyfork 的程序化低模（参数可调，商用免署名）',
  simready:'NVIDIA SimReady 的 CC BY 4.0 USD 模型',
  uiverse:'Uiverse 的社区 UI 动效组件',
+ fab:'Fab 的 3D 资产与引擎素材',
 };
 
 export const PLATFORMS=[
@@ -134,7 +135,7 @@ export const PLATFORMS=[
   id:ALL,
   label:'全部平台',
   hint:'按统一题材同时检索各站能对上的资产',
-  feeds:['search','art','polyhaven','ambientcg','polypizza','kenney','freestylized','polyfork','simready'],
+  feeds:['search','art','polyhaven','ambientcg','polypizza','kenney','freestylized','polyfork','simready','fab'],
   placeholder:'搜索关键词或粘贴链接，例如 character、robot、props',
   suggestions:[['character','角色'],['robot','机器人'],['props','道具'],['weapon','武器'],['architecture','建筑']],
   // 全部平台只有一棵统一树：两平台共用一套分类 / 排序 / 范围，组头一键筛整组、叶子标注覆盖面。
@@ -181,6 +182,17 @@ export const PLATFORMS=[
   placeholder:'搜索 ambientCG 资产，例如 sky、brick、apple',
   suggestions:[['sand','沙地'],['brick','砖墙'],['wood','木纹'],['metal','金属'],['concrete','混凝土']],
   filters:'filters-ambientcg',
+ },
+ {
+  id:'fab',
+  description:'Epic 旗下 3D 资产商城，覆盖 Unreal / Unity / 通用 3D 素材；下载账号已拥有的引擎资产。',
+  label:'Fab',
+  hint:'引擎资产商城 · 需登录 Epic · 下载已拥有资产',
+  feeds:['fab'],
+  placeholder:'搜索 Fab 资产，例如 character、environment、props',
+  suggestions:[['character','角色'],['environment','环境'],['props','道具'],['vehicle','载具'],['weapon','武器']],
+  filters:'filters-fab',
+  note:'下载需先登录 Epic 账号，且只能下载你已拥有 / 已领取的资产。',
  },
  {
   id:'polypizza',
@@ -266,6 +278,7 @@ export const PLATFORM_TAG={
  polyfork:'程序化低模',
  simready:'USD 仿真模型',
  uiverse:'UI 动效组件',
+ fab:'3D 资产商城',
 };
 /**
  * 每个平台能给出的内容：model = 可下载 / 转 3D 的资产，image = 图片，video = 视频，ui = 界面代码。
@@ -284,6 +297,7 @@ export const PLATFORM_KINDS={
  kenney:['model','image'],
  freestylized:['model'],
  polyfork:['model'],
+ fab:['model'],
  uiverse:['ui'],
  'pexels-video':['video'],
  coverr:['video'],
@@ -303,6 +317,7 @@ export const PLATFORM_HOME={
  kenney:'https://kenney.nl',
  freestylized:'https://freestylized.com',
  polyfork:'https://polyfork.dev',
+ fab:'https://www.fab.com',
  simready:'https://hf-mirror.com/datasets/nvidia/simready-assets',
  uiverse:'https://uiverse.io',
 };
@@ -324,7 +339,7 @@ export const DEFAULT_PLATFORM=ALL;
 export const pictureSiteSearchable=id=>Boolean(PICTURE_SITES[id]?.search);
 /** 需要登录态（或过一次人机验证）才放行的站点：这些站显示「登录」按钮。
  *  登录窗口里登录 / 验证完，cookie 自动入库；之后解析走纯 HTTP，不再每次开浏览器。 */
-export const PICTURE_LOGIN_SITES=new Set(['zcool','huaban','pinterest','pixiv','civitai','flickr','500px','pexels','designspiration','artstation','xiaohongshu']);
+export const PICTURE_LOGIN_SITES=new Set(['zcool','huaban','pinterest','pixiv','civitai','flickr','500px','pexels','designspiration','artstation','xiaohongshu','fab']);
 export const pictureSiteLoginable=id=>PICTURE_LOGIN_SITES.has(String(id||''));
 /** 图站的「首页推荐」入口：切到这个平台时先自动解析这一屏，别让结果区只剩一段说明文字。
  *  返回空串 = 这个站没有可靠的推荐入口（例如 Pixiv 的首页作品要登录态），保持原来的说明卡。 */
@@ -389,6 +404,7 @@ export const jobKindOf=models=>{
   if(set.has('simready')&&set.size===1)return 'simready';
   if(set.has('polyfork')&&set.size===1)return 'polyfork';
   if(set.has('ambientcg')&&set.size===1)return 'ambientcg';
+ if(set.has('fab')&&set.size===1)return 'fab';
   // UI 元素：落的是代码（index.html + style.css），不是图片也不是模型。
   if(set.has('uiverse')&&set.size===1)return 'uielement';
   if(set.has('artstation')&&set.size===1)return 'artstation';

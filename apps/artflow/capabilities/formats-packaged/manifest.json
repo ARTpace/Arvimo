@@ -5,7 +5,7 @@
   "minHostVersion": "1.0.0",
   "name": "内置 Palm 与压缩漫画",
   "nameI18n": {"en": "Built-in Palm & Archived Comics"},
-  "author": "Artflow",
+  "author": "Arvimo",
   "license": "MIT",
   "runtime": {
     "mode": "builtin",

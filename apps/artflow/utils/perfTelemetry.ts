@@ -276,7 +276,7 @@ export interface PerfOverviewSnapshot {
 /** 复制给开发用的 Markdown 报告。 */
 export function formatPerfLog(overview: PerfOverviewSnapshot): string {
   const lines: string[] = [];
-  lines.push('# Artflow 性能日志');
+  lines.push('# Arvimo 性能日志');
   lines.push(`- 时间：${new Date().toLocaleString()}`);
   lines.push(`- React 实测计时：${overview.devReactTimings ? '可用（dev/带 profiling 构建）' : '不可用（production，仅长帧归因）'}`);
   const overviewParts: string[] = [];

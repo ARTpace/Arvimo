@@ -76,6 +76,43 @@ export async function expandDragFiles(target, {maxItems = DEFAULT_LIMITS.maxItem
   return found.slice(0, maxItems);
 }
 
+// 3D 模型扩展名：Fab 等平台落盘是「引擎工程目录」，整包丢给外部软件没法用，
+// 需要挑出里面真正的模型文件再拖。通用模型格式优先（Blender / Unity 能直接开），
+// UE 工程资源（.uasset/.umap）与整包 zip 次之（拖进 Unreal 用）。
+const MODEL_EXTS = new Set(['.glb', '.gltf', '.fbx', '.obj', '.blend', '.usdz', '.usd', '.usda', '.usdc', '.stl', '.ply', '.abc', '.uasset', '.umap', '.zip']);
+const MODEL_PRIORITY = new Set(['.glb', '.gltf', '.fbx', '.obj', '.blend', '.usdz', '.usd', '.usda', '.usdc', '.stl', '.ply', '.abc']);
+
+/**
+ * 把「一个引擎工程目录」摊成可拖出的模型文件清单（给 Fab 这类落盘为目录的平台）。
+ * 通用模型（glb/fbx/obj…）排在前面，UE 工程资源（.uasset）与 zip 殿后，最多 maxItems 个。
+ * 单个文件原样返回；目录里没找到模型文件则返回空数组（调用方退回整目录）。
+ */
+export async function expandModelFiles(target, {maxItems = DEFAULT_LIMITS.maxItems, limit = 4000} = {}) {
+  const file = String(target || '');
+  if (!file) return [];
+  let stat;
+  try { stat = await fs.stat(file); } catch { return []; }
+  if (stat.isFile()) return MODEL_EXTS.has(path.extname(file).toLowerCase()) ? [file] : [];
+  if (!stat.isDirectory()) return [];
+  const all = [];
+  const walk = async (dir, depth) => {
+    if (depth <= 0 || all.length >= limit) return;
+    const names = await fs.readdir(dir).catch(() => []);
+    for (const name of [...names].sort()) {
+      if (name.startsWith('.')) continue;
+      const child = path.join(dir, name);
+      let childStat;
+      try { childStat = await fs.stat(child); } catch { continue; }
+      if (childStat.isDirectory()) { await walk(child, depth - 1); if (all.length >= limit) return; }
+      else if (childStat.isFile() && MODEL_EXTS.has(path.extname(name).toLowerCase())) all.push(child);
+    }
+  };
+  await walk(file, 8);
+  const primary = all.filter(item => MODEL_PRIORITY.has(path.extname(item).toLowerCase()));
+  const rest = all.filter(item => !MODEL_PRIORITY.has(path.extname(item).toLowerCase()));
+  return [...primary, ...rest].slice(0, maxItems);
+}
+
 /** 拖到 PS 里显示的文件名：去掉非法字符、限长，空了就退回固定词。 */
 function safeStem(name) {
   return String(name || '')

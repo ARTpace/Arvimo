@@ -4,6 +4,10 @@ const { resolvePluginProfile, BASE_PROFILE, readStoredUserProfileLayer } = requi
 const { createPluginProfileManager, resolveStartupPluginProfile } = require('../plugin-runtime/plugin-profile-manager.ts');
 const manifest = (id, requires = []) => ({ manifestVersion: 1, id, version: '1.0.0', name: id, author: 'test', license: 'MIT', host: 'renderer', runtime: { mode: 'builtin', entry: './index.ts' }, requires, optionalRequires: [], capabilities: ['command'] });
 const manifests = [manifest('test.base'), manifest('test.child', ['test.base']), manifest('test.leaf', ['test.child'])];
+const defaultOff = ['builtin.tools-canvas', 'builtin.canvas-toolbars', 'builtin.ai-providers', 'builtin.studio-chrome', 'builtin.workspace-panels'];
+const defaults = [...defaultOff, 'builtin.asset-library', 'builtin.perf-monitor'].map(id => manifest(id));
+assert.deepEqual(resolvePluginProfile(defaults, [BASE_PROFILE]).enabledPluginIds, ['builtin.asset-library', 'builtin.perf-monitor']);
+assert.ok(resolvePluginProfile(defaults, [BASE_PROFILE, {id: 'user', source: 'user', patches: [{id: defaultOff[0], enabled: true}]}]).enabledPluginIds.includes(defaultOff[0]));
 const values = new Map();
 const storage = { getItem: key => values.get(key) ?? null, setItem: (key, value) => values.set(key, value), removeItem: key => values.delete(key) };
 const make = (active = resolvePluginProfile(manifests, [BASE_PROFILE])) => createPluginProfileManager({ manifests, activeProfile: active, storage, reload() {} });

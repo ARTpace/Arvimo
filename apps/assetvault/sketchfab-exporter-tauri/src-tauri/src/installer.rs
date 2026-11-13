@@ -63,16 +63,18 @@ fn existing_installation() -> Option<serde_json::Value> {
     for hive in [HKEY_LOCAL_MACHINE, HKEY_CURRENT_USER] {
         for view in [KEY_WOW64_64KEY, KEY_WOW64_32KEY] {
             let root = RegKey::predef(hive);
-            let uninstall = root.open_subkey_with_flags(r"Software\Microsoft\Windows\CurrentVersion\Uninstall\AssetVault", KEY_READ | view).ok();
+          for product in ["Arvimo", "AssetVault"] {
+            let uninstall = root.open_subkey_with_flags(format!(r"Software\Microsoft\Windows\CurrentVersion\Uninstall\{product}"), KEY_READ | view).ok();
             let version = uninstall.as_ref().and_then(|key| key.get_value::<String, _>("DisplayVersion").ok());
             let location = uninstall.as_ref().and_then(|key| key.get_value::<String, _>("InstallLocation").ok());
-            let legacy = root.open_subkey_with_flags(r"Software\assetvault\AssetVault", KEY_READ | view).ok()
+            let legacy = root.open_subkey_with_flags(format!(r"Software\assetvault\{product}"), KEY_READ | view).ok()
                 .and_then(|key| key.get_value::<String, _>("").ok());
             for value in [location, legacy].into_iter().flatten() {
                 if let Some(path) = installed_directory(&value) {
-                    return Some(serde_json::json!({"path":path,"version":version}));
+                    return Some(serde_json::json!({"path":path,"version":version,"name":product}));
                 }
             }
+          }
         }
     }
     None
@@ -104,7 +106,7 @@ fn install(path: &str, shortcut: bool, stage: impl Fn(&'static str)) -> Result<b
         stage("verifying");
         match code.as_str() {
             "0" | "3010" if Path::new(path).join("assetvault.exe").is_file() => Ok(code == "3010"),
-            code => Err(format!("安装未完成（退出码 {code}）。请检查安装目录权限或关闭正在运行的 AssetVault 后重试。")),
+            code => Err(format!("安装未完成（退出码 {code}）。请检查安装目录权限或关闭正在运行的 Arvimo · 艺团 后重试。")),
         }
     })();
     // Only this invocation's private extraction directory is removed.
@@ -115,7 +117,7 @@ fn install(path: &str, shortcut: bool, stage: impl Fn(&'static str)) -> Result<b
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     let event_loop = EventLoopBuilder::<Message>::with_user_event().build();
     let proxy = event_loop.create_proxy();
-    let window = WindowBuilder::new().with_title("安装 AssetVault")
+    let window = WindowBuilder::new().with_title("安装 Arvimo · 艺团")
         .with_inner_size(tao::dpi::LogicalSize::new(1040., 700.))
         .with_visible(false).with_decorations(false).with_undecorated_shadow(false)
         .with_background_color((13, 18, 24, 255))
@@ -143,7 +145,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 "drag" => { let _ = window.drag_window(); },
                 "install" if !busy && installed.is_none() => {
                     let path = request.path.unwrap_or_default();
-                    if !valid_path(&path) { report = Some(serde_json::json!({"state":"error","message":"请选择有效的本地绝对路径，例如 C:\\Program Files\\AssetVault。"})); }
+                    if !valid_path(&path) { report = Some(serde_json::json!({"state":"error","message":"请选择有效的本地绝对路径，例如 C:\\Program Files\\Arvimo。"})); }
                     else {
                         installed = Some(PathBuf::from(&path));
                         busy = true;
@@ -157,7 +159,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 "launch" if !busy => if let Some(path) = &installed {
                     match Command::new(path.join("assetvault.exe")).current_dir(path).spawn() {
                         Ok(_) => *control_flow = ControlFlow::Exit,
-                        Err(_) => report = Some(serde_json::json!({"state":"launch-error","message":"启动失败，请从开始菜单打开 AssetVault。"})),
+                        Err(_) => report = Some(serde_json::json!({"state":"launch-error","message":"启动失败，请从开始菜单打开 Arvimo · 艺团。"})),
                     }
                 },
                 "close" if !busy => *control_flow = ControlFlow::Exit,
@@ -180,7 +182,13 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn main() {
-    if let Some(arguments) = update_arguments(&std::env::args().skip(1).collect::<Vec<_>>()) {
+    if let Some(mut arguments) = update_arguments(&std::env::args().skip(1).collect::<Vec<_>>()) {
+        // Product rename must still update the existing installation in place.
+        if let Some(existing) = existing_installation() {
+            if let Some(path) = existing["path"].as_str() {
+                arguments.push_str(&format!(" /D={path}"));
+            }
+        }
         std::process::exit(run_update(&arguments).unwrap_or(1));
     }
     if run().is_err() {
@@ -189,7 +197,7 @@ fn main() {
         if fs::create_dir(&temporary).is_ok() {
             let engine = temporary.join("engine.exe");
             if fs::write(&engine, ENGINE).is_ok() {
-                let script = format!("Add-Type -AssemblyName PresentationFramework; [System.Windows.MessageBox]::Show('无法打开新版安装界面，将使用标准安装向导。','AssetVault'); Start-Process -FilePath {} -Verb RunAs -Wait", ps_literal(&engine.to_string_lossy()));
+                let script = format!("Add-Type -AssemblyName PresentationFramework; [System.Windows.MessageBox]::Show('无法打开新版安装界面，将使用标准安装向导。','Arvimo · 艺团'); Start-Process -FilePath {} -Verb RunAs -Wait", ps_literal(&engine.to_string_lossy()));
                 let _ = Command::new("powershell.exe").args(["-NoProfile", "-Command", &script]).creation_flags(HIDDEN).status();
             }
             let _ = fs::remove_dir_all(temporary);

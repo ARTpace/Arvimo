@@ -45,7 +45,7 @@ test('双击重置相机回到取景机位',()=>{
 
 test('灯光 rig 与预览器 UI 到位',()=>{
  assert.ok(preview.includes('lightRig=new THREE.Group();scene.add(lightRig);'),'方向光要挂进 rig 才能整体旋转');
- assert.ok(preview.includes('lightRig.add(key)')&&preview.includes('lightRig.add(fill)'),'key/fill 进 rig，rim 留 scene');
+ assert.ok(preview.includes('lightRig.add(keyLight)')&&preview.includes('lightRig.add(fillLight)'),'key/fill 进 rig，rim 留 scene');
  assert.ok(html.includes('id="viewer-help-btn"'),'操作提示要收进右上角「?」按钮，不再常驻占画面');
  assert.ok(html.includes('id="viewer-help"'),'「?」点击后要弹出操作说明面板');
  assert.ok(!html.includes('viewer-helps'),'常驻手势条已按需求移除，提示统一进「?」弹层');
@@ -108,7 +108,8 @@ test('画布尺寸跟着显示尺寸同步，不只靠 window resize',()=>{
  assert.ok(preview.includes("new ResizeObserver(()=>resize())"),'要盯住画布容器的尺寸变化');
  assert.ok(/sizeObserver\.observe\(canvas\.parentElement\|\|canvas\)/.test(preview),'观察的是容器，画布 hidden 时它是 0');
  assert.ok(preview.includes('observeStage();'),'建好与复用渲染器两条路径都要挂上观察');
- assert.ok(/if\(w===viewW&&h===viewH\)return;/.test(preview),'尺寸没变要早退（它现在会被每帧兜底调到）');
+ // 早退分支现在还要顺手守 camera.aspect（通道分条渲染会改它），所以不是一行 return。
+ assert.ok(/if\(w===viewW&&h===viewH\)\{[\s\S]{0,200}return;\}/.test(preview),'尺寸没变仍要早退，不再每帧兜底重设');
  assert.ok(/function loop\(\)\{[\s\S]*?resize\(\);[\s\S]*?controls\.update\(\)/.test(preview),'交互请求的帧在绘制前同步尺寸，空闲时不再为兜底持续绘制');
  assert.ok(preview.includes('let viewW=0,viewH=0,sizeObserver=null;'),'记着上次同步过的尺寸');
 });

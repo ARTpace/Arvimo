@@ -244,7 +244,7 @@ export function imageManifest({job,plan,files,skipped,status,failedCount,truncat
     images:files.map(f=>({file:f.file,title:f.title,width:f.width,height:f.height,bytes:f.bytes,format:f.format,url:f.sourceUrl,...(f.tags?.length?{tags:f.tags}:{})})),
     note:'作者在原站公开的图片（已取最大可下载尺寸）。请遵守原作品许可，未经授权请勿商用。',
     exportedAt:new Date().toISOString(),
-    tool:'AssetVault / asset images',
+    tool:'Arvimo / asset images',
   };
   if(skipped)info.skippedCount=skipped;
   // 取不回来、被跳过的张数：卡片据此提示「这包少了几张」，而不是让人以为原站只有这么多。

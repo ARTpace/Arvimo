@@ -297,6 +297,17 @@ export function createLibraryStorage(dataDir, downloads, options = {}) {
             await conn.setMeta('snapshot_at', String(stamp));
           }
         }
+        // 一次性回填：早期版本把探测缓存只存在探测域里，从没写进资产行，于是颜色 / 尺寸
+        // 筛选对本地资产完全不生效（筛出来永远是 0 条）。补一次即可，之后由写路径增量维护。
+        if (conn.getMeta('probe_backfill_v1') !== '1') {
+          const probeJson = snapshot.values[PROBE_STATE_KEY];
+          const probeStamp = Number(snapshot.mtimes[PROBE_STATE_KEY] || 0) || Date.now();
+          if (typeof probeJson === 'string' && probeJson.length > 2) {
+            await conn.writeValues({[PROBE_STATE_KEY]: probeJson},
+              {replace: false, stamp: probeStamp, stamps: {[PROBE_STATE_KEY]: probeStamp}, derived: true});
+          }
+          await conn.setMeta('probe_backfill_v1', '1');
+        }
       return true;
     } catch (error) {
       onWarn(`资产库索引同步失败：${error.message}`);

@@ -7,7 +7,7 @@
   "description": "托管资产库数据管理：容量、引用情况，以及清理未被工程引用的记录。",
   "descriptionI18n": {"en": "Managed asset library data management: capacity, reference status, and cleanup of records that no project references."},
   "category": "workspace",
-  "author": "Artflow",
+  "author": "Arvimo",
   "license": "MIT",
   "host": "renderer",
   "runtime": { "mode": "builtin", "entry": "./index.tsx" },

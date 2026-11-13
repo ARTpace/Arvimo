@@ -285,7 +285,7 @@ export const useFileSystem = () => {
         // format but save through a user-mediated native dialog, not a download.
         if ('__TAURI__' in window && window.artflowApp?.saveBytes) {
             const result = await window.artflowApp.saveBytes({
-                title: '保存 Artflow 工程',
+                title: '保存艺团工程',
                 defaultName: projectFolderName ? `${projectFolderName}.json` : 'artflow-data.json',
                 bytes: new TextEncoder().encode(serialized).buffer,
             });

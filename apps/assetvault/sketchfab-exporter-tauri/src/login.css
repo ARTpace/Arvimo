@@ -50,7 +50,7 @@ body {
   pointer-events: none;
 }
 
-.backdrop-art { display: block; width: 100%; height: 100%; }
+.backdrop-art { display: block; width: 100%; height: 100%; object-fit: cover; }
 
 /* 立方体只做「空气里的结构」，6% 是能看见但不干扰文字的上限 */
 .backdrop .cubes { opacity: 0.06; }
@@ -89,6 +89,14 @@ body {
 }
 
 .card-body { padding: 18px 16px 16px; }
+
+/* 说明段：局域网入口页没有「登录 / 创建账号」两个标签，用它承担那段引导文案。 */
+.lede {
+  margin: 0 0 14px;
+  font-size: 11.5px;
+  line-height: 1.75;
+  color: var(--muted);
+}
 
 /* ── 标签：下划线式，不用滑块胶囊 ─────────────────────── */
 .tabs {

@@ -55,13 +55,17 @@ test('切标签页要保住各自的滚动位置，不能复位到顶部',()=>{
  // 根因：切走时那个标签页被 hidden 掉，页面瞬间变矮，浏览器把窗口滚动量夹到 0；
  // 切回来就从顶部开始了。所以要在隐藏之前读一次 scrollY，回来后再放回去。
  assert.ok(app.includes('const routeScroll=new Map()'),'要有一份「路由 → 滚动位置」的记录');
- assert.ok(/const leaving=state\.route;\s*\n\s*if\(leaving&&leaving!==name\)routeScroll\.set\(leaving,window\.scrollY\)/.test(app),
-  '切换前要读一次当前滚动位置（读在 hidden 之前，否则读到的已经是夹住后的 0）');
+ assert.ok(app.includes('const leaving=state.route;'),'要先记下切走的路由');
+ assert.ok(/routeScroll\.set\(leaving,window\.scrollY\)/.test(app),'切换前要读一次当前滚动位置');
+ // 读取必须早于 body.dataset.route 改写：那一步才让页面变矮、把滚动量夹到 0。
+ const readAt=app.indexOf('routeScroll.set(leaving,window.scrollY)');
+ const hideAt=app.indexOf('document.body.dataset.route=name');
+ assert.ok(readAt>0&&hideAt>readAt,'读要早于路由显隐切换，否则读到的是夹住后的 0');
  assert.ok(/if\(leaving&&leaving!==name\)restoreRouteScroll\(routeScroll\.get\(name\)\|\|0\)/.test(app),
   '切回来要把记录的位置放回去');
- assert.ok(/window\.scrollTo\(0,Math\.max\(0,top\)\)/.test(app),
-  '桌面/WebView 里滚的是 window（main 只有 overflow-x:clip，不是滚动容器）');
- assert.ok(app.includes('requestAnimationFrame(()=>requestAnimationFrame(()=>window.scrollTo(0,Math.max(0,top))))'),
+ assert.ok(/window\.scrollTo\(\{top:Math\.max\(0,top\),behavior:'instant'\}\)/.test(app),
+  '桌面/WebView 里滚的是 window；instant 避免平滑动画把位置又带走');
+ assert.ok(/function restoreRouteScroll\(top\)\{[\s\S]{0,300}requestAnimationFrame\(\(\)=>\{routeScrollFrame=requestAnimationFrame/.test(app),
   '要等两帧再恢复：显隐与重绘要先落盘，否则页面高度还没稳定');
  // 首次进入（state.route 与目标同名）不恢复：每次刷新页面都被拉回顶部反而更差，
  // 这条由上面那条 leaving!==name 的门控保证。

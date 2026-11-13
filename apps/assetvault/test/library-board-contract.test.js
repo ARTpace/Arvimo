@@ -35,7 +35,10 @@ test('app.js 装配中枢，右键菜单通过 run 回调注入（不改分发 s
   const app = read('src/library/app.js');
   assert.match(app, /import \{createBoardHub\}/);
   assert.match(app, /boardHub=createBoardHub\(/);
-  assert.match(app, /onBoardPicker:boardHub/);
+  // 2026-11 起注入带门控：只有库路由、非访客、boardHub 已装配时才给回调，
+  // 避免序列菜单 / 画廊里出现访客用不了的「加入画板」。
+  assert.match(app, /onBoardPicker:state\.route==='library'&&!visitor&&boardHub\?/);
+  assert.ok((app.match(/boardHub\.pickBoards\(uids,options\)/g)||[]).length>=2,'两处菜单都要把回调转给 boardHub');
   const menu = read('src/library/card-context-menu.js');
   assert.match(menu, /ctx\.onBoardPicker/);
   assert.match(menu, /run: \(\) => ctx\.onBoardPicker\(\[uid\], \{mode: 'add'\}\)/);

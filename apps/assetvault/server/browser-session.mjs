@@ -78,7 +78,7 @@ export async function syncCookies(page, { host = '' } = {}) {
  * 打开一个可见的浏览器窗口让用户登录。
  * 窗口里每 2.5 秒同步一次 cookie，用户登录完直接关掉窗口即可，不需要点任何「完成」。
  */
-export async function startLogin({ url, platform = '' } = {}) {
+export async function startLogin({ url, platform = '', capture = null } = {}) {
   if (!url || !/^https?:\/\//i.test(url)) throw new Error('登录地址无效');
   if (loginJob && !loginJob.closed) {
     // 已有登录窗口 → 把它带到前台（重新导航到新地址）
@@ -93,9 +93,31 @@ export async function startLogin({ url, platform = '' } = {}) {
   const b = await launchBrowser({ mode: 'headed', profileDir: PROFILE_DIR, timeout: 35000 });
   active = { ...b, startedAt: Date.now(), lastUsed: Date.now() };
 
-  const job = { page: b.page, child: b.child, url, platform, startedAt: Date.now(), closed: false, synced: 0, timer: null };
+  const job = { page: b.page, child: b.child, url, platform, capture, captured: false, startedAt: Date.now(), closed: false, synced: 0, timer: null };
   loginJob = job;
 
+  // OAuth 授权码提取（Fab 等）：登录窗口跳到回调地址后，页面会渲染一段 JSON（含 authorizationCode）。
+  // 读一次正文、按 capture.extract 抽取，交给 onExtract 去换 token；抽到即视为登录完成，自动关窗口。
+  const probe = async () => {
+    if (!job.capture || job.captured || job.closed) return;
+    try {
+      const r = await b.page.send('Runtime.evaluate', {
+        expression: 'document.body ? document.body.innerText : (document.documentElement ? document.documentElement.innerText : "")',
+        returnByValue: true,
+      });
+      const text = String(r?.result?.value || '');
+      const value = text ? job.capture.extract(text) : '';
+      if (!value) return;
+      job.captured = true;
+      await job.capture.onExtract(value);
+      if (loginJob === job) loginJob = null;
+      job.closed = true;
+      clearInterval(job.timer);
+      job.page?.close();
+      await killBrowser(job.child, { grace: 1500 });
+      if (active?.child === job.child) active = null;
+    } catch { /* 页面切换中，下一拍再试 */ }
+  };
   const tick = async () => {
     if (job.closed) return;
     try {
@@ -104,6 +126,7 @@ export async function startLogin({ url, platform = '' } = {}) {
       const list = (await b.page.cookieHeader(null)).filter((c) => siteKey(c.domain) === key);
       if (list.length) { mergeCookies(list); job.synced = list.length; }
     } catch { /* 用户可能在切页面 */ }
+    probe().catch(() => {});
   };
   job.timer = setInterval(tick, 2500);
   job.timer.unref?.();

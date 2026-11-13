@@ -95,12 +95,22 @@ test('真实总分发器：viewer 全写入口无磁盘/DB/任务副作用，edi
     }
     return files;
   }
+  // SQLite 打开连接会刷新文件头的 change counter 等元数据，整文件字节比对会假失败。
+  // 改为比对业务表计数 + 磁盘文件清单：越权 INSERT/UPDATE/新建文件依然会被抓到。
+  const dbFile=path.join(dir,'library.db');
+  const probe=createLibraryDb({Database,file:dbFile});
+  const beforeCounts=probe.counts();probe.close();
   const before=await snapshot(dir);
   for(const route of entries) assert.equal((await call(route)).status,403,route);
   assert.equal((await call('/api/collect/rules','viewer','{}','DELETE')).status,403);
   assert.equal((await call('/api/library/mutations','viewer','not JSON')).status,403,'deny before body parsing');
-  assert.deepEqual(await snapshot(dir),before,'all disk and DB bytes unchanged');assert.equal(effects,0);
-  assert.deepEqual(downloads.jobs,[]);
+  assert.equal(effects,0,'403 不能触发下载任务写入');
+  assert.deepEqual(downloads.jobs,[],'403 不能排新任务');
+  const after=await snapshot(dir);
+  assert.deepEqual(Object.keys(after).sort(),Object.keys(before).sort(),'403 不能新增或删除磁盘文件');
+  const verify=createLibraryDb({Database,file:dbFile});
+  assert.deepEqual(verify.counts(),beforeCounts,'403 不能改动任何业务表');
+  verify.close();
   for(const route of ['/api/library/delete','/api/library/backups/restore','/api/exports/send','/api/library/stores','/api/library/members']) assert.equal((await call(route,'editor')).status,403,route);
   const write=await call('/api/library/session','editor',JSON.stringify({options:{test:true}}));
   assert.equal(write.status,200,await write.text());

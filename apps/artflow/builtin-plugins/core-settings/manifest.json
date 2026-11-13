@@ -7,7 +7,7 @@
   "description": "设置面板核心页：通用（API 密钥/语言/工具栏）、外观、画布、快捷键（原本体功能迁移）。",
   "descriptionI18n": {"en": "Core settings pages: general (API key, language, toolbar), appearance, canvas, and hotkeys (migrated from the original app)."},
   "category": "ui",
-  "author": "Artflow",
+  "author": "Arvimo",
   "license": "MIT",
   "host": "renderer",
   "runtime": { "mode": "builtin", "entry": "./index.tsx" },

@@ -108,6 +108,13 @@ export class ProfileError extends Error {
   }
 }
 
+const DEFAULT_DISABLED_PLUGINS = new Set([
+  'builtin.tools-canvas',
+  'builtin.canvas-toolbars',
+  'builtin.ai-providers',
+  'builtin.studio-chrome',
+  'builtin.workspace-panels',
+]);
 export const BASE_PROFILE: ProfileLayer = Object.freeze({ id: 'base', source: 'base', patches: [] });
 export const DESKTOP_PROFILE: ProfileLayer = Object.freeze({ id: 'desktop', source: 'mode', patches: [] });
 
@@ -269,7 +276,7 @@ export function resolvePluginProfile(
       reject(`duplicate plugin manifest id: ${manifest.id}`, rawManifest);
       continue;
     }
-    states.set(manifest.id, { manifest, enabled: true, config: {}, sources: ['builtin'] });
+    states.set(manifest.id, { manifest, enabled: !DEFAULT_DISABLED_PLUGINS.has(manifest.id), config: {}, sources: ['builtin'] });
   }
 
   const layerIds = new Set<string>();

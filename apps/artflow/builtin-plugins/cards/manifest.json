@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "name": "文档与文件卡片",
   "nameI18n": {"en": "Document & File Cards"},
-  "author": "Artflow",
+  "author": "Arvimo",
   "license": "MIT",
   "runtime": {
     "mode": "builtin",

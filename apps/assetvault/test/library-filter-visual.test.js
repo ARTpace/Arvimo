@@ -25,7 +25,7 @@ test('视觉注册表：每个维度 / 分组 / 排序 / 类型 / 收藏态都�
     assert.ok(paths[PANEL_VISUALS[dim.id].icon], `${dim.id} 图标不在 icon-set.js`);
     assert.ok(PANEL_TIPS[dim.id], `${dim.id} 缺 tooltip 说明`);
   }
-  assert.equal(FILTER_DIMENSIONS.length, 7);
+  assert.equal(FILTER_DIMENSIONS.length, 9, '九个常驻维度（新增目录 / 来源与分类）');
   for (const group of GROUP_META) assert.ok(paths[FORMAT_GROUP_VISUALS[group.id]?.icon], `格式组 ${group.id} 缺图标`);
   for (const item of SORT_CHIPS) assert.ok(paths[SORT_VISUALS[item.value]?.icon], `排序 ${item.value} 缺图标`);
   for (const item of KIND_CHIPS) assert.ok(paths[KIND_VISUALS[item.value]?.icon], `类型 ${item.value} 缺图标`);
@@ -132,7 +132,8 @@ test('面板减负：无大段说明、无复选框、无重复标题，参数�
 });
 
 test('dock 壳：图标头、清除本维度、皮肤缝、紧凑激活 chips', () => {
-  const dock = read('filter-dock.js');
+  // 抽屉结构模板已拆到 filter-panel-drawer.js，状态编排留在 filter-dock.js；契约跨两个文件。
+  const dock = read('filter-dock.js') + read('filter-panel-drawer.js');
   for (const pattern of [/fd-pop-ic/, /fd-pop-reset/, /fd-pop-badge/, /PANEL_TIPS/,
     /readSkin\(storage\)/, /setSkin/, /fd-clear-all/, /iconButton/])
     assert.match(dock, pattern, `dock 缺 ${pattern}`);

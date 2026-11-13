@@ -14,7 +14,6 @@ const submit = $('submit');
 const submitLabel = $('submit-label');
 const tabs = $('tabs');
 const passHint = $('pass-hint');
-const peek = $('peek');
 const footnote = $('footnote');
 
 /** 只接受站内路径：/xxx 可以，//evil.com 与 http://… 一律退回首页。 */
@@ -24,7 +23,7 @@ const next = (() => {
 })();
 
 const COPY = {
-  login: '账号和密码只留在本机的 AssetVault 数据目录，不上传、不同步。',
+  login: '账号和密码只留在本机的 Arvimo · 艺团 数据目录，不上传、不同步。',
   register: '账号只用于进入本机工作台：多个账号共用同一份资产库。'
 };
 
@@ -105,14 +104,7 @@ nameInput.addEventListener('input', () => {
   if (statusEl.textContent) say('');
 });
 
-peek.addEventListener('click', () => {
-  const show = passInput.type === 'password';
-  passInput.type = show ? 'text' : 'password';
-  peek.textContent = show ? '隐藏' : '显示';
-  peek.setAttribute('aria-pressed', String(show));
-  passInput.focus();
-  passInput.setSelectionRange(passInput.value.length, passInput.value.length);
-});
+// 密码「显示 / 隐藏」由共用的 /login-peek.js 处理（局域网入口页引的是同一份）。
 
 form.addEventListener('submit', async event => {
   event.preventDefault();
@@ -158,7 +150,7 @@ form.addEventListener('submit', async event => {
     }
     data = await response.json();
   } catch {
-    say('连不上本地服务，请确认 AssetVault 后台还在运行', 'error');
+    say('连不上本地服务，请确认 Arvimo · 艺团 后台还在运行', 'error');
     return;
   }
   if (data?.user) {

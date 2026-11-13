@@ -1136,7 +1136,9 @@ function unlockPageScroll(){document.documentElement.classList.remove('file-prev
   // v=2 与卡片缩略图保持同一套版本戳：之前服务端把一次 4xx 的图连同 7 天 max-age 一起发回去，
   // 浏览器就把「裂图」记了一周。卡片早就加了 v=2 绕开，预览和缩略图条没加，于是卡片正常、
   // 点开却是一片黑（花瓣这类原图直链最容易撞上）。两处必须共用同一个版本号。
-  const imgUrl=(rel,useThumb)=>{const it=items[Number(rel)]||{};return `/api/image?url=${encodeURIComponent(useThumb&&it.thumb?it.thumb:it.url)}&v=2`;};
+  // 同源相对地址（本地托管副本的 /api/local/file、/api/local/thumb）本来就是本机直出，
+  // 套 /api/image 代理会被「只支持图床地址」挡下来，本地素材点开预览就是一片黑。
+  const imgUrl=(rel,useThumb)=>{const it=items[Number(rel)]||{};const raw=useThumb&&it.thumb?it.thumb:it.url;return /^\/(?!\/)/.test(String(raw||''))?raw:`/api/image?url=${encodeURIComponent(raw)}&v=2`;};
   const thumbUrl=rel=>imgUrl(rel,true);
   openGallery({title,category:'images',note,noteLoading,imageUrl:imgUrl,thumbUrl,videoUrl:rel=>`/api/video?url=${encodeURIComponent(items[Number(rel)].play||items[Number(rel)].url)}`,details:onChange},items,index);
  }

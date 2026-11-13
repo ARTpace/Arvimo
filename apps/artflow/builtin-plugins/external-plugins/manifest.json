@@ -7,7 +7,7 @@
   "description": "安装第三方插件，并挂出沙箱面板。插件脚本不进入画布渲染进程。",
   "descriptionI18n": {"en": "Install third-party plugins and surface sandboxed panels. Plugin scripts never enter the canvas renderer process."},
   "category": "ui",
-  "author": "Artflow",
+  "author": "Arvimo",
   "license": "MIT",
   "host": "renderer",
   "runtime": { "mode": "builtin", "entry": "./index.tsx" },

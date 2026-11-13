@@ -1,5 +1,5 @@
 // 合并面板（使用说明 / 帮助与反馈）的页签切换：只测「切页签 + 只 showModal 一次」，
-// 不碰表单提交（那条链路由 feedback 的接口契约覆盖）。
+// 不碰反馈页的点击（那条链路由 library-feedback-github.test.js 覆盖）。
 // 先把假 document 装到全局，再动态 import —— 模块里的 wired 标志是按进程记的，
 // 静态 import 会抢在 stub 之前执行。
 import test from 'node:test';

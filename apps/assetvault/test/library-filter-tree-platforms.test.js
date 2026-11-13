@@ -18,9 +18,10 @@ const PLATFORMS = [
   ['FreeStylized', '#filters-freestylized', ['#freestylized-type', '#freestylized-category']],
   ['Polyfork', '#filters-polyfork', ['#polyfork-class', '#polyfork-sort']],
   ['Uiverse', '#filters-uiverse', ['#uiverse-type', '#uiverse-theme']],
+  ['Fab', '#filters-fab', ['#fab-free', '#fab-sort']],
 ];
 
-test('六个平台的筛选面板全部登记进筛选树，没有平台掉队', () => {
+test('各平台的筛选面板全部登记进筛选树，没有平台掉队', () => {
   for (const [name, row] of PLATFORMS) {
     assert.ok(tree.includes(`row:'${row}'`), `${name} 的筛选面板 ${row} 未登记进 filter-tree SPECS`);
   }

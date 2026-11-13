@@ -7,18 +7,18 @@ import {pathToFileURL} from 'node:url';
 import {resolveUserPaths} from '../server/data-dir.mjs';
 
 export const G = {
-  server: '[1/12] 服务与进程',
-  preview: '[2/12] 3D 预览（静态）',
-  previewMatrix: '[3/12] 3D 预览矩阵',
-  platform: '[4/12] 平台连通',
-  linkRoute: '[5/12] 链接解析',
-  download: '[6/12] 下载链路',
-  display: '[7/12] 展示能力矩阵',
-  runtime: '[8/12] 运行时能力',
-  regression: '[9/12] 关键回归',
-  storage: '[10/12] 数据库与资产存储',
-  credentials: '[11/12] 认证与平台凭证',
-  downloadsDeep: '[12/12] 下载子系统深度',
+  server: '[1/15] 服务与进程',
+  preview: '[2/15] 3D 预览（静态）',
+  previewMatrix: '[3/15] 3D 预览矩阵',
+  platform: '[4/15] 平台连通',
+  linkRoute: '[5/15] 链接解析',
+  download: '[6/15] 下载链路',
+  display: '[7/15] 展示能力矩阵',
+  runtime: '[8/15] 运行时能力',
+  regression: '[9/15] 关键回归',
+  storage: '[10/15] 数据库与资产存储',
+  credentials: '[11/15] 认证与平台凭证',
+  downloadsDeep: '[12/15] 下载子系统深度',
 };
 
 // 只挑与自检主题直接相关的回归守卫；全量 npm test 太慢，不进默认流程。
@@ -328,7 +328,13 @@ export async function checkCredentials(ctx) {
   if (base) {
     const ep = `${base}/api/platforms`;
     let noAuth = 0, withToken = 0;
-    try { noAuth = (await fetch(ep, {signal: AbortSignal.timeout(5000)})).status; } catch { noAuth = 0; }
+    // 前面几组刚打完一轮并发请求，回环连接偶发被重置（拿回 0 而不是 401），
+    // 那不是越权也不是闸门坏，隔 300ms 重试一次再判。
+    for (const wait of [0, 300]) {
+      if (wait) await new Promise(r => setTimeout(r, wait));
+      try { noAuth = (await fetch(ep, {signal: AbortSignal.timeout(5000)})).status; } catch { noAuth = 0; }
+      if (noAuth) break;
+    }
     try { const r = await api(ep, {timeout: 5000}); withToken = r.status; } catch { withToken = 0; }
     const gateMsg = noAuth === 200 ? ' · 未认证即可访问，存在越权风险'
       : (noAuth === 401 || noAuth === 403) ? ' · 未认证被拒，闸门正常'
@@ -581,7 +587,7 @@ export async function checkPreviewMatrix(ctx) {
   } catch (e) { fail('Substance 实测', e); }
 }
 
-// ── [5/12] 链接解析 ─────────────────────────────────────────────────────────
+// ── [5/15] 链接解析 ─────────────────────────────────────────────────────────
 // 搜索框既是搜索也是「粘贴链接」入口：粘进去的 URL 先经 routeLink() 归类，再决定走哪条通道
 // （Marmoset 作品页 / 图站直达 / UI 元素 / 通用网页扫描）。这里是纯前端函数，不需要网络，
 // 归错通道的后果是「粘了链接什么都没解析出来」——比报错更让人迷惑，所以直接 import 真实模块
@@ -674,5 +680,5 @@ export async function checkLinkRouting(ctx) {
 
   // 图站通道不在这里重抓：组 7 逐站取样走的就是同一个 picture-site/resolve，
   // 再跑一遍等于把十几个站的请求翻倍。
-  report('OK', '图站通道', '由 [7/12] 展示能力矩阵逐站取样覆盖（端点同为 picture-site/resolve）');
+  report('OK', '图站通道', '由 [7/15] 展示能力矩阵逐站取样覆盖（端点同为 picture-site/resolve）');
 }

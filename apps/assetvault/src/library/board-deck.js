@@ -4,6 +4,8 @@
 // 与 board-hub 的分工：hub 管装配（store / 规则对话框 / 选择器），这里只管「卡片怎么画、
 // 点一下发生什么」。动作全部以回调传入，所以本模块不认识 advanced-query，也不认识路由。
 import {BOARD_EVENTS} from './board-store.js';
+import {thumbSrc} from './image-src.js';
+import {createContextMenu} from './card-context-menu.js';
 
 /** 进入 / 退出画板时由查询层广播；detail 为 {id,name,smart} 或 null。 */
 export const BOARD_ACTIVE_EVENT = 'assetvault:board-active';
@@ -11,7 +13,7 @@ export const BOARD_ACTIVE_EVENT = 'assetvault:board-active';
 export function createBoardDeck({
   doc = globalThis.document, win = globalThis.window,
   esc = String, icon = () => '', toast, store, api,
-  onOpen, onAll, onNew, onSmart, onRule, onRename, onDelete,
+  onOpen, onCanvas, onAll, onNew, onSmart, onRule, onRename, onDelete,
 } = {}) {
   const section = doc.querySelector('#board-deck');
   const host = doc.querySelector('#board-deck-grid');
@@ -24,9 +26,10 @@ export function createBoardDeck({
   let previews = {};
   let previewKey = '';
   let inflight = false;
+  let queued = null;
   let active = null;
 
-  const thumbUrl = item => item?.thumbnail ? `/api/image?url=${encodeURIComponent(item.thumbnail)}` : '';
+  const thumbUrl = item => thumbSrc(item?.thumbnail);
   // 底栏副行和资产卡的作者行等价：手动板报「N 个资产」，智能板说明内容是算出来的，
   // 否则一个「自动」孤零零挂在角上，读不出这块板到底装了多少东西。
   const metaText = row => {
@@ -65,6 +68,7 @@ export function createBoardDeck({
           <span class="bd-card-meta">${esc(metaText(row))}</span>
         </div>${row.smart ? `<span class="bd-card-badge">${icon('zap')}智能</span>` : ''}</div>
       <div class="bd-card-strip">${strip}</div>
+      ${!row.smart ? `<button type="button" class="bd-card-tool bd-card-canvas" data-bd-canvas="${esc(row.id)}" title="打开对应画布" aria-label="打开 ${name} 的画布">${icon('layers')}</button>` : ''}
       <span class="bd-card-tools">
         ${row.smart ? `<button type="button" class="bd-card-tool" data-bd-rule="${esc(row.id)}" title="编辑筛选规则" aria-label="编辑 ${name} 的筛选规则">${icon('sliders')}</button>` : ''}
         <button type="button" class="bd-card-tool" data-bd-rename="${esc(row.id)}" title="重命名 / 改封面" aria-label="重命名画板 ${name}">${icon('edit')}</button>
@@ -80,7 +84,9 @@ export function createBoardDeck({
   /** 预览只拉一次：签名（id + 成员数 + 智能位）没变就不重复请求。 */
   async function loadPreviews(boards) {
     const key = boards.map(row => `${row.id}:${row.assetCount}:${row.smart ? 1 : 0}`).join('|');
-    if (key === previewKey || inflight) return;
+    if (key === previewKey) return;
+    // 拉取途中又变了（连续往几个画板里加资产），排一次重拉，别把最新一次变更丢掉。
+    if (inflight) { queued = boards; return; }
     inflight = true;
     try {
       const data = await api.boardPreviews(boards.map(row => row.id), 6);
@@ -91,7 +97,12 @@ export function createBoardDeck({
     } catch {
       // 纯文件模式 / 老进程没有这条路由：卡片退化成封面占位，不打断列表。
       previewKey = '';
-    } finally { inflight = false; }
+    } finally {
+      inflight = false;
+      const again = queued;
+      queued = null;
+      if (again) loadPreviews(again);
+    }
   }
 
   function renderCrumb() {
@@ -127,6 +138,8 @@ export function createBoardDeck({
   }
 
   host.addEventListener('click', event => {
+    const canvas = event.target.closest?.('[data-bd-canvas]');
+    if (canvas) return onCanvas?.(canvas.dataset.bdCanvas);
     const rule = event.target.closest?.('[data-bd-rule]');
     if (rule) return onRule?.(rule.dataset.bdRule);
     const rename = event.target.closest?.('[data-bd-rename]');
@@ -171,9 +184,46 @@ export function createBoardDeck({
   doc?.addEventListener?.('keydown', event => { if (event.key === 'Escape') closeQuick(); });
   crumb?.querySelector('[data-bd-back]')?.addEventListener('click', () => onAll?.());
 
-  win?.addEventListener?.(BOARD_ACTIVE_EVENT, event => setActive(event.detail));
-  // 画板集合变了（新建 / 改名 / 采集跑完 / 从别处加入）就重画：单一事实源在 store。
-  win?.addEventListener?.(BOARD_EVENTS.changed, () => render());
+  // 画板卡的右键菜单：与资产卡共用同一套菜单骨架（createContextMenu 的定位 / 关闭 / 方向键），
+  // 条目直接调本模块已有的回调 —— 不另造一套动作，也不和卡片悬停上那几颗小按钮重复实现。
+  createContextMenu({
+    icon,
+    notify: message => toast?.(message),
+    targetOf: target => target.closest?.('[data-bd-open]'),
+    buildItems: card => {
+      const id = card.dataset.bdOpen;
+      const row = store.flat().find(item => item.id === id);
+      if (!row) return null;
+      const total = previews[row.id]?.total;
+      const items = [
+        {label: '打开画板', icon: 'layers', run: () => onOpen?.(id)},
+        {separator: true},
+        {label: '重命名 / 改封面', icon: 'edit', run: () => onRename?.(id)},
+      ];
+      if (row.smart) items.push({label: '编辑筛选规则', icon: 'sliders', run: () => onRule?.(id)});
+      items.push(
+        {separator: true},
+        {label: '新建画板', icon: 'plus', run: () => onNew?.()},
+        {label: '新建智能画板', icon: 'zap', run: () => onSmart?.()},
+        {separator: true},
+        // 删除动作自己带 window.confirm，这里不再叠第二道确认。
+        {label: '删除画板（卡片保留）', icon: 'trash', danger: true, run: () => onDelete?.(id)},
+      );
+      return {
+        title: row.name,
+        subtitle: `${total ?? row.assetCount ?? 0} 个资产${row.smart ? ' · 智能画板' : ''}`,
+        items,
+      };
+    },
+  });
+
+  win?.addEventListener?.(BOARD_ACTIVE_EVENT, event => setActive(event.detail));  // 画板集合变了（新建 / 改名 / 采集跑完 / 从别处加入）就重画：单一事实源在 store。
+  // 成员变了要先让预览失效 —— store 里的 assetCount 往往是旧值，签名不变就不会重拉，
+  // 卡片会一直停在「加入之前」的样子，只有整页刷新才更新。
+  win?.addEventListener?.(BOARD_EVENTS.changed, event => {
+    if (event?.detail?.reason === 'items') previewKey = '';
+    render();
+  });
   win?.addEventListener?.(BOARD_EVENTS.collect, () => render());
 
   render();

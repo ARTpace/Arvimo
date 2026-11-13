@@ -41,5 +41,5 @@ export function createPlatformSettings(file){
 
 export function platformForPath(pathname){
  if(pathname==='/api/search'||pathname==='/api/scan')return 'sketchfab';
- return /^\/api\/(simready|artstation|polyhaven|ambientcg|polypizza|kenney|freestylized|polyfork|uiverse)(?:\/|$)/.exec(pathname)?.[1];
+ return /^\/api\/(simready|artstation|polyhaven|ambientcg|polypizza|kenney|freestylized|polyfork|uiverse|fab)(?:\/|$)/.exec(pathname)?.[1];
 }

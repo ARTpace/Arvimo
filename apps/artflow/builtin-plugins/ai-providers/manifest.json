@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "name": "AI & External Tool Providers",
   "nameI18n": {"zho": "AI 与外部工具接入"},
-  "author": "Artflow",
+  "author": "Arvimo",
   "license": "MIT",
   "host": "renderer",
   "runtime": {

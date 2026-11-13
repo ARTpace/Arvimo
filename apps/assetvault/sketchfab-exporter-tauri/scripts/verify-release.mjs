@@ -1,0 +1,34 @@
+// Verify the exact installer bytes against the public key embedded in the app.
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import {fileURLToPath} from 'node:url';
+import {createHash,createPublicKey,verify} from 'node:crypto';
+import assert from 'node:assert/strict';
+const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
+const config=JSON.parse(await fs.readFile(path.join(root,'src-tauri/tauri.conf.json'),'utf8'));
+const manifest=JSON.parse(await fs.readFile(path.join(root,'../../../dist/latest.json'),'utf8'));
+const platform=manifest.platforms['windows-x86_64'];
+const name=`Arvimo_${config.version}_x64-setup.exe`;
+assert.equal(manifest.version,config.version);
+assert.equal(platform.url,`https://github.com/ARTpace/Arvimo/releases/download/v${config.version}/${name}`);
+assert.equal(platform.signature,(await fs.readFile(path.join(root,'../../../dist',name+'.sig'),'utf8')).trim());
+const pubLines=Buffer.from(config.plugins.updater.pubkey,'base64').toString().trim().split(/\r?\n/);
+const pub=Buffer.from(pubLines[1],'base64');
+const lines=Buffer.from(platform.signature,'base64').toString().trim().split(/\r?\n/);
+const sig=Buffer.from(lines[1],'base64');
+assert.equal(pub.length,42);assert.equal(sig.length,74);
+assert.ok(pub.subarray(2,10).equals(sig.subarray(2,10)),'Updater key ID mismatch');
+const key=createPublicKey({key:Buffer.concat([Buffer.from('302a300506032b6570032100','hex'),pub.subarray(10)]),format:'der',type:'spki'});
+const bytes=await fs.readFile(path.join(root,'../../../dist',name));
+assert.equal(bytes.subarray(0,2).toString(),'MZ');
+const algorithm=sig.subarray(0,2).toString();
+assert.ok(algorithm==='Ed'||algorithm==='ED','Unsupported signature algorithm');
+const payload=algorithm==='ED'?createHash('blake2b512').update(bytes).digest():bytes;
+assert.ok(verify(null,payload,key,sig.subarray(10)),'Installer signature invalid');
+assert.ok(lines[2].startsWith('trusted comment: '));
+assert.ok(verify(null,Buffer.concat([sig.subarray(10),Buffer.from(lines[2].slice(17))]),key,Buffer.from(lines[3],'base64')),'Signature comment invalid');
+// A changed download must be rejected, too.
+const changed=Buffer.from(payload);changed[0]^=1;
+assert.equal(verify(null,changed,key,sig.subarray(10)),false);
+console.log(`Verified ${name}: ${(bytes.length/1024/1024).toFixed(1)} MiB; updater signature, trusted comment and tamper rejection OK.`);
+console.log(`SHA256 ${createHash('sha256').update(bytes).digest('hex')}`);

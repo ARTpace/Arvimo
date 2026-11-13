@@ -428,7 +428,7 @@ function createSplashWindow() {
     alwaysOnTop: true,
     hasShadow: false,
     show: false,
-    title: 'Artflow',
+    title: 'Arvimo · 艺团',
     // 零能力面：不挂 preload、不开 nodeIntegration —— 它只是一张会动的图。
     webPreferences: { nodeIntegration: false, contextIsolation: true, devTools: false },
   });
@@ -554,9 +554,9 @@ function createTray() {
   const icon = nativeImage.createFromPath(path.join(__dirname, 'branding', 'icons', 'artflow-icon-256.png'));
   if (icon.isEmpty()) return; // 缺图标资源则不建托盘，退回普通窗口行为
   tray = new Tray(icon);
-  tray.setToolTip('Artflow');
+  tray.setToolTip('Arvimo · 艺团');
   const contextMenu = Menu.buildFromTemplate([
-    { label: '显示 Artflow', click: () => showMainWindowFromTray() },
+    { label: '显示 Arvimo · 艺团', click: () => showMainWindowFromTray() },
     { type: 'separator' },
     { label: '退出', click: () => { appQuitting = true; app.quit(); } },
   ]);
@@ -651,7 +651,7 @@ function registerStorageIpc() {
     const owner = BrowserWindow.fromWebContents(event.sender);
     if (!owner) throw new Error('Storage request has no owning window');
     const selection = await dialog.showOpenDialog(owner, {
-      title: 'Open Artflow managed project',
+      title: 'Open Arvimo managed project',
       properties: ['openDirectory', 'createDirectory'],
     });
     if (selection.canceled || selection.filePaths.length !== 1) return null;
@@ -920,7 +920,7 @@ function createWindow() {
     },
     // 标题同时充当"当前处于安全模式"的第一眼信号（任务栏 / Alt-Tab 都看得见）——
     // 免得用户以为"我的配置丢了"，其实只是这次刻意忽略了它。
-    title: SAFE_MODE ? `Artflow — ${SAFE_MODE_TITLE_SUFFIX}` : 'Artflow',
+    title: SAFE_MODE ? `Arvimo — ${SAFE_MODE_TITLE_SUFFIX}` : 'Arvimo · 艺团',
   });
 
   mainWindow.setMenu(null); // Neither a File/Edit/View/Window row nor Alt-to-reveal menu.

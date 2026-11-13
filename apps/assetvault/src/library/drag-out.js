@@ -85,10 +85,11 @@ function withLimit(promise, ms, message) {
  * @param {(id: string) => ({id: string, label: string, kind: string}|null)} options.targetById
  * @param {() => Array} [options.packages]             本地素材包快照
  * @param {() => boolean} [options.internalDropActive] 页面内落点激活时让位给站内 DnD（演进缝）
+ * @param {(event: PointerEvent) => boolean} [options.internalDropOf] 按这次按下判断是否让给站内拖放
  * @param {(items:Array) => Promise<{files:string[]}>} [options.post] 注入，便于测试
  */
 export function setupDragOut({toast, jobs, download, send, targetById,
-  packages = () => [], internalDropActive = () => false, post} = {}) {
+  packages = () => [], internalDropActive = () => false, internalDropOf = () => false, deferNativeDrag = () => false, post} = {}) {
   const invoke = globalThis.window?.__TAURI__?.core?.invoke;
   if (!invoke) return () => {};
   const payload = createDragPayload({packages, ...(post ? {post} : {})});
@@ -117,10 +118,17 @@ export function setupDragOut({toast, jobs, download, send, targetById,
   let busy = false;
 
   function resetPress() {
+    releaseCapture();
     press = null;
     // 松手了就别再为一个不会发生的拖拽去拉原图。
     payload.cancelWarm();
     document.documentElement.classList.remove('drag-out-active');
+  }
+
+  function releaseCapture() {
+    if (!press?.captureTarget) return;
+    try { press.captureTarget.releasePointerCapture(press.pointerId); } catch { /* 已由系统释放 */ }
+    press.captureTarget = null;
   }
 
   function endDrag() {
@@ -210,7 +218,9 @@ export function setupDragOut({toast, jobs, download, send, targetById,
       } catch (error) {
         // 资产卡还没落盘时退回「先下载、下完再交给落点软件」的老流程：拖到 Blender 仍然会
         // 自动下载并导入。图站卡 / 素材包卡没有下载任务，出错就是真的出错，直接提示。
-        if (!source.uid) {
+        // 只有明确的「尚未下载」才允许模型的目标识别兜底。
+        // 程序错误、路径失效或权限错误不能伪装成文件名文字交给接收软件。
+        if (!source.uid || !/这个资产还没导出到本地/.test(error?.message || String(error))) {
           endDrag();
           toast(`拖出失败：${error?.message || error}`);
           return;
@@ -227,6 +237,8 @@ export function setupDragOut({toast, jobs, download, send, targetById,
       else if (files.length) toast('文件准备得慢了半拍，请再拖一次');
       return;
     }
+    // OLE 接管前归还 WebView 的鼠标捕获，否则外部窗口可能收不到原生拖放。
+    releaseCapture();
     await deliver(source.uid, source.label, files, resolveError);
     endDrag();
   }
@@ -239,15 +251,22 @@ export function setupDragOut({toast, jobs, download, send, targetById,
     if (target?.closest?.(NO_DRAG)) return;
     const source = payload.sourceOf(target);
     if (!source) return;
-    // 页面内落点（画板 / 以图搜图）将来启用时让位给它；按住 Alt 强制拖出到外部软件。
-    if (internalDropActive() && !event.altKey) return;
+    // 页面内落点（画板 / 以图搜图）成立时让位给站内拖放；按住 Alt 强制拖出到外部软件。
+    // internalDropOf 给的是「这一次按下」的判断（如 Shift + 拖到画板卡），
+    // 因为系统拖放一旦开始就收不到 pointermove，落点只能在这之前决定。
+    if ((internalDropActive() || internalDropOf(event)) && !event.altKey) return;
     // 晚一步再摘 draggable 就来不及了：WebView 会在指针移动后立刻起网页拖拽。
     const card = target.closest?.('.model-card');
     if (card) card.draggable = false;
     const image = target.closest?.('img');
     if (image) image.draggable = false;
     if (target.matches?.('.local-gallery-photo')) target.draggable = false;
-    press = {token: ++sequence, source, x: event.clientX, y: event.clientY, started: false};
+    press = {token: ++sequence, source, x: event.clientX, y: event.clientY, started: false,
+      pointerId:event.pointerId, captureTarget:null};
+    // 必须在按下时捕获：离开 WebView 后仍收到 move/up，才能可靠交给系统拖放。
+    if (event.pointerId !== undefined && target?.setPointerCapture) {
+      try { target.setPointerCapture(event.pointerId);press.captureTarget=target; } catch { /* 目标已卸载 */ }
+    }
     // 按下即预热。资产卡只是本地路径换算，几十毫秒就绪；图站原图要落盘，等指针真移动了再算。
     payload.warm(target, {delay: source.items?.[0]?.type === 'asset' ? 0 : 120});
   }
@@ -258,6 +277,7 @@ export function setupDragOut({toast, jobs, download, send, targetById,
     const dx = Math.abs(event.clientX - press.x);
     const dy = Math.abs(event.clientY - press.y);
     if (dx < DRAG_THRESHOLD && dy < DRAG_THRESHOLD) return;
+    if (deferNativeDrag(event, press.source)) return;
     press.started = true;
     // 挡住网页自己的文本选择 / 原生拖拽，接下来这次鼠标动作归系统拖放。
     event.preventDefault();
@@ -303,6 +323,11 @@ export function setupDragOut({toast, jobs, download, send, targetById,
 
   // 鼠标只是路过：别为一个不会发生的拖拽去查一遍文件。
   function onPointerOut(event) {
+    // 快速跨出窗口可能跳过边缘的 move，仍需接上原生拖放。
+    if (!event.relatedTarget && press && !press.started && (event.buttons & 1)) {
+      onPointerMove({buttons:event.buttons, clientX:event.clientX, clientY:event.clientY,
+        altKey:true, preventDefault:()=>event.preventDefault()});
+    }
     const card = event.target?.closest?.('.model-card[data-uid]');
     const timer = card && hoverTimers.get(card);
     if (!timer) return;

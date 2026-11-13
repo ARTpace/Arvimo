@@ -32,7 +32,7 @@ import {localAssetCategories} from './local-filters.js';
  *
  * 存 DOM id（不带 #）：与 platforms.js 里 platforms[].filters 的写法一致。
  */
-export const FILTER_ROWS=['filters-sketchfab','filters-artstation','filters-polyhaven','filters-ambientcg','filters-polypizza','filters-kenney','filters-freestylized','filters-polyfork','filters-uiverse','filters-merged','filters-all'];
+export const FILTER_ROWS=['filters-sketchfab','filters-artstation','filters-polyhaven','filters-ambientcg','filters-polypizza','filters-kenney','filters-freestylized','filters-polyfork','filters-uiverse','filters-fab','filters-merged','filters-all'];
 
 export function createLibraryView(ctx){
  const {$,icon,esc,fmt,state,queuePulse,cardView,composite,filtered,activeModes,galleryActive,categories,describeArt,artstationUI,downloadsUI,filterTreesUI,mergedFiltersUI,findModel,sendControl,isVisitor=false,imageDownload,gltfPreview,extraCards=()=>[],openPictureBoard,openPictureAuthor,backToPictureBoards,toast,openImageGallery,refreshAssets=()=>{},pageRows=rows=>rows,reloadPictureSite=()=>{},openPictureUrl=()=>{}}=ctx;
@@ -488,6 +488,32 @@ function preview(uid){
   openPolyforkPreview(m,{gltfPreview,toast});
   return;
  }
+ // Fab：在线资产没有可嵌入的 3D viewer（模型由 dope viewer 运行时渲染，拼 sketchfab embed 只会 404）。
+ // 用媒体大图做预览：先异步拉详情拿多图 + 描述，再开图片画廊。注意这里给的是**原始 media.fab.com url** ——
+ // 图片画廊（openImageGallery）内部会统一包成 /api/image?url=…，再自己包一层就成了双重代理、图全裂。
+ // 详情拿不到就退回封面单图，保证点开一定有图、不再 404。
+ if(m.platform==='fab'){
+  const cover=m.thumbnail||'';
+  if(!cover&&!m.assetId)return openExternal(m.url);
+  const token=picturePreviewToken;
+  const single={...m,title:m.name,url:cover||m.url,thumb:cover,pageUrl:m.url,type:'image',platform:'fab',author:m.author,tags:m.tags};
+  const openWith=items=>openPicturePreview(items[0],{platform:'fab',source:m.url,items,model:m});
+  if(!m.assetId)return openWith([single]);
+  (async()=>{
+   let payload=null;
+   try{const r=await fetch(`/api/fab/detail?assetId=${encodeURIComponent(m.assetId)}`,{headers:{'X-SFX-Local':'1'}});if(r.ok)payload=await r.json();}catch{/* 详情拿不到就单图 */}
+   if(token!==picturePreviewToken)return;                 // 拉取期间用户已点了别的卡片
+   const urls=Array.isArray(payload?.images)?payload.images.filter(Boolean):[];
+   if(!urls.length)return openWith([single]);
+   const items=urls.map((url,index)=>({...m,title:m.name,url,thumb:cover||url,pageUrl:m.url,type:'image',platform:'fab',author:payload.author||m.author,tags:payload.tags||m.tags,description:index===0?(payload.description||''):''}));
+   openWith(items);
+  })();
+  return;
+ }
+ // 本地素材（platform='local'）：这两个字节流入口都在本机，能看就直接看。不带 assetId 的模型文件
+ // 没有本地渲染通道，继续往下走只会加载出一张空白 iframe，所以非图片/视频一律按原文件打开 ——
+ // 至少让用户拿到文件本身，而不是一个「点了没反应」的弹窗。
+ if(m.platform==='local'&&m.assetType!=='image'&&m.assetType!=='video')return openExternal(m.url||m.previewUrl);
  // 从「发现 / 采集」进库的图站资产（assetType=image|video 或来自 PICTURE_SITES）没有 Sketchfab id：
  // 拿 uid 去拼 sketchfab/models/<uid>/embed 只会加载出一张空白 iframe —— 这正是「大图预览打不开」。
  // 这类资产直接复用图站的大图预览（同一套画廊 + 右侧信息栏），单张也走它，保证点开就能看大图。
@@ -1262,7 +1288,7 @@ function renderPictureSite(){
  renderDisplayButtons({boards:boardMode});
  // 三种「无图可看」的状态一律用普通网格：gallery 是多列瀑布流，会把单个提示块切成多栏错位。
  if(ps.busy){grid.className='model-grid';grid.innerHTML='<div class="skeleton"></div>'.repeat(6);return;}
- if(ps.error){const askLogin=pictureSiteLoginable(ps.platform)&&/登录|扫码|验证/.test(ps.status||'');grid.className='model-grid';grid.innerHTML=`<div class="empty"><div class="empty-cube">${icon('cube')}</div><h3>解析失败</h3><p>${esc(ps.status||'抓取失败')}</p><p class="hint">若提示「该图站暂不支持抓取」，说明后台服务仍是旧进程，重启 AssetVault 后重试。</p>${askLogin?`<button class="secondary" id="picture-site-error-login" style="margin-top:14px">${icon('user')} 登录 / 扫码后重试</button>`:''}</div>`;
+ if(ps.error){const askLogin=pictureSiteLoginable(ps.platform)&&/登录|扫码|验证/.test(ps.status||'');grid.className='model-grid';grid.innerHTML=`<div class="empty"><div class="empty-cube">${icon('cube')}</div><h3>解析失败</h3><p>${esc(ps.status||'抓取失败')}</p><p class="hint">若提示「该图站暂不支持抓取」，说明后台服务仍是旧进程，重启 Arvimo · 艺团 后重试。</p>${askLogin?`<button class="secondary" id="picture-site-error-login" style="margin-top:14px">${icon('user')} 登录 / 扫码后重试</button>`:''}</div>`;
   // 失败卡上也要有登录入口：'需要先登录' 这种原因，用户看得到却无处可点是最糟的。
   bindSiteLogin($('#picture-site-error-login'),ps.platform,{toast,onClosed:()=>reloadPictureSite?.()});
   return;}

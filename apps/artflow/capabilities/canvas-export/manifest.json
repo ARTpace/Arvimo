@@ -8,7 +8,7 @@
   "descriptionI18n": {"en": "Export the canvas or selection as PNG and copy it to the clipboard (PureRef parity #4)."},
   "category": "ui",
   "sourceDir": "builtin/canvas-export",
-  "author": "Artflow",
+  "author": "Arvimo",
   "license": "MIT",
   "host": "renderer",
   "runtime": { "mode": "builtin", "entry": "./index.ts" },

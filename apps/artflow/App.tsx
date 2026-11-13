@@ -50,7 +50,7 @@ import type { PsdParseResult } from './plugin-runtime/format-handlers';
 import { isSvgString, parseSvgContent } from './utils/svgUtils';
 import type { Tool, Rect, WheelAction, ImageElement, Guide, Point, AIRotationState, TextElement, CanvasViewBookmark, Element as CanvasElement } from './types';
 import { 
-    generateBoardThumbnail, getSelectionBounds, generateId, getCanvasScreenRect } from './utils/canvasUtils';
+    getSelectionBounds, generateId, getCanvasScreenRect } from './utils/canvasUtils';
 import {
     appendCanvasViewBookmark,
     createCanvasViewBookmark,
@@ -78,7 +78,7 @@ import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import { useCanvasInteractions } from './hooks/useCanvasInteractions';
 import { useAIHandlers, type InvokeAIProvider } from './hooks/useAIHandlers';
 import { useElementActions } from './hooks/useElementActions';
-import { installEmbedHost, type AssetReference } from './embed/embed-host';
+import { installEmbedHost, openEmbedLibraryBoard, type AssetReference } from './embed/embed-host';
 import { serializeProjectDocument } from './utils/projectDocument';
 import { useBoardActions } from './hooks/useBoardActions';
 import { useFileHandlers } from './hooks/useFileHandlers';
@@ -129,6 +129,7 @@ const workspaceUiBridge = createWorkspaceUiBridge({} as WorkspaceUiBridge);
 
 const App: React.FC = () => {
     const pluginKernel = getKernel();
+    const embedded = typeof window !== 'undefined' && window.self !== window.top;
     // The SSR smoke-test mounts App with an intentionally empty kernel.
     const windowPlatform = pluginKernel.has(HOST_PLATFORM_SERVICE)
         ? pluginKernel.use<HostPlatformService>(HOST_PLATFORM_SERVICE) : null;
@@ -863,10 +864,20 @@ const App: React.FC = () => {
             arrange: () => handleMasonryLayoutFor(elements.map(el => el.id)),
             // 存档：直接用本体自己的工程文档格式（图片以 data URL 内嵌，文档自包含）。
             // 宿主存下这份 JSON，刷新后原样送回来，画板连位置带内容一起恢复。
-            exportDocument: () => serializeProjectDocument(boards),
-            restoreDocument: document => loadBoardData(document),
+            exportDocument: () => serializeProjectDocument(documentState.getSnapshot().boards),
+            restoreDocument: document => {
+                const active = documentState.getSnapshot().activeBoardId;
+                const ok = loadBoardData(document);
+                if (ok && documentState.getSnapshot().boards.some(board => board.id === active)) setActiveBoardId(active);
+                return ok;
+            },
+            documentKey: boards,
+            activeBoardId,
+            selectBoard: id => { if (documentState.getSnapshot().boards.some(board => board.id === id)) setActiveBoardId(id); },
+            addBoard: handleAddBoard,
+            boardList: boards.map(board => ({id:board.id,name:board.name})),
         });
-    }, [handleAddFiles, elements, documentState, handleFitCanvas, handleMasonryLayoutFor, boards, loadBoardData]);
+    }, [handleAddFiles, elements, documentState, handleFitCanvas, handleMasonryLayoutFor, boards, loadBoardData, activeBoardId, setActiveBoardId, handleAddBoard]);
 
     useKeyboardShortcuts({
         presentationState,
@@ -1732,10 +1743,10 @@ const App: React.FC = () => {
             activeBoardId,
             onSwitchBoard: handleSetActiveBoardId,
             onAddBoard: handleAddBoard,
+            onOpenLibraryBoard: embedded ? () => openEmbedLibraryBoard(documentState.getSnapshot().activeBoardId) : undefined,
             onRenameBoard: handleRenameBoard,
             onDuplicateBoard: handleDuplicateBoard,
             onDeleteBoard: handleDeleteBoard,
-            generateBoardThumbnail: (els) => generateBoardThumbnail(els, activeBoard?.canvasBackgroundColor ?? DEFAULT_CANVAS_BACKGROUND),
         },
         toolbar: {
             t,
@@ -1751,7 +1762,7 @@ const App: React.FC = () => {
             onRedo: handleRedo,
             canUndo,
             canRedo,
-            position: toolbarPosition,
+            position: embedded ? 'right' : toolbarPosition,
         },
         layer: {
             t,
@@ -1863,7 +1874,7 @@ const App: React.FC = () => {
         >
             <WorkspaceWallpaper active={wallpaperEligible} />
             <WorkspaceWallpaperSwitch active={wallpaperEligible} />
-            {windowPlatform?.isFramelessWindow && <WindowChrome platform={windowPlatform} />}
+            {!embedded && windowPlatform?.isFramelessWindow && <WindowChrome platform={windowPlatform} />}
             {/* 安全模式提示条：常驻、不可关闭 —— 见 components/SafeModeBanner.tsx 的说明。 */}
             <SafeModeBanner />
             {pluginDropNotice && (

@@ -30,11 +30,11 @@ export function createBackupPanel({toast, isVisitor = false} = {}) {
       <select id="migrate-mode" aria-label="导入方式"><option value="merge">合并到现有库</option><option value="replace">替换整库</option></select>
       <input type="file" id="migrate-file" accept="application/json,.json" hidden>
     </div>
-    <p class="compact-note" id="migrate-status" role="status" aria-live="polite">快照含资产、回收站、合集与评分备注收藏；导入时已存在的资产一律保留本机标注。</p>
+    <p class="compact-note" id="migrate-status" role="status" aria-live="polite">快照只含资产索引、回收站、合集与评分备注收藏，<b>不含素材文件本体</b>。换机请一并复制素材目录，导入后用「重连文件」修复路径；合并导入时已存在的资产保留本机标注。</p>
     <div class="backup-actions" id="migrate-eagle-row">
       <button type="button" class="secondary" id="migrate-eagle">导入 Eagle / Billfish 库</button>
     </div>
-    <p class="compact-note" id="eagle-status" role="status" aria-live="polite">从 Eagle 或 Billfish 搬整库：原图复制进 AssetVault，标签、星级、备注和文件夹跟着过来。</p>`;
+    <p class="compact-note" id="eagle-status" role="status" aria-live="polite">从 Eagle 或 Billfish 搬整库：原图复制进 Arvimo · 艺团，标签、星级、备注和文件夹跟着过来。</p>`;
 
   const q = selector => card.querySelector(selector);
   const say = text => { const node = q('#migrate-status'); if (node) node.textContent = text || ''; };
@@ -60,7 +60,7 @@ export function createBackupPanel({toast, isVisitor = false} = {}) {
       if (!probeResponse.ok) throw Error(probe.error || `HTTP ${probeResponse.status}`);
       if (!probe.items) { sayEagle('这个库里没有条目。'); return; }
       const sample = (probe.samples || []).map(item => item.name).filter(Boolean).slice(0, 3).join('、');
-      const ok = confirm(`发现 Eagle 兼容库「${probe.name}」\n\n${probe.items} 个项目 · ${probe.folders} 个文件夹${sample ? `\n例如：${sample}` : ''}\n\n原图会复制到 AssetVault 的 imports 目录，标签 / 星级 / 备注 / 文件夹一并导入。继续？`);
+      const ok = confirm(`发现 Eagle 兼容库「${probe.name}」\n\n${probe.items} 个项目 · ${probe.folders} 个文件夹${sample ? `\n例如：${sample}` : ''}\n\n原图会复制到 Arvimo · 艺团 的 imports 目录，标签 / 星级 / 备注 / 文件夹一并导入。继续？`);
       if (!ok) { sayEagle('已取消。'); return; }
       sayEagle(`正在复制并入库，共 ${probe.items} 项…（大库要几分钟，别关页面）`);
       const response = await post('/api/library/import/eagle', {folder});
@@ -97,7 +97,7 @@ export function createBackupPanel({toast, isVisitor = false} = {}) {
       link.click();
       link.remove();
       setTimeout(() => URL.revokeObjectURL(link.href), 4000);
-      say(`已导出 ${fmtBytes(blob.size)} 的快照文件`);
+      say(`已导出 ${fmtBytes(blob.size)} 的索引快照（不含素材文件）。换机时请一并复制素材目录，导入后按需「重连文件」。`);
       toast?.('整库快照已下载');
     } catch (error) {
       say(`导出失败：${error.message}`);

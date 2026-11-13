@@ -14,8 +14,11 @@ import {esc} from './html-esc.js';
 import {platformLabel} from './platforms.js';
 import {openExternal} from './open-url.js';
 
-/** 右键菜单：条目 + 定位 + 关闭 + 键盘导航。buildItems 返回 null 表示这里不该出菜单。 */
-export function setupCardContextMenu({icon, notify = () => {}, buildItems}) {
+/** 右键菜单：条目 + 定位 + 关闭 + 键盘导航。buildItems 返回 null 表示这里不该出菜单。
+ *  targetOf 决定「右键在谁身上才出菜单」，默认是资产卡；画板卡等其它实体各自传自己的选择器，
+ *  复用同一套定位 / 关闭 / 方向键逻辑，不再写第二个菜单。 */
+export function createContextMenu({icon, notify = () => {}, buildItems,
+  targetOf = target => target.closest?.('.model-card,[data-package],[data-file],[data-sequence]')}) {
   const menu = document.createElement('div');
   menu.className = 'ctx-menu';
   menu.setAttribute('role', 'menu');
@@ -73,7 +76,7 @@ export function setupCardContextMenu({icon, notify = () => {}, buildItems}) {
 
   // 输入框、下拉、文本编辑区保留浏览器原生右键菜单（复制粘贴是那里唯一有意义的操作）。
   const editable = target => !!target.closest?.('input,textarea,select,[contenteditable="true"],[contenteditable=""]');
-  const cardOf = target => target.closest?.('.model-card,[data-package],[data-file],[data-sequence]');
+  const cardOf = targetOf;
 
   document.addEventListener('contextmenu', event => {
     if (editable(event.target)) return;
@@ -142,6 +145,9 @@ export function setupCardContextMenu({icon, notify = () => {}, buildItems}) {
 
   return {close, open, menu};
 }
+
+/** 旧名保留：资产卡那份菜单实例（app.js 的既有调用点不变）。 */
+export const setupCardContextMenu = createContextMenu;
 
 /* ------------------------------------------------------------------ */
 /* 菜单条目组装（纯函数）：上下文由 app.js 收集后传入                     */

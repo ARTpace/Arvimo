@@ -1,0 +1,24 @@
+/* ponytail: one stylesheet for host controls and live canvas settings in Shadow DOM. */
+:where(.settings-content,[data-arvimo-settings]){font:13px/1.5 system-ui,"Microsoft YaHei",sans-serif;color:var(--st-text);color-scheme:dark;--bp-ui-text:var(--st-text);--bp-ui-muted:var(--st-muted);--bp-ui-raised:var(--st-raise);--bp-ui-border:var(--st-line);--bp-ui-radius:var(--st-r);--bp-ui-focus:var(--st-accent);--bp-ui-hover:var(--st-raise-2);--bp-ui-accent-text:var(--st-accent);--bp-ui-accent-soft:var(--st-accent-weak);--bp-ui-selected-bg:var(--st-accent-weak);--bp-ui-selected-border:var(--st-accent);--bp-ui-surface-strong:var(--st-bg)}
+[data-arvimo-settings] [data-bp-ui-section]{border:0;border-radius:0;background:none;overflow:visible;margin-bottom:18px}
+[data-arvimo-settings] [data-bp-ui-section]>button{background:transparent;color:var(--st-text);font-size:12px;font-weight:600;padding:10px 0;border-bottom:1px solid var(--st-line);border-radius:0}
+[data-arvimo-settings] [data-bp-ui-section]>div{padding:8px 0}
+:where(.settings-content) .field,[data-arvimo-settings] [data-bp-ui-row]{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:44px;padding:9px 0;border-bottom:1px solid var(--st-hair)}
+[data-arvimo-settings] [data-bp-ui-row]>span{margin-right:auto;color:var(--st-text);font-size:13px}
+:where(.settings-content,[data-arvimo-settings]) :is(select,textarea,input:not([type=checkbox]):not([type=range]):not([type=color]):not([type=file])){min-height:32px;border:1px solid var(--st-line);border-radius:6px;background:var(--st-raise);color:var(--st-text);font:inherit;padding:5px 10px;box-shadow:none}
+:where(.settings-content,[data-arvimo-settings]) select{min-width:158px}
+:where(.settings-content,[data-arvimo-settings]) option{background:var(--st-bg);color:var(--st-text)}
+:where(.settings-content,[data-arvimo-settings]) :is(input,button,select,textarea):focus-visible{outline:2px solid var(--st-accent);outline-offset:2px}
+:where(.settings-content,[data-arvimo-settings]) :is(input[type=checkbox],input[type=range]){accent-color:var(--st-accent)}
+[data-arvimo-settings] button{font:inherit;color:var(--st-text);border-radius:6px}
+[data-arvimo-settings] button:not([aria-expanded]){min-height:30px}
+[data-arvimo-settings] [data-bp-ui-segmented]{background:var(--st-raise);border:1px solid var(--st-line);flex-wrap:wrap}
+[data-arvimo-settings] [data-bp-ui-segmented] button{color:var(--st-muted);background:transparent;box-shadow:none}
+[data-arvimo-settings] [data-bp-ui-segmented] [data-bp-ui-active=true], [data-arvimo-settings] [data-bp-ui-action=primary]{background:var(--st-accent-weak);border-color:var(--st-accent);color:var(--st-accent)}
+[data-arvimo-settings] :is(.text-gray-400,.text-neutral-300,.text-neutral-400){color:var(--st-muted)}
+[data-arvimo-settings] input[type=color]{width:42px;height:30px;padding:2px;border:1px solid var(--st-line);border-radius:6px;background:var(--st-raise)}
+@media(max-width:700px){[data-arvimo-settings] [data-bp-ui-row]{flex-wrap:wrap}[data-arvimo-settings] [data-bp-ui-row]>span{flex-basis:100%}}
+
+#settings-dialog .autostart-row{display:flex;align-items:center;justify-content:flex-start;gap:10px;min-height:44px;padding:9px 0;cursor:pointer}
+#settings-dialog .autostart-row input[type=checkbox]{width:16px;height:16px;flex:none;margin:0}
+#settings-dialog .autostart-row:has(input:disabled){cursor:wait;opacity:.65}

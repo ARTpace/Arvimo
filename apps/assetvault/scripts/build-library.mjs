@@ -78,7 +78,7 @@ try{
   console.warn('[build:library] 未找到 artflow 产物（'+artflowSrc+'），画板视图将显示未构建提示：'+error.message);
 }
 await esbuild.build({entryPoints:[path.join(root,'src/library/app.js')],outfile:path.join(output,'app.js'),bundle:true,format:'esm',platform:'browser',target:'chrome110',external:['./engine.js','./gltf-preview.js','./doc-render.js','./artflow-embed.js'],plugins:[threeResolver],logLevel:'info'});
-for(const f of ['index.html','app.css','viewer.css','content-kind-tabs.css','favicon.svg','worker.html','splash.html','splash.js','sidebar-boot.js','mascot.png','login.html','login.css','login.js','account-chip.js','artflow-embed.js'])await fs.copyFile(path.join(root,'src/library',f),path.join(output,f));
+for(const f of ['index.html','app.css','viewer.css','content-kind-tabs.css','settings-controls.css','favicon.svg','worker.html','splash.html','splash.js','sidebar-boot.js','mascot.png','login.html','login.css','login.js','login-peek.js','login-backdrop.svg','account-chip.js','artflow-embed.js'])await fs.copyFile(path.join(root,'src/library',f),path.join(output,f));
 // viewer.css 构建时内联进 index.html：静态资源白名单是服务进程启动时固化的常量，
 // 新增的 /viewer.css 在旧进程里会 404 —— app.css 的全局 svg{width:100%} 就会把
 // 材质栏图标撑成巨图，并把 canvas 挤出可视区。内联后不必重启服务即可生效。
@@ -88,9 +88,28 @@ for(const f of ['index.html','app.css','viewer.css','content-kind-tabs.css','fav
   const css=await fs.readFile(path.join(root,'src/library/viewer.css'),'utf8');
   const marker='<!--__VIEWER_CSS__-->';
   if(!html.includes(marker))throw new Error('index.html 缺少 __VIEWER_CSS__ 占位');
-  await fs.writeFile(path.join(output,'index.html'),html.replace(marker,'<style data-viewer-css>\n'+css+'\n</style>'));
+  const splash=await fs.readFile(path.join(root,'src/library/splash.html'),'utf8');
+  const splashCss=splash.match(/<style>([\s\S]*?)<\/style>/)[1].replaceAll('body',':host');
+  const stage=splash.match(/<main[\s\S]*?<\/main>/)[0];
+  // Pre-render the loading screen: no second network round-trip or blank replacement.
+  const interfaceStage=stage.replace('id="fill"','id="fill" style="width:70%"').replace('id="pct">0%','id="pct">70%').replace('id="runner"','id="runner" style="left:70%"');
+  const startup=`<template shadowrootmode="open"><style>${splashCss}</style>${interfaceStage}</template>`;
+  const prepared=html.replace('正在准备 Arvimo · 艺团界面…</div>',startup+'</div>');
+  await fs.writeFile(path.join(output,'index.html'),prepared.replace(marker,'<style data-viewer-css>\n'+css+'\n</style>'));
 }
 await fs.appendFile(path.join(output,'app.css'),'\n'+await fs.readFile(path.join(root,'src/library/search-motion.css'),'utf8'));
+// 资源指纹：给 app.css / app.js 的引用带上内容 hash（?v=xxxxxxxx）。
+// Tauri 的 WebView2 会按 URL 做启发式缓存 —— 没有 stamp 时「改完样式、刷新还是旧界面」
+// 会反复出现（2026-11-13 排查外观设置时不生效，最后就是旧 CSS 一直在缓存里）。
+// 服务端静态白名单只看 pathname，带 query 不影响命中。
+{
+  const {createHash}=await import('node:crypto');
+  const stamp=async name=>createHash('sha1').update(await fs.readFile(path.join(output,name))).digest('hex').slice(0,8);
+  const html=await fs.readFile(path.join(output,'index.html'),'utf8');
+  const cssUrl=`href="/app.css?v=${await stamp('app.css')}"`;
+  const jsUrl=`src="/app.js?v=${await stamp('app.js')}"`;
+  await fs.writeFile(path.join(output,'index.html'),html.replace('href="/app.css"',cssUrl).replace('src="/app.js"',jsUrl));
+}
 // 桌面版（Tauri）的 frontendDist 指向它自己的 src/，而这条流水线只往 dist/library 写。
 // 少了这一步会出现「改了前端、打出来的安装包还是旧界面」（实测两边 app.js 哈希对不上）。
 // 顺手同步，保证跑一次 build:library，本地工作台和桌面安装包两条线都是最新。
@@ -99,7 +118,8 @@ const desktopRoot=path.join(root,'sketchfab-exporter-tauri');
 const desktopSrc=path.join(desktopRoot,'src');
 try{
   await fs.access(path.join(desktopRoot,'src-tauri','tauri.conf.json'));
-  for(const f of ['index.html','app.css','viewer.css','content-kind-tabs.css','app.js','engine.js','gltf-preview.js','doc-render.js','artflow-embed.js','favicon.svg','worker.html','splash.html','splash.js','sidebar-boot.js','mascot.png','login.html','login.css','login.js','account-chip.js'])await fs.copyFile(path.join(output,f),path.join(desktopSrc,f));
+  const syncFiles=['index.html','app.css','viewer.css','content-kind-tabs.css','settings-controls.css','app.js','engine.js','gltf-preview.js','doc-render.js','artflow-embed.js','favicon.svg','worker.html','splash.html','splash.js','sidebar-boot.js','mascot.png','login.html','login.css','login.js','login-peek.js','login-backdrop.svg','account-chip.js'];
+  for(const f of syncFiles)await fs.copyFile(path.join(output,f),path.join(desktopSrc,f));
   // Artflow 产物同步过去：桌面版同样要把完整画布装进画板视图。
   // 用 fs.cp 覆盖同名文件（默认行为），不清目录 —— 整目录删会把历史构建的残留一起带走，
   // 而这些残留对运行没有影响（index.html 只引用当前 manifest 里的文件）。
@@ -137,6 +157,17 @@ try{
   const waiting=await fs.readFile(waitingPath,'utf8');
   const stage=splash.match(/<main[\s\S]*?<\/main>/)[0].replace('id="msg"','id="msg" role="status" aria-live="polite"');
   await fs.writeFile(waitingPath,waiting.replace(/<!-- startup:start -->[\s\S]*?<!-- startup:end -->/,`<!-- startup:start -->\n<div id="boot">${stage}</div>\n<!-- startup:end -->`));
-  console.log('桌面版前端已同步 -> sketchfab-exporter-tauri/src');
-}catch{/* 没有桌面工程（单独用库工程时）就跳过 */ }
+  // 同步完逐文件对哈希：两边漂移过一次（桌面安装包打出来是旧界面），靠肉眼查不出来。
+  const {createHash}=await import('node:crypto');
+  const sha1=async p=>createHash('sha1').update(await fs.readFile(p)).digest('hex');
+  for(const f of syncFiles){
+    if(await sha1(path.join(output,f))!==await sha1(path.join(desktopSrc,f)))throw new Error(`同步校验失败：${f}`);
+  }
+  console.log(`桌面版前端已同步并校验 ${syncFiles.length} 个文件 -> sketchfab-exporter-tauri/src`);
+}catch(err){
+  // 只有「没有桌面工程」才允许跳过；拷贝/校验失败必须让构建失败，不能静默产出旧前端。
+  let hasDesktop=true;
+  try{await fs.access(path.join(desktopRoot,'src-tauri','tauri.conf.json'));}catch{hasDesktop=false;}
+  if(hasDesktop)throw new Error(`桌面版前端同步失败：${err?.message||err}`);
+}
 console.log('Local library built. Start: node server/library.mjs');

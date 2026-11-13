@@ -34,6 +34,8 @@ test('local index displays immediately, requests coalesce, and failed refresh ke
  let finish,requests=0,saved;
  const index={version:1,files:[],packages:[{root:'root',rel:'old'}]};
  const context={storage:{getItem:()=>JSON.stringify(index),setItem:(_key,value)=>saved=JSON.parse(value)},
+  // 切片只取 scan/索引部分，rebuildSequences 的定义留在切片外；本用例不验序列索引，给空实现。
+  rebuildSequences(){},
   fetch:()=>{requests++;return new Promise(resolve=>finish=resolve);}};
  vm.runInNewContext(source.slice(source.indexOf(' let files=[];'),source.indexOf(' const keyOf='))+
   source.slice(source.indexOf(' function scan('),source.indexOf(' /** 搜索词与类型筛选'))+
@@ -77,9 +79,12 @@ test('unchanged packages reuse their index; nested edits, deletion and full scan
 });
 
 function scanHarness({supported=true}={}){
- const source=read('server/scan-cache.mjs').replace(/^import .*;\r?\n/gm,'').replaceAll('export function','function').replaceAll('export async function','async function');
+ const source=read('server/scan-cache.mjs').replace(/^import .*;\r?\n/gm,'')
+  .replaceAll('export function','function').replaceAll('export async function','async function')
+  .replaceAll('export const','const');
  let now=1000,changed,closed=0;
  const context={process:{env:{}},Date:{now:()=>now},path,
+  setTimeout:()=>({unref(){}}),
   fsp:{stat:async()=>({mtimeMs:1,size:1}),readdir:async()=>['asset']},
   watch:(_root,_options,callback)=>{if(!supported)throw Error('unsupported');changed=callback;return {on(){},close(){closed++;}};}};
  vm.runInNewContext(source,context);

@@ -197,6 +197,8 @@ function auto() {
       assert.equal(attrs.get('data-bp-ui-radius-override'), '');
       assert.equal(vars.get('--bp-ui-radius'), '14px');
       assert.equal(engine.getUiSettings().toolbarSide, 'right');
+
+
       assert.equal(engine.getSkinConfig('test.light').showGlow, false);
       assert.equal(readSkinConfig('test.light'), beforeConfig);
       assert.equal(readSkinState(), original);
@@ -260,6 +262,23 @@ function auto() {
       rewind.cancel();
       assert.equal(engine.getUiSettings().mode, 'light');
       assert.equal(engine.getUiSettings().toolbarSide, 'right');
+      const emptyEngine = new SkinEngine({ ...ctx, contributions: { get: () => undefined, list: () => [] } }, root);
+      const baseline = emptyEngine.getUiSettings();
+      const emptyPreview = emptyEngine.startLivePreview();
+      emptyPreview.previewUiSettings({ wallpaperId: 'builtin.wallpaper.aurora-lake', radius: 15 });
+      assert.equal(emptyEngine.getUiSettings().wallpaperId, 'builtin.wallpaper.aurora-lake', 'wallpaper must work without theme contributors');
+      assert.equal(vars.get('--bp-ui-radius'), '15px');
+      assert.equal(emptyPreview.isDirty(), true);
+      emptyPreview.cancel();
+      assert.deepEqual(emptyEngine.getUiSettings(), baseline);
+      assert.equal(attrs.has('data-bp-appearance-preview'), false);
+      const emptyCommit = emptyEngine.startLivePreview();
+      emptyCommit.previewUiSettings({ radius: 17 });
+      assert.equal(emptyCommit.commit(), true);
+      assert.equal(JSON.parse(readSkinState()).uiSettings.radius, 17);
+      const restored = new SkinEngine({ ...ctx, contributions: { get: () => undefined, list: () => [] } }, root);
+      restored.setUiSettings(JSON.parse(readSkinState()).uiSettings);
+      assert.equal(vars.get('--bp-ui-radius'), '17px', 'saved controls project on restart without skins');
     } finally {
       global.document = previousDocument;
       global.window = previousWindow;

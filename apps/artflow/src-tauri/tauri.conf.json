@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Artflow Tauri Preview",
+  "productName": "Arvimo Tauri Preview",
   "version": "0.1.8",
   "identifier": "com.artflow.tauri.preview",
   "build": {
@@ -12,7 +12,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "Artflow Tauri Preview",
+        "title": "Arvimo Tauri Preview",
         "width": 1440,
         "height": 960,
         "minWidth": 800,

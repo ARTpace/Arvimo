@@ -2,7 +2,7 @@
 import {isLanVisitor} from './visitor-mode.js';
 import {setupDetailsMotion} from './disclosure-motion.js';
 import {icon} from './icon-set.js';
-export function createSettingsPanel({$,loadAI,updateCard,sharing,platformCard,autoSave,team,migrate,stores,desktop,appearance,sync}){
+export function createSettingsPanel({$,loadAI,updateCard,sharing,platformCard,autoSave,team,migrate,stores,desktop,appearance,sync,ensureCanvas}){
  if(isLanVisitor()){
   for(const selector of ['#settings-button','#ai-settings-button','#download-settings','#settings-dialog','#ai-dialog']){
    const node=$(selector);if(node){node.hidden=true;node.inert=true;}
@@ -22,28 +22,42 @@ export function createSettingsPanel({$,loadAI,updateCard,sharing,platformCard,au
   {id:'storage',icon:'folder',label:'保存与队列',description:'文件路径、任务并发与重试',cards:cards.slice(4,5)},
   {id:'connections',icon:'cube',label:'软件与环境',section:'服务连接',description:'切换软件，检测安装与连接状态，自动安装导入脚本',cards:exportTargets?[exportTargets,...cards.slice(3,4)]:cards.slice(2,4)},
   ...(platformCard?[{id:'platforms',icon:'globe',label:'平台模块',description:'管理在线资产来源，按需开启平台',cards:[platformCard]}]:[]),
-  {id:'ai',icon:'sparkle',label:'AI 接入',description:'模型连接、中文搜索翻译与后续智能整理',cards:[aiCard]},
+  {id:'ai',icon:'sparkle',label:'资产库 AI 连接',description:'资产库搜索、翻译与整理使用的 AI 连接',cards:[aiCard]},
   ...(sharing?[{id:'sharing',icon:'share',label:'局域网共享',description:'共享访问、密码与连接地址',cards:[sharing.card]}]:[]),
   // 「导出与迁移」卡片跟着 team 页走：它同样只对主机开放，且和备份是同一件事的两个方向。
   ...(team?[{id:'team',icon:'shield',label:'协作与数据',section:'协作与数据',description:'成员角色、访问权限、资产库快照与换机迁移',cards:[team.membersCard,team.backupsCard,...(migrate?[migrate]:[]),...(stores?[stores]:[]),...(sync?[sync.card]:[])]}]:[]),
-  ...(()=>{
-   // 「应用」页收揽所有整机级开关：更新、开机自启。两者都只在桌面版存在，
-   // 浏览器里打开资产库时这个分类整块不出现（不是灰一个开关）。
-   const appCards=[...(appearance?[appearance.card]:[]),...(desktop?[desktop.card]:[]),...(updateCard?[updateCard]:[])];
-   return appCards.length?[{id:'updates',icon:'refresh',label:'应用',section:'应用',description:'外观、开机启动、版本更新',cards:appCards}]:[];
-  })(),
+  ...(appearance?[{id:'appearance',icon:'settings',label:'应用外观',description:'资产库界面的背景和面板透明度；画布外观单独设置',cards:[appearance.card]}]:[]),
+  ...(desktop?[{id:'startup',icon:'settings',label:'启动与后台',description:'开机启动、托盘与后台运行',cards:[desktop.card]}]:[]),
+  ...(updateCard?[{id:'updates',icon:'refresh',label:'软件更新',description:'当前版本、检查更新与自动更新',cards:[updateCard]}]:[]),
  ];
+ const categories=[['general','通用','settings'],['assets','资产库','folder'],['canvas','画布','cube'],['extensions','扩展与连接','sparkle'],['data','数据与应用','shield'],...(updateCard?[['updates','软件更新','refresh']]:[])];
+ // Explicit scopes keep plugin names from deciding where settings live.
+ const canvasCategories=new Map();
+ const categoryOf=id=>canvasCategories.get(id)||({export:'assets',storage:'assets',connections:'assets',platforms:'assets',ai:'extensions',sharing:'extensions',team:'data',startup:'general',updates:'updates',appearance:'general','canvas:loading':'canvas'}[id]||'canvas');
+ const canvasDefaults={
+  'builtin.core-settings.general':['general','画布语言'],
+  'builtin.core-settings.hotkeys':['general','画布快捷键'],
+  'builtin.core-settings.ai':['extensions','Gemini 密钥'],
+  'builtin.settings-ai-models':['extensions','画布 AI 模型'],
+  'builtin.asset-library.panel':['assets','画布素材来源'],
+  'builtin.settings-plugins':['extensions','插件'],
+  'builtin.headless.mcp':['extensions','MCP'],
+  'builtin.config-manager.presets':['data','画布设置预设'],
+  'builtin.config-manager.storage':['data','画布存储'],
+ };
+
  const nav=document.createElement('nav');nav.className='settings-categories';nav.setAttribute('aria-label','设置分类');
  const content=document.createElement('div');content.className='settings-content';
  const title=document.createElement('h2');title.className='settings-page-title';
  const description=document.createElement('p');description.className='settings-page-description';
+ const subnav=document.createElement('div');subnav.className='settings-unified-tabs';
  const pages=document.createElement('div');pages.className='settings-pages';
- content.append(title,description,pages);
+ content.append(title,description,subnav,pages);
  for(const group of groups){
-  if(group.section){const heading=document.createElement('p');heading.className='settings-category-label';heading.textContent=group.section;nav.append(heading);}
+
   const button=document.createElement('button');button.type='button';button.innerHTML=`${icon(group.icon)}<span>${group.label}</span>`;
   button.dataset.settingsPage=group.id;
-  button.setAttribute('aria-controls',`settings-page-${group.id}`);nav.append(button);
+  button.setAttribute('aria-controls',`settings-page-${group.id}`);subnav.append(button);
   const page=document.createElement('section');page.id=`settings-page-${group.id}`;page.setAttribute('aria-label',group.label);page.hidden=true;
   const teamTabs=group.id==='team'?document.createElement('div'):null;
   const teamPanels=[];
@@ -90,7 +104,7 @@ export function createSettingsPanel({$,loadAI,updateCard,sharing,platformCard,au
  let timer=0,saving=false,queued=false,fadeTimer=0;
  function setState(state,text,hold){
   clearTimeout(fadeTimer);
-  stateTag.dataset.state=state;stateTag.textContent=text;stateTag.classList.add('is-on');
+  stateTag.dataset.state=state;stateTag.textContent=`资产库 · ${text}`;stateTag.classList.add('is-on');
   if(!hold&&(state==='saved'||state==='idle'))fadeTimer=setTimeout(()=>stateTag.classList.remove('is-on'),1600);
  }
  function isAutoField(node){return !!node&&node.matches('input,select,textarea')&&(AUTO_FIELDS.has(node.id)||node.matches('[data-export-path]'));}
@@ -126,6 +140,10 @@ export function createSettingsPanel({$,loadAI,updateCard,sharing,platformCard,au
  const scrollPositions=new Map();
  function select(id){
   const active=groups.find(group=>group.id===id)||groups[0];
+  const category=categoryOf(active.id);
+  for(const button of nav.querySelectorAll('[data-category]'))button.classList.toggle('active',button.dataset.category===category);
+  for(const group of groups)group.button.hidden=categoryOf(group.id)!==category;
+  window.dispatchEvent(new CustomEvent('arvimo:settings-select',{detail:{id:active.canvasId||null}}));
   if(currentGroup)scrollPositions.set(currentGroup.id,content.scrollTop);
   for(const group of groups){group.page.hidden=group!==active;group.button.classList.toggle('active',group===active);group.button.setAttribute('aria-current',group===active?'page':'false');}
   // 平台页自带分组标题与计数器，再顶一行页面标题+描述就是三层重复，整块省掉。
@@ -137,16 +155,46 @@ export function createSettingsPanel({$,loadAI,updateCard,sharing,platformCard,au
   active.page.classList.remove('is-in');void active.page.offsetWidth;active.page.classList.add('is-in');
   if(active.id==='ai'&&!aiLoaded){aiLoaded=true;loadAI();}
   if(active.id==='sharing')sharing.load();
+  if(active.id==='startup')void desktop?.refresh();
   if(active.id==='team')void team?.load();
  }
- nav.addEventListener('click',event=>{const button=event.target.closest('[data-settings-page]');if(button)select(button.dataset.settingsPage);});
- nav.addEventListener('keydown',event=>{
-  const index=groups.findIndex(group=>group.button===event.target);if(index<0)return;
+ subnav.addEventListener('click',event=>{const button=event.target.closest('[data-settings-page]');if(button)select(button.dataset.settingsPage);});
+ subnav.addEventListener('keydown',event=>{
+  const visible=groups.filter(group=>!group.button.hidden);
+  const index=visible.findIndex(group=>group.button===event.target);if(index<0)return;
   const delta={ArrowDown:1,ArrowRight:1,ArrowUp:-1,ArrowLeft:-1}[event.key];
   if(!delta&&event.key!=='Home'&&event.key!=='End')return;
-  event.preventDefault();const next=event.key==='Home'?groups[0]:event.key==='End'?groups.at(-1):groups[(index+delta+groups.length)%groups.length];
+  event.preventDefault();const next=event.key==='Home'?visible[0]:event.key==='End'?visible.at(-1):visible[(index+delta+visible.length)%visible.length];
   next.button.focus();select(next.id);
  });
+ for(const [id,label,glyph] of categories){
+  const button=document.createElement('button');button.type='button';button.dataset.category=id;button.innerHTML=`${icon(glyph)}<span>${label}</span>`;
+  button.onclick=()=>{const first=groups.find(group=>categoryOf(group.id)===id);if(first)select(first.id);void ensureCanvas?.();};nav.append(button);
+ }
+ const canvasPlaceholder={id:'canvas:loading',label:'画布',description:'正在加载画布设置…',cards:[]};
+ function addCanvasPage(group){
+  const button=document.createElement('button');button.type='button';button.dataset.settingsPage=group.id;button.textContent=group.label;subnav.append(button);
+  const page=document.createElement('section');page.hidden=true;page.id=`settings-page-${group.id}`;pages.append(page);Object.assign(group,{button,page});groups.push(group);
+ }
+ addCanvasPage(canvasPlaceholder);
+ window.addEventListener('arvimo:settings-register',event=>{
+  const {sections,source}=event.detail||{};if(source!==window.__avArtflow?.frame?.contentWindow||!Array.isArray(sections))return;
+  const previous=currentGroup?.id;
+  for(const group of groups.filter(group=>group.canvasId||group===canvasPlaceholder)){group.page.remove();group.button.remove();groups.splice(groups.indexOf(group),1);}
+  canvasCategories.clear();
+  for(const section of sections){
+   const defaults=canvasDefaults[section.id];
+   const category=categories.some(([id])=>id===section.category)?section.category:defaults?.[0]||(section.group==='extensions'?'extensions':'canvas');
+   canvasCategories.set(section.id,category);
+   const group={id:section.id,canvasId:section.id,label:defaults?.[1]||section.label,description:'作用于画布；沿用已有配置与保存方式',cards:[]};addCanvasPage(group);
+  }
+  select(groups.some(group=>group.id===previous)?previous:previous==='canvas:loading'?(sections.find(section=>section.id==='builtin.view-tools.view')?.id||sections[0]?.id||'export'):'export');
+ });
+ window.addEventListener('arvimo:settings-open',event=>{
+  const id=event.detail?.id;select(groups.some(group=>group.id===id)?id:groups.find(group=>group.canvasId)?.id||'canvas:loading');if(!dialog.open)dialog.showModal();
+ });
+ window.addEventListener('arvimo:settings-reveal-canvas',()=>{dialog.close();document.querySelector('[data-route="canvas"]')?.click();});
+ dialog.addEventListener('close',()=>window.dispatchEvent(new CustomEvent('arvimo:settings-select',{detail:{id:null}})));
  select('export');
- return {open(id='export'){aiLoaded=false;select(id);if(!dialog.open)dialog.showModal();},saveNow:flush};
+ return {open(id='export'){void ensureCanvas?.();aiLoaded=false;select(id);if(!dialog.open)dialog.showModal();},saveNow:flush};
 }

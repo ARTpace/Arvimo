@@ -56,6 +56,10 @@ test('临时HTTP API完成托管入库且源URL可读，LAN拒绝',async t=>{
  assert.equal((await call({'test-lan':'1'})).status,403);assert.equal((await call({origin:'http://evil.invalid'})).status,403);
  const result=await call();assert.equal(result.status,200);const data=await result.json();assert.equal(data.status,'imported');
  const original=await fetch(base+data.asset.url);assert.equal(original.status,200);assert.equal(await original.text(),'image-data');
+ const drag=await fetch(base+'/api/drag/files',{method:'POST',headers:{'content-type':'application/json','x-sfx-local':'1'},body:JSON.stringify({items:[{type:'asset',uid:data.asset.uid}]})});
+ assert.equal(drag.status,200);const dragged=await drag.json();
+ assert.equal(dragged.files.length,1);assert.equal(path.extname(dragged.files[0]),'.png');
+ assert.equal(await fs.readFile(dragged.files[0],'utf8'),'image-data','托管资产无需下载任务即可拖出真实原文件');
  assert.equal((await call()).status,200);
 });
 

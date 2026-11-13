@@ -51,7 +51,7 @@ with sync_playwright() as p:
     page.add_init_script("window.__INSTALLER_NATIVE__=true;window.__INSTALLER_EXISTING__={path:'C:\\\\Program Files\\\\AssetVault',version:'0.1.7'};window.requests=[];window.ipc={postMessage:value=>requests.push(JSON.parse(value))};")
     page.goto((Path(__file__).resolve().parents[1] / "installer-preview/index.html").as_uri())
     assert page.locator("#path").input_value() == "C:\\Program Files\\AssetVault"
-    assert page.locator("#title").inner_text() == "更新 AssetVault"
+    assert page.locator("#title").inner_text() == "更新 Arvimo · 艺团"
     assert "覆盖安装" in page.locator("#primary").inner_text()
     assert "将沿用原路径安装" in page.locator("#description").inner_text()
     assert not errors, errors
@@ -72,7 +72,7 @@ if "--native" in __import__("sys").argv:
     env = dict(os.environ, WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=f"--remote-debugging-port={port}")
     import json
     version = json.loads((root / 'src-tauri/tauri.conf.json').read_text(encoding='utf8'))['version']
-    process = subprocess.Popen([os.environ.get('ASSETVAULT_TEST_INSTALLER', str(root / f"dist/AssetVault_{version}_x64-setup.exe"))], env=env)
+    process = subprocess.Popen([os.environ.get('ASSETVAULT_TEST_INSTALLER', str(root.parents[2] / f"dist/Arvimo_{version}_x64-setup.exe"))], env=env)
     try:
         deadline = time.monotonic() + 20
         while True:

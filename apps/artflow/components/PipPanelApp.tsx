@@ -30,7 +30,7 @@ export const PipPanelApp: React.FC<{ kernel: Kernel }> = ({ kernel }) => {
 
   const panels = listPanelContributions(kernel);
   const active = panels.find(panel => panel.id === panelId) ?? null;
-  const title = active ? resolvePanelText(active.value, language).title : (zho ? 'Artflow 面板' : 'Artflow Panel');
+  const title = active ? resolvePanelText(active.value, language).title : (zho ? '艺团面板' : 'Arvimo Panel');
   const ActivePanel = active?.value.component ?? null;
   const [dismissed, setDismissed] = useState(false);
 

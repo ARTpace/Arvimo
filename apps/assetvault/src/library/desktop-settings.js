@@ -17,18 +17,19 @@ export function createAutostartCard({ toast = () => {} } = {}) {
   card.className = 'settings-card';
   card.innerHTML = `
     <div class="settings-section-title"><span>启动与后台</span><small>登录 Windows 后自动运行，窗口收在托盘里</small></div>
-    <label class="field" style="display:flex;align-items:center;gap:9px;cursor:pointer">
-      <input type="checkbox" id="autostart-toggle">
+    <label class="check-row autostart-row">
+      <input type="checkbox" id="autostart-toggle" aria-describedby="autostart-note" disabled>
       <span>开机时自动启动 Arvimo · 艺团</span>
     </label>
     <p class="compact-note" id="autostart-note">开机只启动后台服务，不弹主窗口；点任务栏托盘图标即可打开。关闭窗口默认也是收到托盘，不中断下载。</p>`;
   const toggle = card.querySelector('#autostart-toggle');
   const note = card.querySelector('#autostart-note');
-  let busy = false;
+  let busy = false, supported = false, enabled = false;
 
   function paint(status) {
     if (!status) return;
-    const supported = status.supported !== false;
+    supported = status.supported !== false;
+    enabled = !!status.enabled;
     toggle.disabled = !supported || busy;
     toggle.checked = !!status.enabled;
     if (!supported) {
@@ -44,11 +45,16 @@ export function createAutostartCard({ toast = () => {} } = {}) {
   }
 
   async function refresh() {
+    if (busy) return;
+    busy = true;toggle.disabled = true;
     try {
       paint(await invoke('autostart_status'));
     } catch (error) {
       note.hidden = false;
-      note.textContent = `读取开机自启状态失败：${String(error?.message || error)}`;
+      supported = false;
+      note.textContent = `读取开机自启状态失败：${String(error?.message || error)}。请重启开发版后重试。`;
+    } finally {
+      busy = false;toggle.disabled = !supported;
     }
   }
 
@@ -66,13 +72,13 @@ export function createAutostartCard({ toast = () => {} } = {}) {
       }
       toast(wanted ? '已设置开机自启（只在托盘运行）' : '已取消开机自启');
     } catch (error) {
-      toggle.checked = !wanted;
+      toggle.checked = enabled;
       note.hidden = false;
       note.textContent = `设置失败：${String(error?.message || error)}`;
       toast(`设置开机自启失败：${String(error?.message || error)}`);
     } finally {
       busy = false;
-      toggle.disabled = false;
+      toggle.disabled = !supported;
     }
   });
 

@@ -43,7 +43,7 @@ function fakeCard(uid) {
 }
 
 /** 装一次最小 window/document，返回派发事件的工具。 */
-function mount({post, jobs = () => [], download = async () => {}} = {}) {
+function mount({post, jobs = () => [], download = async () => {}, deferNativeDrag} = {}) {
   const handlers = new Map();
   const calls = [];
   const classList = new Set();
@@ -64,6 +64,7 @@ function mount({post, jobs = () => [], download = async () => {}} = {}) {
     send: async () => {},
     targetById: () => null,
     packages: () => [],
+    deferNativeDrag,
     post: post || (async () => ({files: ['H:/library/packs/foo/01.png']})),
   });
 
@@ -85,6 +86,37 @@ function mount({post, jobs = () => [], download = async () => {}} = {}) {
 }
 
 const flush = () => new Promise(resolve => setTimeout(resolve, 30));
+
+test('原文件解析出错不能向外部软件拖出文件名文字', async () => {
+  const target = fakeTarget({card:fakeCard('a'.repeat(32))});
+  const h = mount({post:async()=>{throw Error('storage is not defined');}});
+  try {
+    h.fire('pointerdown',{target});
+    h.fire('pointermove',{target,clientX:40});
+    await flush();
+    assert.equal(h.calls.length,0,'解析错误应提示失败，不发起文本拖放');
+  } finally { h.teardown(); }
+});
+
+test('窗口内让位画板拖动，接近边缘后原生拖出真实文件',async()=>{
+  const target=fakeTarget({card:fakeCard('a'.repeat(32))});
+  const captures=[];
+  target.setPointerCapture=id=>captures.push(['set',id]);
+  target.releasePointerCapture=id=>captures.push(['release',id]);
+  const h=mount({deferNativeDrag:event=>event.clientX<100});
+  try{
+    h.fire('pointerdown',{target,pointerId:7});h.fire('pointermove',{target,clientX:50});await flush();
+    assert.equal(h.calls.length,0);
+    assert.deepEqual(captures,[['set',7]],'窗口内拖动必须保留鼠标捕获');
+    h.fire('pointermove',{target,clientX:100});await flush();
+    assert.equal(h.calls.length,1);assert.equal(h.calls[0].name,'start_file_drag');
+    assert.deepEqual(captures,[['set',7],['release',7]],'交给系统前释放捕获');
+    h.fire('pointerup');
+    h.fire('pointerdown',{target});
+    h.fire('pointerout',{target,relatedTarget:null,clientX:110});await flush();
+    assert.equal(h.calls.length,2,'快速跨出窗口也接续原生拖放');
+  }finally{h.teardown();}
+});
 
 test('按住并移过阈值才起系统拖放，交给 Rust 的是解析出的真实路径', async () => {
   const card = fakeCard('a'.repeat(32));

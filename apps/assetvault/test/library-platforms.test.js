@@ -30,11 +30,15 @@ test('the all-platform entry is the only one that answers with more than one fee
  // 单平台仍然只声明自己那一组（切过去就能按平台自己的分类体系精细筛）。
  const all=platformById(DEFAULT_PLATFORM);
  assert.deepEqual(all.filters,['filters-merged'],'全平台的筛选要收成统一树这一棵');
- assert.match(all.note,/统一/,'说明行要讲清「统一分类同时作用于两个平台」');
- assert.match(all.note,/ArtStation/,'说明行要交代 A 站没有对应的分类本轮只检索 Sketchfab');
+ // 2026-11 全部平台已从两站扩到十站：说明行不再讲「统一分类作用于两个平台」，
+ // 改成讲清统一题材树会按站过滤，对不上的站本轮不搜。
+ assert.match(all.note,/题材/,'说明行要讲清统一题材树的作用');
+ assert.match(all.note,/对不上的站不搜/,'说明行要写清覆盖面规则');
+ assert.ok(all.feeds.length>=3,'全部平台确实要同时驱动多个来源');
  for(const platform of PLATFORMS.filter(p=>p.id!==DEFAULT_PLATFORM)){
   // 没有筛选树的平台（目前是 Poly Haven）声明 null，页面会整行隐藏而不是去找一个不存在的节点。
-  if(platform.filters===null)continue;
+  // 无筛选树的平台除 null 外，新加的平台也用空数组声明（如 SimReady）。
+  if(platform.filters===null||Array.isArray(platform.filters))continue;
   assert.equal(platform.filters,`filters-${platform.id}`,`${platform.id} 只该声明自己的筛选行`);
  }
 });

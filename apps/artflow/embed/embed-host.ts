@@ -67,6 +67,11 @@ export interface EmbedHostCallbacks {
     exportDocument?: () => unknown;
     /** 用工程文档恢复画板。返回是否恢复成功。 */
     restoreDocument?: (document: unknown) => boolean;
+    documentKey?: unknown;
+    activeBoardId?: string;
+    selectBoard?: (id: string) => void;
+    addBoard?: () => void;
+    boardList?: {id:string;name:string}[];
 }
 
 export const EMBED_SOURCE = 'artflow-embed';
@@ -74,6 +79,8 @@ export const EMBED_TARGET = 'assetvault';
 
 let callbacks: EmbedHostCallbacks | null = null;
 let listening = false;
+let documentKey: unknown;
+let activeBoardKey: string | undefined;
 
 const isTrustedOrigin = (event: MessageEvent): boolean => {
     // 同源嵌入（本地服务 / Tauri 静态托管）时 origin 就是自己。
@@ -89,6 +96,10 @@ const post = (message: unknown): void => {
     } catch {
         /* 跨域或父窗口已销毁：静默失败，不影响本体。 */
     }
+};
+
+export const openEmbedLibraryBoard = (boardId: string): void => {
+    post({type: 'assetvault:open-library-board', boardId});
 };
 
 /**
@@ -157,9 +168,11 @@ export const installEmbedHost = (next: EmbedHostCallbacks): void => {
             else if (command === 'arrange') api.arrange?.();
             else if (command === 'snapshot') post({ type: 'assetvault:snapshot-result', elements: api.snapshot() });
             else if (command === 'export-document') post({ type: 'assetvault:document-result', document: api.exportDocument?.() ?? null });
+            else if (command === 'select-board') api.selectBoard?.((data as { boardId?: string }).boardId || '');
+            else if (command === 'new-board') api.addBoard?.();
             else if (command === 'restore-document') {
                 const ok = api.restoreDocument?.((data as { document?: unknown }).document) === true;
-                post({ type: 'assetvault:restore-result', ok });
+                post({ type: 'assetvault:restore-result', ok, document:ok ? api.exportDocument?.() : null });
             }
             return;
         }
@@ -169,6 +182,11 @@ export const installEmbedHost = (next: EmbedHostCallbacks): void => {
     // 注册时也推一份快照：宿主要靠快照统计画布元素数，
     // 而宿主不会主动问（它只关心「现在有几个」），所以由本体在内容变化时主动推。
     post({ type: 'assetvault:snapshot-result', elements: next.snapshot() });
+    if (documentKey !== next.documentKey || activeBoardKey !== next.activeBoardId) {
+        documentKey = next.documentKey;
+        activeBoardKey = next.activeBoardId;
+        post({type:'assetvault:document-changed',activeBoardId:next.activeBoardId,boards:next.boardList});
+    }
 };
 
 /** 主动把画布状态推给宿主（宿主也可主动要一份）。 */
