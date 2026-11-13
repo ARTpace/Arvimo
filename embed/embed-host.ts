@@ -10,7 +10,7 @@
  *
  * 协议（postMessage，宿主 → 画布）：
  *   { type: 'assetvault:import', files: File[], dropPoint?: {x,y} }
- *   { type: 'assetvault:import-refs', refs: AssetReference[] }   → 回 assetvault:import-result
+ *   { type: 'assetvault:import-refs', refs: AssetReference[], dropPoint?: {x,y} } → 回 assetvault:import-result
  *   { type: 'assetvault:snapshot' }            → 回 assetvault:snapshot-result
  *   { type: 'assetvault:command', command: 'fit' | 'arrange' | 'snapshot' | 'export-document' }
  *   { type: 'assetvault:command', command: 'restore-document', document }
@@ -54,8 +54,9 @@ export interface AssetReference {
 export interface EmbedHostCallbacks {
     /** 走本体导入管线放文件。返回实际入画布的数量。 */
     importFiles: (files: File[], dropPoint?: { x: number; y: number }) => Promise<number>;
-    /** 通过外部引用（URL）放置图片：href 直接等于 src，不解码、不内嵌，存档只存 URL。 */
-    importReferences?: (refs: AssetReference[]) => Promise<number>;
+    /** 通过外部引用（URL）放置图片：href 直接等于 src，不解码、不内嵌，存档只存 URL。
+     *  dropPoint 与 importFiles 同义：宿主给落点就以它为原点，不给则落在画布原点。 */
+    importReferences?: (refs: AssetReference[], dropPoint?: { x: number; y: number }) => Promise<number>;
     /** 当前画布元素快照（只读）。 */
     snapshot: () => EmbedSnapshotElement[];
     /** 缩放到刚好装下全部内容（复用本体导航器的适应算法）。 */
@@ -133,7 +134,7 @@ export const installEmbedHost = (next: EmbedHostCallbacks): void => {
                 post({ type: 'assetvault:import-result', ok: false, count: 0, message: '宿主不支持引用导入' });
                 return;
             }
-            api.importReferences(refs)
+            api.importReferences(refs, data.dropPoint)
                 .then(count => post({ type: 'assetvault:import-result', ok: true, count }))
                 .catch(error => post({
                     type: 'assetvault:import-result',

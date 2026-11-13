@@ -134,7 +134,7 @@ export const headlessPlugin = definePlugin({
   manifest,
   activate(ctx: Kernel): Effect {
     // Auxiliary PiP renderers must not own the shared main-process listener/catalog.
-    if (typeof window !== 'undefined' && window.location.hash.startsWith('#pip-panel')) return () => {};
+    if (typeof window !== 'undefined' && window.location?.hash?.startsWith('#pip-panel')) return () => {};
     const host = ctx.use(HOST_PLATFORM_SERVICE) as Partial<HostPlatformService>;
     const exports: McpExportRegistry = ctx.has(MCP_EXPORT_REGISTRY)
       ? ctx.use(MCP_EXPORT_REGISTRY)

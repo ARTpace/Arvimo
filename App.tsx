@@ -796,27 +796,49 @@ const App: React.FC = () => {
             },
             // 引用导入：宿主直接给资产 URL，画布以 href=src 渲染、不解码、不内嵌像素。
             // 存档（projectDocument v2）对 href 透明，只存 URL —— 画布成为资产库的活视图。
-            importReferences: async (refs: AssetReference[]) => {
+            importReferences: async (refs: AssetReference[], dropPoint?: { x: number; y: number }) => {
                 if (!refs || refs.length === 0) return 0;
                 const importGroupId = generateId();
                 const placed: CanvasElement[] = [];
+                // 定位：与扩展导入同一套约定 —— 宿主给落点就以落点为原点，没给就落在画布原点。
+                // 多张引用按行流式排布（每行不超 1600px），避免全部堆在同一坐标上。
+                const baseX = dropPoint?.x ?? 0;
+                const baseY = dropPoint?.y ?? 0;
+                const gap = 32;
+                const maxRowWidth = 1600;
+                let cursorX = baseX;
+                let cursorY = baseY;
+                let rowHeight = 0;
                 for (const ref of refs) {
                     if (!ref?.src) continue;
                     try {
                         const size = await probeImageSize(ref.src);
                         const maxSide = 640;
                         const scale = Math.min(1, maxSide / Math.max(size.w, size.h, 1));
+                        const width = Math.round(size.w * scale);
+                        const height = Math.round(size.h * scale);
+                        // 换行：本行放不下就另起一行，行高取该行最高元素。
+                        if (cursorX > baseX && cursorX + width > baseX + maxRowWidth) {
+                            cursorX = baseX;
+                            cursorY += rowHeight + gap;
+                            rowHeight = 0;
+                        }
                         const el: ImageElement = {
                             id: generateId(),
                             type: 'image',
                             href: ref.src,
-                            width: Math.round(size.w * scale),
-                            height: Math.round(size.h * scale),
+                            name: ref.name || ref.uid || '引用图',
+                            x: cursorX,
+                            y: cursorY,
+                            width,
+                            height,
                             mimeType: ref.mimeType || guessMimeFromSrc(ref.src),
                             assetId: ref.uid,
                             assetRef: { uid: ref.uid, src: ref.src },
                         };
                         placed.push(el);
+                        cursorX += width + gap;
+                        rowHeight = Math.max(rowHeight, height);
                     } catch {
                         console.warn('[import-ref] 跳过无法加载的引用:', ref.src);
                     }

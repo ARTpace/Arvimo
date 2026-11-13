@@ -73,22 +73,31 @@ interface PointerSession {
  */
 const clampGeometry = (geometry: WindowGeometry): WindowGeometry => {
     const { minW, minH } = SETTINGS_WINDOW_LIMITS;
-    const maxW = Math.max(minW, window.innerWidth - WINDOW_MARGIN * 2);
-    const maxH = Math.max(minH, window.innerHeight - WINDOW_MARGIN * 2);
+    // 视口只在客户端存在：SSR / Node 渲染（自检、预渲染）时 `window` 未定义，
+    // 这里退回最小尺寸兜底，让首屏能渲染出来而不是整棵树抛错。
+    const viewportW = typeof window === 'undefined' ? minW : window.innerWidth;
+    const viewportH = typeof window === 'undefined' ? minH : window.innerHeight;
+    const maxW = Math.max(minW, viewportW - WINDOW_MARGIN * 2);
+    const maxH = Math.max(minH, viewportH - WINDOW_MARGIN * 2);
     const width = Math.min(Math.max(geometry.width, minW), maxW);
     const height = Math.min(Math.max(geometry.height, minH), maxH);
-    const left = Math.min(Math.max(geometry.left, WINDOW_MARGIN), Math.max(WINDOW_MARGIN, window.innerWidth - width - WINDOW_MARGIN));
-    const top = Math.min(Math.max(geometry.top, WINDOW_MARGIN), Math.max(WINDOW_MARGIN, window.innerHeight - height - WINDOW_MARGIN));
+    const left = Math.min(Math.max(geometry.left, WINDOW_MARGIN), Math.max(WINDOW_MARGIN, viewportW - width - WINDOW_MARGIN));
+    const top = Math.min(Math.max(geometry.top, WINDOW_MARGIN), Math.max(WINDOW_MARGIN, viewportH - height - WINDOW_MARGIN));
     return { left, top, width, height };
 };
 
 /** 卷里存的 rect → 实际几何（`x`/`y` 为 null 时居中）。 */
-const resolveGeometry = (rect: SettingsWindowRect): WindowGeometry => clampGeometry({
-    left: rect.x ?? (window.innerWidth - rect.w) / 2,
-    top: rect.y ?? (window.innerHeight - rect.h) / 2,
-    width: rect.w,
-    height: rect.h,
-});
+const resolveGeometry = (rect: SettingsWindowRect): WindowGeometry => {
+    const { minW, minH } = SETTINGS_WINDOW_LIMITS;
+    const viewportW = typeof window === 'undefined' ? minW : window.innerWidth;
+    const viewportH = typeof window === 'undefined' ? minH : window.innerHeight;
+    return clampGeometry({
+        left: rect.x ?? (viewportW - rect.w) / 2,
+        top: rect.y ?? (viewportH - rect.h) / 2,
+        width: rect.w,
+        height: rect.h,
+    });
+};
 
 /**
  * 设置面板通用宿主（Blender 布局）：左侧分组导航 + 右侧 settings_sections 贡献内容。
