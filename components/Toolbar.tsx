@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import type { Tool } from '../types';
 import { ACCEPTED_FILE_TYPES_STRING } from '../utils/formatDetector';
 import { BpIcon } from './BpIcon';
+import { HoverReveal } from './HoverReveal';
 
 interface ToolbarProps {
     // Updated t signature to match useSettings hook for better type compatibility
@@ -174,9 +175,13 @@ export const Toolbar: React.FC<ToolbarProps> = ({
     ];
 
     return (
-        <div
-            style={containerStyle}
-            data-bp-ui-floating-shell="" className={`absolute top-1/2 -translate-y-1/2 z-20 flex flex-col items-center gap-1.5 rounded-[18px] border border-[var(--ui-border)] px-2 py-3 ${positionClasses}`}
+        <HoverReveal
+            edge={position === 'left' ? 'left' : 'right'}
+            panelClassName={`absolute top-1/2 -translate-y-1/2 z-20 flex flex-col items-center gap-1.5 rounded-[18px] border border-[var(--ui-border)] px-2 py-3 ${positionClasses}`}
+            panelStyle={containerStyle}
+            panelData={{ 'data-bp-ui-floating-shell': '' }}
+            enterTranslateClass={position === 'left' ? '-translate-x-3' : 'translate-x-3'}
+            restTranslateClass="translate-x-0"
         >
             <div className="flex flex-col items-center gap-2 flex-grow">
                  {mainTools.map(tool => (
@@ -243,6 +248,6 @@ export const Toolbar: React.FC<ToolbarProps> = ({
             <div className="w-10 h-px bg-[var(--ui-border)]"></div>
             <ToolButton label={t('toolbar.undo')} onClick={onUndo} disabled={!canUndo} icon={<BpIcon name="tool.undo" size={24} />} />
             <ToolButton label={t('toolbar.redo')} onClick={onRedo} disabled={!canRedo} icon={<BpIcon name="tool.redo" size={24} />} />
-        </div>
+        </HoverReveal>
     );
 };

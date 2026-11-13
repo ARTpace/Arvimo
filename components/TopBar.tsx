@@ -1,6 +1,7 @@
 import React from 'react';
 import { BpIcon } from './BpIcon';
 import { RecentProjectsMenu } from './RecentProjectsMenu';
+import { HoverReveal } from './HoverReveal';
 
 interface TopBarProps {
   // Updated t signature to match useSettings hook for better type compatibility
@@ -55,7 +56,13 @@ export const TopBar: React.FC<TopBarProps> = ({
 }) => {
   return (
     <>
-      <div data-bp-topbar-side="left" className="absolute top-4 left-4 z-20 flex items-center gap-2">
+      <HoverReveal
+        edge="top"
+        panelClassName="absolute top-4 left-4 z-20 flex items-center gap-2"
+        panelData={{ 'data-bp-topbar-side': 'left' }}
+        enterTranslateClass="-translate-y-2"
+        restTranslateClass="translate-y-0"
+      >
         <button
           onClick={() => setIsBoardPanelOpen(prev => !prev)}
           style={{ backgroundColor: 'var(--ui-bg-color)' }}
@@ -101,9 +108,15 @@ export const TopBar: React.FC<TopBarProps> = ({
             )}
             {onOpenRecentProject && <RecentProjectsMenu t={t} onOpen={onOpenRecentProject} />}
         </div>
-      </div>
+      </HoverReveal>
 
-      <div data-bp-topbar-side="right" className="absolute top-4 right-4 z-20 flex items-center gap-2">
+      <HoverReveal
+        edge="top"
+        panelClassName="absolute top-4 right-4 z-20 flex items-center gap-2"
+        panelData={{ 'data-bp-topbar-side': 'right' }}
+        enterTranslateClass="-translate-y-2"
+        restTranslateClass="translate-y-0"
+      >
         <div
           style={{ backgroundColor: 'var(--ui-bg-color)' }}
           data-bp-ui-floating-shell="" className="flex items-center gap-1 p-1 border border-[var(--ui-border)] rounded-[14px]"
@@ -161,7 +174,7 @@ export const TopBar: React.FC<TopBarProps> = ({
             <BpIcon name="topbar.settings" size={20} />
           </button>
         </div>
-      </div>
+      </HoverReveal>
     </>
   );
 };

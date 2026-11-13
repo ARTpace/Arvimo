@@ -24,6 +24,9 @@ export default defineConfig(({ mode }) => {
         warmup: { clientFiles: ['./index.tsx'] },
       },
       plugins: [react()],
+      // 产物清单：宿主（本机 AssetVault）按这份清单精确拷贝需要的文件，
+      // 不用整目录搬 —— 整目录搬会把历次构建的旧 chunk 一起带过去。
+      build: { manifest: true },
       define: {
         'process.env.API_KEY': JSON.stringify(env.GEMINI_API_KEY),
         'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY)

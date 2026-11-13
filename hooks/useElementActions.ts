@@ -368,12 +368,15 @@ export const useElementActions = ({
         } finally { setIsLoading(false); setProgressMessage(''); }
     }, [selectedElementIds, elements, setIsLoading, setProgressMessage, setError, handleDeleteElement, commitAction, setSelectedElementIds]);
 
-    const handleMasonryLayout = useCallback(() => {
-        if (selectedElementIds.length < 2) return;
+    // 排列的真正实现按「目标 id 集合」写。默认集合是当前选区；
+    // 嵌入式宿主可以传自己的集合来排列全部元素，而不用先改选区状态 ——
+    // 改选区会连带触发选中样式与工具条重绘，宿主调用时并不想要这个副作用。
+    const applyMasonryLayout = useCallback((scopeIds: string[]) => {
+        if (scopeIds.length < 2) return;
 
         commitAction(prev => {
-            const assetsToArrange = prev.filter((el): el is ImageElement | VideoElement | ShapeElement => 
-                selectedElementIds.includes(el.id) && 
+            const assetsToArrange = prev.filter((el): el is ImageElement | VideoElement | ShapeElement =>
+                scopeIds.includes(el.id) &&
                 (el.type === 'image' || el.type === 'video' || el.type === 'shape')
             );
             if (assetsToArrange.length < 2) return prev;
@@ -390,7 +393,7 @@ export const useElementActions = ({
             const COLUMN_WIDTH = Math.min(600, Math.max(250, avgWidth));
 
             const colHeights = new Array(colCount).fill(0);
-            const selectionBounds = getSelectionBounds(selectedElementIds, prev);
+            const selectionBounds = getSelectionBounds(scopeIds, prev);
             const anchorPoint = { x: selectionBounds.x + selectionBounds.width / 2, y: selectionBounds.y + selectionBounds.height / 2 };
 
             const updates = new Map<string, { x: number, y: number, w: number, h: number }>();
@@ -426,7 +429,9 @@ export const useElementActions = ({
                 return el;
             });
         });
-    }, [selectedElementIds, commitAction]);
+    }, [commitAction]);
+
+    const handleMasonryLayout = useCallback(() => applyMasonryLayout(selectedElementIds), [applyMasonryLayout, selectedElementIds]);
 
     const handleAutoCombine = useCallback(async () => {
         if (selectedElementIds.length < 2) return;
@@ -648,6 +653,8 @@ export const useElementActions = ({
         handleStartAIRotate,
         handleStopEditing,
         handleMasonryLayout,
+        // 按指定集合排列（不碰选区）。嵌入式宿主用它在没有选区的情况下整理全部元素。
+        handleMasonryLayoutFor: applyMasonryLayout,
         isElementVisible,
     };
 };

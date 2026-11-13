@@ -78,6 +78,8 @@ import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import { useCanvasInteractions } from './hooks/useCanvasInteractions';
 import { useAIHandlers, type InvokeAIProvider } from './hooks/useAIHandlers';
 import { useElementActions } from './hooks/useElementActions';
+import { installEmbedHost, type AssetReference } from './embed/embed-host';
+import { serializeProjectDocument } from './utils/projectDocument';
 import { useBoardActions } from './hooks/useBoardActions';
 import { useFileHandlers } from './hooks/useFileHandlers';
 import { IMPORT_REVEAL_MAX_IMAGES, type ImportRevealRequest } from './utils/importReveal';
@@ -574,6 +576,7 @@ const App: React.FC = () => {
         handleStartAIRotate,
         handleStopEditing,
         handleMasonryLayout,
+        handleMasonryLayoutFor,
         isElementVisible,
     } = useElementActions({
         elements,
@@ -757,6 +760,91 @@ const App: React.FC = () => {
         setProgressMessage,
         importExtensionFiles,
     });
+
+    // —— 嵌入式宿主桥（被别的应用当 iframe 嵌进来时生效）——
+    // 只做两件事：外部资产走本体导入管线进画布；画布状态回传宿主。
+    // 交互逻辑一行不改 —— 本体自己跑自己那套，画布行为与独立运行时完全一致。
+    // 未被嵌入时（独立运行 / Electron 桌面版）这段是空操作：installEmbedHost
+    // 只挂 message 监听，宿主不来发消息就什么也不发生。
+    useEffect(() => {
+        // 引用图：用 <img> 探测真实尺寸（不解码成 data URL，img.src 仍指向资产 URL）。
+        const probeImageSize = (src: string): Promise<{ w: number; h: number }> =>
+            new Promise((resolve, reject) => {
+                const img = new Image();
+                img.onload = () => resolve({ w: img.naturalWidth || 512, h: img.naturalHeight || 384 });
+                img.onerror = () => reject(new Error('image load failed'));
+                img.src = src;
+            });
+        const guessMimeFromSrc = (src: string): string => {
+            const m = /\.([a-z0-9]+)(?:[?#]|$)/i.exec(src);
+            const ext = m?.[1]?.toLowerCase();
+            const map: Record<string, string> = {
+                png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp',
+                gif: 'image/gif', avif: 'image/avif', bmp: 'image/bmp', svg: 'image/svg+xml',
+            };
+            return (ext && map[ext]) || 'image/png';
+        };
+        installEmbedHost({
+            importFiles: async (files, dropPoint) => {
+                await handleAddFiles(files, dropPoint);
+                // handleAddFiles 是异步导入管线，返回时元素已入板。
+                // 数量以导入后的板为准，不靠猜。
+                const after = documentState.getSnapshot();
+                const board = after.boards.find(b => b.id === after.activeBoardId);
+                const before = elements.length;
+                return Math.max(0, (board?.elements.length ?? before) - before);
+            },
+            // 引用导入：宿主直接给资产 URL，画布以 href=src 渲染、不解码、不内嵌像素。
+            // 存档（projectDocument v2）对 href 透明，只存 URL —— 画布成为资产库的活视图。
+            importReferences: async (refs: AssetReference[]) => {
+                if (!refs || refs.length === 0) return 0;
+                const importGroupId = generateId();
+                const placed: CanvasElement[] = [];
+                for (const ref of refs) {
+                    if (!ref?.src) continue;
+                    try {
+                        const size = await probeImageSize(ref.src);
+                        const maxSide = 640;
+                        const scale = Math.min(1, maxSide / Math.max(size.w, size.h, 1));
+                        const el: ImageElement = {
+                            id: generateId(),
+                            type: 'image',
+                            href: ref.src,
+                            width: Math.round(size.w * scale),
+                            height: Math.round(size.h * scale),
+                            mimeType: ref.mimeType || guessMimeFromSrc(ref.src),
+                            assetId: ref.uid,
+                            assetRef: { uid: ref.uid, src: ref.src },
+                        };
+                        placed.push(el);
+                    } catch {
+                        console.warn('[import-ref] 跳过无法加载的引用:', ref.src);
+                    }
+                }
+                if (placed.length) addElementsWithParenting(placed, true, importGroupId);
+                return placed.length;
+            },
+            snapshot: () => elements.map(el => ({
+                id: el.id,
+                type: el.type,
+                name: 'name' in el ? String(el.name ?? '') : undefined,
+                x: el.x,
+                y: el.y,
+                width: el.width,
+                height: el.height,
+                rotation: el.rotation,
+                href: 'href' in el ? String(el.href ?? '') : undefined,
+            })),
+            // 「适应」与「整理」都走本体现成能力，不另写一套几何算法：
+            // fit → 导航器同一套 fitCanvasViewport；arrange → 画布自带的瀑布流排列。
+            fit: () => handleFitCanvas(),
+            arrange: () => handleMasonryLayoutFor(elements.map(el => el.id)),
+            // 存档：直接用本体自己的工程文档格式（图片以 data URL 内嵌，文档自包含）。
+            // 宿主存下这份 JSON，刷新后原样送回来，画板连位置带内容一起恢复。
+            exportDocument: () => serializeProjectDocument(boards),
+            restoreDocument: document => loadBoardData(document),
+        });
+    }, [handleAddFiles, elements, documentState, handleFitCanvas, handleMasonryLayoutFor, boards, loadBoardData]);
 
     useKeyboardShortcuts({
         presentationState,

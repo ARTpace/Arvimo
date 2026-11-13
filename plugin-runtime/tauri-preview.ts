@@ -1,62 +1,12 @@
-import commandsCoreManifest from '../plugins/builtin.commands-core/manifest.json';
-import commandsCoreSource from '../plugins/builtin.commands-core/plugin.js?raw';
-import coreExtensionsManifest from '../plugins/builtin.core-extensions/manifest.json';
-import coreExtensionsSource from '../plugins/builtin.core-extensions/plugin.js?raw';
-import formatsFilesManifest from '../plugins/builtin.formats-files/manifest.json';
-import formatsFilesSource from '../plugins/builtin.formats-files/plugin.js?raw';
-import formatsImageDocManifest from '../plugins/builtin.formats-image-doc/manifest.json';
-import formatsImageDocSource from '../plugins/builtin.formats-image-doc/plugin.js?raw';
-import formatsPurerefManifest from '../plugins/builtin.formats-pureref/manifest.json';
-import formatsPurerefSource from '../plugins/builtin.formats-pureref/plugin.js?raw';
-import formatsReaderManifest from '../plugins/builtin.formats-reader/manifest.json';
-import formatsReaderSource from '../plugins/builtin.formats-reader/plugin.js?raw';
-import mediaManifest from '../plugins/builtin.media/manifest.json';
-import mediaSource from '../plugins/builtin.media/plugin.js?raw';
-import projectPortableManifest from '../plugins/builtin.project-portable/manifest.json';
-import projectPortableSource from '../plugins/builtin.project-portable/plugin.js?raw';
-import { PROFILE_PATCH_STORAGE_KEY } from './profile';
-import { PROFILE_MIGRATION_MARKER_KEY } from './plugin-state-storage';
+import { BUNDLED_EDITABLE_PLUGINS } from './bundled-plugins';
+import { createPluginStateBridge } from './plugin-state-bridge';
 import type { PerfMetricEntry } from '../utils/perf-process-metrics';
 
 /** Optional Tauri host adapter. Electron/browser startup remains untouched. */
 type Invoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
 type ByteResult = { ok: boolean; name?: string; bytes?: number[]; message?: string };
-type BundledEditable = {
-  manifest: { id: string; name: string; version: string; description?: string };
-  source: string;
-};
-
-/**
- * The Electron host reads editable plugins from userData/plugins/builtin/<id>/.
- * The Tauri preview has no such folder, so it ships the same modules that the
- * repository seeds there. Keep this list complete: a missing entry makes its
- * dependents (e.g. builtin.formats-psd requires builtin.formats-image-doc) fail
- * with "requires missing plugin", and the plugin manager reports it as an error.
- */
-const BUNDLED_EDITABLE_PLUGINS: readonly BundledEditable[] = [
-  { manifest: commandsCoreManifest, source: commandsCoreSource },
-  { manifest: coreExtensionsManifest, source: coreExtensionsSource },
-  { manifest: formatsFilesManifest, source: formatsFilesSource },
-  { manifest: formatsImageDocManifest, source: formatsImageDocSource },
-  { manifest: formatsPurerefManifest, source: formatsPurerefSource },
-  { manifest: formatsReaderManifest, source: formatsReaderSource },
-  { manifest: mediaManifest, source: mediaSource },
-  { manifest: projectPortableManifest, source: projectPortableSource },
-];
-
-const readPatches = (storage: Storage | null): unknown[] | null => {
-  if (!storage) return null;
-  try {
-    const raw = storage.getItem(PROFILE_PATCH_STORAGE_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as unknown;
-    if (!parsed || typeof parsed !== 'object') return null;
-    const patches = (parsed as { patches?: unknown }).patches;
-    return Array.isArray(patches) ? patches : null;
-  } catch {
-    return null;
-  }
-};
+/** Rust 侧命令返回的 JSON 值（结构随命令而定，渲染层只做透传）。 */
+type Value = unknown;
 
 /**
  * Tauri keeps plugin preferences in the WebView2 localStorage of the dev origin
@@ -64,34 +14,6 @@ const readPatches = (storage: Storage | null): unknown[] | null => {
  * `artflowPluginState` contract as Electron keeps profile resolution identical
  * in both hosts instead of silently falling back to a separate store.
  */
-const createPluginStateBridge = (storage: Storage | null) => ({
-  readSync: () => {
-    const patches = readPatches(storage);
-    if (!patches) return { ok: true, patches: null, source: 'none' as const };
-    return { ok: true, patches, source: 'file' as const, schemaVersion: 1 };
-  },
-  writeSync: (patches: unknown[]) => {
-    if (!storage) return { ok: false, message: 'localStorage unavailable' };
-    try {
-      storage.setItem(PROFILE_PATCH_STORAGE_KEY, JSON.stringify({ patches }));
-      return { ok: true, count: patches.length };
-    } catch (error) {
-      return { ok: false, message: error instanceof Error ? error.message : String(error) };
-    }
-  },
-  clearSync: () => {
-    if (!storage) return { ok: false, message: 'localStorage unavailable' };
-    try {
-      storage.removeItem(PROFILE_PATCH_STORAGE_KEY);
-      storage.removeItem(PROFILE_MIGRATION_MARKER_KEY);
-      return { ok: true };
-    } catch (error) {
-      return { ok: false, message: error instanceof Error ? error.message : String(error) };
-    }
-  },
-  readEditableManifestsSync: () => ({ manifests: BUNDLED_EDITABLE_PLUGINS.map(entry => entry.manifest) }),
-  reportBoot: () => {},
-});
 
 export function installTauriPreviewBridge(target: Window = window): boolean {
   const tauri = (target as unknown as {
@@ -303,7 +225,10 @@ export function installTauriPreviewBridge(target: Window = window): boolean {
   // Only implemented methods are exposed. Missing Electron services retain their
   // existing browser fallback rather than falsely advertising desktop support.
   target.artflowApp = bridge as unknown as NonNullable<Window['artflowApp']>;
-  target.artflowPluginState = createPluginStateBridge(storage) as unknown as NonNullable<Window['artflowPluginState']>;
+  target.artflowPluginState = createPluginStateBridge(
+    storage,
+    BUNDLED_EDITABLE_PLUGINS.map(entry => entry.manifest),
+  ) as unknown as NonNullable<Window['artflowPluginState']>;
   target.artflowComic = comicBridge as unknown as NonNullable<Window['artflowComic']>;
   // Phase 2 已交付后端：托管项目存储（artflowStorage）、外部 AI 代理（artflowAi）、
   // 面板独立窗口（artflowApp.openPanelWindow）、外部沙箱插件（artflowApp.*）。

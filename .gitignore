@@ -52,3 +52,6 @@ src-tauri/gen/
 *.lnk
 *.pem
 *.key
+
+# 供 AssetVault iframe 加载的构建产物（本地 build 生成，不入库）
+dist-web/

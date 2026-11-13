@@ -1,6 +1,41 @@
 /* UNIFIED UI THEME: these are app-chrome scopes, never board content or user cards.
    One SkinEngine transaction updates variables on <html>; CSS only paints small HTML
    controls. Do not animate the canvas, SVG images, or theme-token changes. */
+/* Fallback palette. Without a skin (pure browser build has no user plugin folder) the
+   --bp-ui-* variables would be undefined, so every color remapped below would fall back
+   to transparent/inherit — plugin switches, warning bars and disabled states would all
+   look identically gray, i.e. "the toggle does nothing". A loaded skin writes these
+   variables onto <html>'s inline style, which outranks this block. */
+:root {
+  --bp-ui-text: #f2f6fa;
+  --bp-ui-muted: #aebdc9;
+  --bp-ui-border: rgba(240, 247, 255, 0.2);
+  --bp-ui-surface: rgba(17, 24, 39, 0.92);
+  --bp-ui-surface-strong: #111827;
+  --bp-ui-raised: rgba(255, 255, 255, 0.075);
+  --bp-ui-subdued: rgba(0, 0, 0, 0.23);
+  --bp-ui-hover: rgba(255, 255, 255, 0.13);
+  --bp-ui-accent: #38bdf8;
+  --bp-ui-accent-text: #e0f2fe;
+  --bp-ui-accent-soft: rgba(56, 189, 248, 0.16);
+  --bp-ui-success: #34d399;
+  --bp-ui-success-soft: rgba(52, 211, 153, 0.16);
+  --bp-ui-warning: #fbbf24;
+  --bp-ui-warning-soft: rgba(251, 191, 36, 0.16);
+  --bp-ui-danger: #fb7185;
+  --bp-ui-danger-soft: rgba(251, 113, 133, 0.14);
+  --bp-ui-on-accent: #111827;
+  --bp-ui-button-bg: rgba(56, 189, 248, 0.22);
+  --bp-ui-button-hover: rgba(56, 189, 248, 0.29);
+  --bp-ui-button-text: #e0f2fe;
+  --bp-ui-button-border: transparent;
+  --bp-ui-focus: #38bdf8;
+  --bp-ui-radius: 8px;
+  --bp-ui-radius-panel: 18px;
+  --bp-ui-shadow: 0 18px 56px rgba(0, 0, 0, 0.38);
+  --bp-ui-scrim: rgba(0, 0, 0, 0.6);
+  --bp-canvas-bg: #111827;
+}
 :is([data-bp-ui-themed], [data-bp-ui-panel], [data-bp-ui-settings], [data-bp-ui-command], [data-bp-ui-prompt], [data-bp-ui-surface], [data-bp-ui-floating-shell], [data-bp-ui-workspace-dock], [data-bp-ui-workspace-panel], [data-bp-ui-navigator]) {
   color: var(--bp-ui-text);
   accent-color: var(--bp-ui-accent-text);

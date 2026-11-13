@@ -1,4 +1,7 @@
 import './plugin-runtime/tauri-preview';
+// 纯浏览器（网页版 / AssetVault 内嵌画布）没有 Electron/Tauri 宿主桥：补上内置插件与皮肤资产，
+// 否则插件管理器报 host bridge unavailable，--bp-ui-* 主题变量也整条落空（开关看起来全是灰的）。
+import './plugin-runtime/web-host';
 import { createServiceDirectory, SERVICE_DIRECTORY } from './plugin-runtime/service-directory';
 
 

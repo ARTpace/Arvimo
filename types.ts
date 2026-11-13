@@ -41,7 +41,9 @@ export interface ImageElement extends CanvasElementBase {
   fileSize?: number;
   opacity?: number;
   rotation?: number; // degrees
-  borderRadius?: number;
+    borderRadius?: number;
+    /** 引用图标记：图片直接来自外部 URL（如资产库），未内嵌像素，存档只存 URL。 */
+    assetRef?: { uid?: string; src: string };
 }
 
 export interface VideoElement extends CanvasElementBase {
