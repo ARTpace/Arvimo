@@ -166,3 +166,81 @@ export async function verifyArchive(file,{uid,signal}={}){
  const digest=createHash('sha256');for await(const chunk of fs.createReadStream(file,{signal}))digest.update(chunk);
  return {...result,sha256:digest.digest('hex'),verifiedAt:Date.now()};
 }
+
+/** EOCD 定位：与 verifyArchive 同一套判据，只是不校验条目内容。ZIP64 直接拒绝，别装作能读。 */
+async function readEndRecord(handle){
+ const size=(await handle.stat()).size;
+ if(size<22)throw Error('不是有效的 ZIP 文件');
+ const tail=await read(handle,Math.min(size,65557),Math.max(0,size-65557));
+ let end=-1;
+ for(let i=tail.length-22;i>=0;i--)if(tail.readUInt32LE(i)===0x06054b50&&i+22+tail.readUInt16LE(i+20)===tail.length){end=i;break;}
+ if(end<0)throw Error('ZIP 目录缺失');
+ const count=tail.readUInt16LE(end+10),cdSize=tail.readUInt32LE(end+12),cdOffset=tail.readUInt32LE(end+16);
+ if(!count)return {size,count:0,cdSize:0,cdOffset:0};
+ if(count===0xffff||cdSize===0xffffffff||cdOffset===0xffffffff)throw Error('暂不支持 ZIP64 归档');
+ if(cdSize>8*1024**2||cdOffset+cdSize>size)throw Error('ZIP 目录异常');
+ return {size,count,cdSize,cdOffset};
+}
+
+/** 只读中央目录，列出条目（不解压、不校验 CRC）。供「ZIP 内嵌浏览」用。 */
+export async function listArchiveEntries(file,{limit=600}={}){
+ const handle=await fsp.open(file,'r');
+ try{
+  const {count,cdSize,cdOffset}=await readEndRecord(handle);
+  if(!count)return {count:0,entries:[],total:0,truncated:false};
+  const directory=await read(handle,cdSize,cdOffset);
+  const entries=[];let p=0,total=0,files=0;
+  const max=Math.max(1,Math.min(Number(limit)||600,2000));
+  for(let n=0;n<count;n++){
+   if(p+46>directory.length||directory.readUInt32LE(p)!==0x02014b50)throw Error('ZIP 目录损坏');
+   const method=directory.readUInt16LE(p+10),packed=directory.readUInt32LE(p+20),length=directory.readUInt32LE(p+24);
+   const nl=directory.readUInt16LE(p+28),el=directory.readUInt16LE(p+30),cl=directory.readUInt16LE(p+32);
+   const name=directory.subarray(p+46,p+46+nl).toString('utf8');
+   p+=46+nl+el+cl;
+   // 目录项（以 / 结尾、大小为 0）不进列表：界面靠名字里的 / 自己缩进。
+   if(name.endsWith('/'))continue;
+   files++;
+   total+=length;
+   if(entries.length<max)entries.push({name,size:length,packed,method,depth:name.split('/').length-1});
+  }
+  return {count,files,entries,total,truncated:files>entries.length};
+ }finally{await handle.close();}
+}
+
+/** 解出单个条目，供预览 ZIP 里的图片/文本。上限按预览场景收窄，不做整包解压。 */
+export async function extractArchiveEntry(file,name,{maxBytes=48*1024**2}={}){
+ const handle=await fsp.open(file,'r');
+ try{
+  const {count,cdSize,cdOffset}=await readEndRecord(handle);
+  if(!count)throw Error('ZIP 是空的');
+  const directory=await read(handle,cdSize,cdOffset);
+  const wanted=String(name||'');
+  if(!wanted)throw Error('缺少条目名');
+  let p=0,hit=null;
+  for(let n=0;n<count;n++){
+   if(p+46>directory.length||directory.readUInt32LE(p)!==0x02014b50)throw Error('ZIP 目录损坏');
+   const flags=directory.readUInt16LE(p+8),method=directory.readUInt16LE(p+10),packed=directory.readUInt32LE(p+20);
+   const length=directory.readUInt32LE(p+24),nl=directory.readUInt16LE(p+28),el=directory.readUInt16LE(p+30),cl=directory.readUInt16LE(p+32),offset=directory.readUInt32LE(p+42);
+   const entryName=directory.subarray(p+46,p+46+nl).toString('utf8');
+   p+=46+nl+el+cl;
+   if(entryName!==wanted)continue;
+   hit={flags,method,packed,length,offset};
+   break;
+  }
+  if(!hit)throw Error('ZIP 里没有这个条目');
+  if(hit.flags&1)throw Error('这个条目已加密，无法预览');
+  if(hit.length>maxBytes)throw Error('条目太大，不适合在线预览');
+  if(![0,8].includes(hit.method))throw Error(`压缩方式不受支持（method ${hit.method}）`);
+  const local=await read(handle,30,hit.offset);
+  if(local.readUInt32LE(0)!==0x04034b50)throw Error('ZIP 本地头损坏');
+  const start=hit.offset+30+local.readUInt16LE(26)+local.readUInt16LE(28);
+  if(!hit.packed)return {name:wanted,bytes:Buffer.alloc(0)};
+  const source=fs.createReadStream(file,{start,end:start+hit.packed-1});
+  const stream=hit.method===8?source.pipe(createInflateRaw()):source;
+  source.on('error',error=>stream.destroy(error));
+  const chunks=[];
+  try{for await(const chunk of stream)chunks.push(chunk);}
+  finally{source.destroy();stream.destroy();}
+  return {name:wanted,bytes:Buffer.concat(chunks)};
+ }finally{await handle.close();}
+}

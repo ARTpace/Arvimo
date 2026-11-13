@@ -38,7 +38,7 @@ echo [3] Assembling sidecar-server (scripts/build-sidecar.mjs) ...
 if not exist node_modules\ ( call npm install )
 set "LIBRARY_PROJECT=%LIB%"
 node scripts/build-sidecar.mjs
-if errorlevel 1 ( echo ERROR: build-sidecar failed - missing node runtime / chrome / vendor? & pause & exit /b 1 )
+if errorlevel 1 ( echo ERROR: build-sidecar failed - missing node runtime / vendor / SQLite native addon? & pause & exit /b 1 )
 
 REM Old installers are cleaned by npm run build only after the new bundle succeeds.
 

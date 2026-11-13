@@ -9,9 +9,9 @@ export const ALL='all';
 // Result-feed registry. A platform only names feeds; anything that has to *do* something per feed
 // (which endpoint it hits, what it is called in the status line, that its skeleton exists in state)
 // is looked up here instead of being an if/else somewhere in app.js.
-export const FEEDS=['search','art','web','polyhaven','ambientcg','polypizza','kenney','freestylized','polyfork'];
-export const FEED_LABELS={search:'Sketchfab',art:'ArtStation',web:'链接解析',polyhaven:'Poly Haven',ambientcg:'ambientCG',polypizza:'Poly Pizza',kenney:'Kenney',freestylized:'FreeStylized',polyfork:'Polyfork'};
-export const FEED_ENDPOINTS={search:'/api/search',art:'/api/artstation/search',web:'/api/scan',polyhaven:'/api/polyhaven/search',ambientcg:'/api/ambientcg/search',polypizza:'/api/polypizza/search',kenney:'/api/kenney/search',freestylized:'/api/freestylized/search',polyfork:'/api/polyfork/search'};
+export const FEEDS=['search','art','web','polyhaven','ambientcg','polypizza','kenney','freestylized','polyfork','simready','uiverse'];
+export const FEED_LABELS={search:'Sketchfab',art:'ArtStation',web:'链接解析',polyhaven:'Poly Haven',ambientcg:'ambientCG',polypizza:'Poly Pizza',kenney:'Kenney',freestylized:'FreeStylized',polyfork:'Polyfork',simready:'NVIDIA SimReady',uiverse:'Uiverse'};
+export const FEED_ENDPOINTS={search:'/api/search',art:'/api/artstation/search',web:'/api/scan',polyhaven:'/api/polyhaven/search',ambientcg:'/api/ambientcg/search',polypizza:'/api/polypizza/search',kenney:'/api/kenney/search',freestylized:'/api/freestylized/search',polyfork:'/api/polyfork/search',simready:'/api/simready/search',uiverse:'/api/uiverse/search'};
 export const feedEndpoint=mode=>FEED_ENDPOINTS[mode]||FEED_ENDPOINTS.web;
 export const feedLabel=mode=>FEED_LABELS[mode]||mode;
 
@@ -19,39 +19,90 @@ export const feedLabel=mode=>FEED_LABELS[mode]||mode;
 // 在这里加一条 + 在 server/picture-sites.mjs 的 PICTURE_SITES 加同 id 的 resolve 实现即可，
 // 前端不再出现 if/else 长链。URL 解析、下载队列、本地图片库全部复用既有链路。
 export const PICTURE_SITES=Object.freeze({
-  pixiv:{id:'pixiv',label:'Pixiv',tag:'二次元插画',group:'插画 · 动漫',hosts:['pixiv.net','www.pixiv.net'],example:'https://www.pixiv.net/artworks/151233234',hint:'作品页或画师主页（users/xxx），整站作品全抓'},
-  safebooru:{id:'safebooru',label:'Safebooru',tag:'动漫图库',group:'插画 · 动漫',hosts:['safebooru.org','www.safebooru.org','cdn.safebooru.org'],example:'https://safebooru.org/index.php?page=post&s=list&tags=landscape',search:true,hint:'输入标签搜索（空格分隔多个标签），或粘标签列表页；单次最多 1000 张'},
-  yandere:{id:'yandere',label:'Yande.re',tag:'动漫壁纸',group:'插画 · 动漫',hosts:['yande.re','www.yande.re','files.yande.re','assets.yande.re'],example:'https://yande.re/post?tags=touhou',search:true,hint:'输入标签搜索，或粘标签页；部分网络会被站方 WAF 拦截'},
-  konachan:{id:'konachan',label:'Konachan',tag:'动漫壁纸',group:'插画 · 动漫',hosts:['konachan.net','www.konachan.net','konachan.com'],example:'https://konachan.net/post?tags=landscape',search:true,hint:'输入标签搜索；请走 konachan.net（.com 有 Cloudflare 挑战）'},
-  wallhaven:{id:'wallhaven',label:'Wallhaven',tag:'高清壁纸',group:'壁纸',hosts:['wallhaven.cc','www.wallhaven.cc','w.wallhaven.cc'],example:'https://wallhaven.cc/search?q=nature',search:true,hint:'输入关键词搜索（支持 city night 多词），或粘搜索页 / 标签页'},
-  civitai:{id:'civitai',label:'Civitai',tag:'AI 绘图',group:'AI 图库',hosts:['civitai.com','www.civitai.com','image.civitai.com'],example:'https://civitai.com/',hint:'公开图库接口，最多 1000 张'},
-  zcool:{id:'zcool',label:'站酷 ZCOOL',tag:'国内设计',group:'设计灵感',hosts:['zcool.com.cn','www.zcool.com.cn'],example:'https://www.zcool.com.cn/u/ZNjMyMjY0MDg=',hint:'粘作品页（/work/…）、创作者主页（/u/…）或频道页（/discover/…），会自动带出作者，点作者名看他的作品'},
-  designspiration:{id:'designspiration',label:'Designspiration',tag:'设计灵感',group:'设计灵感',hosts:['designspiration.com','www.designspiration.com'],example:'https://www.designspiration.com/',hint:'缩略图自动升级到 736px'},
-  huaban:{id:'huaban',label:'花瓣 Huaban',tag:'灵感采集',group:'设计灵感',hosts:['huaban.com','www.huaban.com'],example:'https://huaban.com/boards/102664553',search:true,hint:'直接输入关键词搜索，或粘作者主页（/user/用户名）看全部画板、画板页（/boards/数字）'},
-  pinterest:{id:'pinterest',label:'Pinterest',tag:'灵感画板',group:'设计灵感',hosts:['pinterest.com','www.pinterest.com','pin.it'],example:'https://www.pinterest.com/search/pins/?q=nature',search:true,hint:'粘画板 / 作者 / 搜索页 / 直链，或直接输入关键词搜索'},
-  pexels:{id:'pexels',label:'Pexels',tag:'免费摄影',group:'摄影图库',hosts:['pexels.com','www.pexels.com','images.pexels.com'],example:'https://www.pexels.com/photo/4161958/',search:true,hint:'直接输入关键词搜索，或粘摄影师主页（/@名字-数字）、单张作品页'},
-  flickr:{id:'flickr',label:'Flickr',tag:'摄影社区',group:'摄影图库',hosts:['flickr.com','www.flickr.com','live.staticflickr.com','flic.kr'],example:'https://www.flickr.com/photos/nasa/',search:true,hint:'直接输入关键词搜索，或粘摄影师主页 / 相册页 / 单张作品页'},
-  '500px':{id:'500px',label:'500px',tag:'高端摄影',group:'摄影图库',hosts:['500px.com','www.500px.com'],example:'https://500px.com/kellan',hint:'粘摄影师主页（500px.com/用户名）或作品页（/photo/编号）；关键词搜索站点没开放'},
+  pixiv:{id:'pixiv',summary:'插画与漫画创作社区，寻找角色和二次元参考',label:'Pixiv',tag:'二次元插画',group:'插画 · 动漫',hosts:['pixiv.net','www.pixiv.net'],example:'https://www.pixiv.net/artworks/151233234',hint:'作品页或画师主页（users/xxx），整站作品全抓'},
+  safebooru:{id:'safebooru',summary:'动漫插画图库，按标签寻找角色与场景参考',label:'Safebooru',tag:'动漫图库',group:'插画 · 动漫',hosts:['safebooru.org','www.safebooru.org','cdn.safebooru.org'],example:'https://safebooru.org/index.php?page=post&s=list&tags=landscape',search:true,home:'https://safebooru.org/',hint:'输入标签搜索（空格分隔多个标签），或粘标签列表页；单次最多 1000 张'},
+  yandere:{id:'yandere',summary:'高清动漫插画，适合角色立绘与画风参考',label:'Yande.re',tag:'动漫壁纸',group:'插画 · 动漫',hosts:['yande.re','www.yande.re','files.yande.re','assets.yande.re'],example:'https://yande.re/post?tags=touhou',search:true,hint:'输入标签搜索，或粘标签页；本机网络封了 yande.re 时自动用 Konachan 同源标签出图，结果标题会标明来源'},
+  konachan:{id:'konachan',summary:'动漫主题壁纸，寻找场景与构图灵感',label:'Konachan',tag:'动漫壁纸',group:'插画 · 动漫',hosts:['konachan.net','www.konachan.net','konachan.com'],example:'https://konachan.net/post?tags=landscape',search:true,home:'https://konachan.net/',hint:'输入标签搜索；请走 konachan.net（.com 有 Cloudflare 挑战）'},
+  wallhaven:{id:'wallhaven',summary:'高清壁纸图库，涵盖风景、插画与数字艺术',label:'Wallhaven',tag:'高清壁纸',group:'壁纸',hosts:['wallhaven.cc','www.wallhaven.cc','w.wallhaven.cc'],example:'https://wallhaven.cc/search?q=nature',search:true,home:'https://wallhaven.cc/',hint:'输入关键词搜索（支持 city night 多词），或粘搜索页 / 标签页'},
+  civitai:{id:'civitai',summary:'AI 绘图社区，浏览生成作品与风格灵感',label:'Civitai',tag:'AI 绘图',group:'AI 图库',hosts:['civitai.com','www.civitai.com','image.civitai.com'],example:'https://civitai.com/',home:'https://civitai.com/',hint:'公开图库接口，最多 1000 张'},
+  zcool:{id:'zcool',summary:'国内设计师社区，汇集视觉设计与原创作品',label:'站酷 ZCOOL',tag:'国内设计',group:'设计灵感',hosts:['zcool.com.cn','www.zcool.com.cn'],example:'https://www.zcool.com.cn/u/ZNjMyMjY0MDg=',home:'https://www.zcool.com.cn/discover/1',hint:'粘作品页（/work/…）、创作者主页（/u/…）或频道页（/discover/…），会自动带出作者，点作者名看他的作品'},
+  designspiration:{id:'designspiration',summary:'设计灵感图库，寻找配色、排版与视觉参考',label:'Designspiration',tag:'设计灵感',group:'设计灵感',hosts:['designspiration.com','www.designspiration.com'],example:'https://www.designspiration.com/',home:'https://www.designspiration.com/',hint:'缩略图自动升级到 736px'},
+  huaban:{id:'huaban',summary:'设计灵感采集平台，按画板整理创意参考',label:'花瓣 Huaban',tag:'灵感采集',group:'设计灵感',hosts:['huaban.com','www.huaban.com'],example:'https://huaban.com/boards/102664553',search:true,home:'插画',hint:'直接输入关键词搜索，或粘作者主页（/user/用户名）看全部画板、画板页（/boards/数字）'},
+  pinterest:{id:'pinterest',summary:'全球灵感画板，探索设计、艺术与生活创意',label:'Pinterest',tag:'灵感画板',group:'设计灵感',hosts:['pinterest.com','www.pinterest.com','pin.it'],example:'https://www.pinterest.com/search/pins/?q=nature',search:true,home:'inspiration',hint:'粘画板 / 作者 / 搜索页 / 直链，或直接输入关键词搜索'},
+  pexels:{id:'pexels',summary:'免费摄影图库，寻找实拍照片与场景参考',label:'Pexels',tag:'免费摄影',group:'摄影图库',hosts:['pexels.com','www.pexels.com','images.pexels.com'],example:'https://www.pexels.com/photo/4161958/',search:true,home:'https://www.pexels.com/search/nature/',hint:'直接输入关键词搜索，或粘摄影师主页（/@名字-数字）、单张作品页'},
+  flickr:{id:'flickr',summary:'摄影作品分享社区，浏览摄影师作品与相册',label:'Flickr',tag:'摄影社区',group:'摄影图库',hosts:['flickr.com','www.flickr.com','live.staticflickr.com','flic.kr'],example:'https://www.flickr.com/photos/nasa/',search:true,home:'https://www.flickr.com/explore',hint:'直接输入关键词搜索，或粘摄影师主页 / 相册页 / 单张作品页'},
+  '500px':{id:'500px',summary:'专业摄影社区，寻找人像、风光与创意摄影参考',label:'500px',tag:'高端摄影',group:'摄影图库',hosts:['500px.com','www.500px.com'],example:'https://500px.com/kellan',home:'https://500px.com/',hint:'粘摄影师主页（500px.com/用户名）或作品页（/photo/编号）；关键词搜索站点没开放'},
+  xiaohongshu:{id:'xiaohongshu',summary:'国内生活与设计灵感社区，找材质、配色、实拍与创作过程参考',label:'小红书',tag:'灵感社区',group:'设计灵感',hosts:['xiaohongshu.com','www.xiaohongshu.com','xhslink.com','xhslink.cn','rednote.com','www.rednote.com'],example:'https://www.xiaohongshu.com/explore',search:true,loginFor:'关键词搜索和博主主页',home:'https://www.xiaohongshu.com/explore',hint:'粘笔记链接或分享短链（要带 xsec_token）：免登录直接取全图；首页 /explore 免登录也能出推荐；搜关键词 / 看博主主页要先点「登录」——列表页走浏览器通道，登录后每次首搜会多等几秒'},
+  // 视频四站：与图站同一条解析链路（items 里 type:'video'，卡片渲染成 <video>），
+  // 但归在「视频素材」分组、只进视频模式的平台池 —— 图片模式里不该出现它们。
+  // hosts + paths 都要写：Pexels / Civitai / Pixabay 的图片站和视频站同域，
+  // 只靠域名会让 /videos/ 先命中图片站，直接回「找不到摄影师或作品编号」。
+  'pexels-video':{id:'pexels-video',kind:'video',summary:'免版权高清视频素材，适合实拍感镜头与背景动态',label:'Pexels 视频',tag:'免费视频',group:'视频素材',hosts:['pexels.com','www.pexels.com'],paths:['/video','/videos'],example:'https://www.pexels.com/videos/',search:true,home:'https://www.pexels.com/videos/',hint:'直接输入关键词搜索（英文效果更好），或粘摄影师主页 / 单条视频页'},
+  coverr:{id:'coverr',kind:'video',summary:'实拍与动画短片素材，多为 10 秒上下的循环镜头',label:'Coverr',tag:'循环镜头',group:'视频素材',hosts:['coverr.co','www.coverr.co'],example:'https://coverr.co/videos',search:true,home:'https://coverr.co/videos',hint:'直接输入关键词搜索；不填关键词就是热门视频流。付费素材会被跳过'},
+  'civitai-video':{id:'civitai-video',kind:'video',summary:'AI 生成的短视频，寻找风格化动态参考',label:'Civitai 视频',tag:'AI 视频',group:'视频素材',hosts:['civitai.com','www.civitai.com'],paths:['/videos'],example:'https://civitai.com/videos',search:false,home:'https://civitai.com/videos',hint:'粘作者主页（civitai.com/user/名字）看他的视频，或直接回车看最新视频；站点没有关键词检索维度'},
+  'pixabay-video':{id:'pixabay-video',kind:'video',summary:'免版权视频素材库，实拍与动画都有',label:'Pixabay 视频',tag:'免费视频',group:'视频素材',hosts:['pixabay.com','www.pixabay.com'],paths:['/videos'],example:'https://pixabay.com/videos/search/nature/',search:true,home:'https://pixabay.com/videos/',hint:'需要免费 API key：到 pixabay.com/api/docs 注册后填进 设置 → 平台模块 的 Pixabay 视频卡片，之后可关键词搜索、粘视频页'},
   // 后续艺术/设计类图站按同构签名在此追加（ArtStation 已走 IMAGE_SOURCES，不重复登记）
 });
+/**
+ * UI 元素平台注册表：产出的不是图片，而是可运行的代码（HTML + CSS）。
+ *
+ * 与图站分开的原因很实在：图站的下载器把每个条目当图片存进图片库，
+ * 缩略图、格式识别、对比预览全都按图片那套走。UI 元素要落成
+ * index.html + style.css 两个文件，预览是现场渲染的沙箱 iframe。
+ *
+ * hosts 决定「粘链接时命中谁」，与图站同一套路由机制。
+ */
+export const UI_SITES=Object.freeze({
+  uiverse:{id:'uiverse',summary:'社区 UI 组件库，按需取按钮、加载动画、开关等动效代码',label:'Uiverse',tag:'UI 组件',group:'UI 动效',hosts:['uiverse.io','www.uiverse.io'],example:'https://uiverse.io/alexruix/tame-fly-42',search:true,home:'https://uiverse.io/elements',hint:'粘元素页（uiverse.io/用户名/元素名）、创作者主页或分类页；也可直接搜关键词。免登录，下载得到 index.html + style.css'},
+});
+/** UI 元素平台的分组顺序。 */
+export const UI_GROUP_ORDER=['UI 动效'];
+const UI_GROUP_NOTES={'UI 动效':'可复制使用的界面组件与动效代码'};
+/** 按 group 派生分组清单（与图站同一套路，空组自动丢弃）。 */
+export const UI_SITE_GROUPS=UI_GROUP_ORDER
+  .map(name=>({name,note:UI_GROUP_NOTES[name]||'',sites:Object.values(UI_SITES).filter(site=>(site.group||'其他')===name)}))
+  .filter(group=>group.sites.length);
+/** UI 平台的链接路由（与图站同构，供前端粘链接时判命中）。 */
+export const UI_LINK_ROUTES=Object.values(UI_SITES).map(s=>({id:s.id,platform:s.id,label:s.label,test:url=>{const h=url.hostname.toLowerCase();return s.hosts.some(x=>h===x||h.endsWith('.'+x));}}));
+/** 给定链接返回命中的 UI 平台 id，否则 null。 */
+export const uiSiteFromUrl=url=>{
+  try{const host=new URL(String(url)).hostname.toLowerCase();const hit=Object.values(UI_SITES).find(s=>s.hosts.includes(host));return hit?hit.id:null;}catch{return null;}
+};
+export const isUiSite=id=>Boolean(UI_SITES[id]);
 /** 图站分组顺序与一句话简介；组名写在每条 PICTURE_SITES 的 group 上，这里只定展示次序，避免两处清单打架。 */
-export const PICTURE_GROUP_ORDER=['插画 · 动漫','壁纸','摄影图库','AI 图库','设计灵感','其他'];
+export const PICTURE_GROUP_ORDER=['插画 · 动漫','壁纸','摄影图库','AI 图库','设计灵感','视频素材','其他'];
 const PICTURE_GROUP_NOTES={
  '插画 · 动漫':'二次元插画、角色图集与同人作品',
  '壁纸':'高清 / 4K 壁纸与摄影背景',
  '摄影图库':'专业摄影社区与免版权高清图库',
  'AI 图库':'AI 生图作品与模型出图，可直接当参考',
  '设计灵感':'平面、UI 与作品集类灵感采集',
+ '视频素材':'免版权视频与 AI 短片，卡片可直接播放',
 };
 /** 按 group 派生分组清单（空组自动丢弃），设置页与任何列表都读它，不再手写第二份。 */
 export const PICTURE_SITE_GROUPS=PICTURE_GROUP_ORDER
   .map(name=>({name,note:PICTURE_GROUP_NOTES[name]||'',sites:Object.values(PICTURE_SITES).filter(site=>(site.group||'其他')===name)}))
   .filter(group=>group.sites.length);
+/** 同域多站（Pexels 图片 / 视频、Civitai 图片 / 视频、Pixabay 两站）靠路径区分：
+ *  site.paths 非空时只有路径命中才算这一站。没写 paths = 整个域名都归它。
+ *  路由表按「带路径的排前面」排序，否则 pexels.com/videos 会先命中图片站。 */
+const sitePathHit=(url,site)=>{
+ if(!site.paths||!site.paths.length)return true;
+ const p=url.pathname.toLowerCase();
+ return site.paths.some(x=>{const k=x.toLowerCase();return p===k||p.startsWith(k.endsWith('/')?k:`${k}/`);});
+};
+const siteHostHit=(url,site)=>{
+ const h=url.hostname.toLowerCase();
+ return site.hosts.some(x=>h===x||h.endsWith(`.${x}`));
+};
+const siteMatches=(url,site)=>siteHostHit(url,site)&&sitePathHit(url,site);
+/** 路径越具体越先试：视频站（hosts+paths）必须排在共用域名的图片站之前。 */
+const ROUTE_PRIORITY=Object.values(PICTURE_SITES).sort((a,b)=>(b.paths?.length?1:0)-(a.paths?.length?1:0));
 /** 由 PICTURE_SITES 自动派生链接路由，避免手写 host 列表与注册表脱节。支持子域名（如站酷 username.zcool.com.cn）。 */
-export const PICTURE_LINK_ROUTES=Object.values(PICTURE_SITES).map(s=>({id:s.id,platform:s.id,label:s.label,test:url=>{const h=url.hostname.toLowerCase();return s.hosts.some(x=>h===x||h.endsWith('.'+x));}}));
+export const PICTURE_LINK_ROUTES=ROUTE_PRIORITY.map(s=>({id:s.id,platform:s.id,label:s.label,test:url=>siteMatches(url,s)}));
 /** 给定链接返回命中的图站 id，否则 null（交给通用网页解析）。 */
 export const pictureSiteFromUrl=url=>{
-  try{const host=new URL(String(url)).hostname.toLowerCase();const hit=Object.values(PICTURE_SITES).find(s=>s.hosts.includes(host));return hit?hit.id:null;}catch{return null;}
+ try{const u=new URL(String(url));const hit=ROUTE_PRIORITY.find(s=>siteMatches(u,s));return hit?hit.id:null;}catch{return null;}
 };
 export const isPictureSite=id=>Boolean(PICTURE_SITES[id]);
 /** 图站下载任务的稳定 uid：必须是 32 位十六进制（服务端 uidPattern 校验）。 */
@@ -74,6 +125,8 @@ export const ORIGIN_COPY={
  kenney:'Kenney 的 CC0 资源包',
  freestylized:'FreeStylized 的风格化模型、天空盒和材质',
  polyfork:'Polyfork 的程序化低模（参数可调，商用免署名）',
+ simready:'NVIDIA SimReady 的 CC BY 4.0 USD 模型',
+ uiverse:'Uiverse 的社区 UI 动效组件',
 };
 
 export const PLATFORMS=[
@@ -81,13 +134,14 @@ export const PLATFORMS=[
   id:ALL,
   label:'全部平台',
   hint:'按统一题材同时检索各站能对上的资产',
-  feeds:['search','art','polyhaven','ambientcg','polypizza','kenney','freestylized','polyfork'],
+  feeds:['search','art','polyhaven','ambientcg','polypizza','kenney','freestylized','polyfork','simready'],
   placeholder:'搜索关键词或粘贴链接，例如 character、robot、props',
   suggestions:[['character','角色'],['robot','机器人'],['props','道具'],['weapon','武器'],['architecture','建筑']],
   // 全部平台只有一棵统一树：两平台共用一套分类 / 排序 / 范围，组头一键筛整组、叶子标注覆盖面。
   filters:['filters-merged'],
   note:'选中题材后，树下会写出这一轮会去哪些站。对不上的站不搜。',
  },
+ {id:'simready',label:'NVIDIA SimReady',description:'NVIDIA 仿真资源库，下载完整 USD 模型、贴图与材质依赖。',hint:'CC BY 4.0 · 原始 USD 资源',feeds:['simready'],filters:[],placeholder:'搜索英文名称，例如 chair、car、pole',suggestions:[['chair','椅子'],['car','汽车'],['pole','支架']],note:'保留完整 USD 与依赖目录；支持基础 USD 预览，暂不支持一键导入 Blender。'},
  {
   id:'sketchfab',
   description:'创作者分享的 3D 模型库，适合寻找角色、道具、建筑与动画资源。',
@@ -168,7 +222,37 @@ export const PLATFORMS=[
   suggestions:[['windmill','风车'],['crate','木箱'],['character','角色'],['tree','树'],['house','房屋']],
   filters:'filters-polyfork',
  },
+ {
+  // UI 元素平台：产出的不是 3D 模型，而是可直接复制使用的界面动效代码。
+  // 与模型平台分开一档 —— 它的卡片是「会动的代码」而不是一张图，
+  // 落盘产物也是 index.html + style.css，与模型下载完全不同一套。
+  id:'uiverse',
+  description:'社区 UI 组件库：按钮、加载动画、开关等动效代码，免登录直接复制使用。',
+  label:'Uiverse',
+  hint:'社区 UI 动效 · 免登录 · 下载即 index.html + style.css',
+  feeds:['uiverse'],
+  placeholder:'搜索 Uiverse 元素，例如 loader、button、switch',
+  suggestions:[['loader','加载动画'],['button','按钮'],['switch','开关'],['checkbox','复选框'],['tooltip','提示气泡']],
+  filters:'filters-uiverse',
+  note:'卡片直接渲染真实动效，不是截图；下载得到可独立运行的 HTML + CSS。',
+ },
 ];
+
+/**
+ * 「链接解析」虚拟平台：视频 / 文本这两个模式没有公开聚合源。
+ *
+ * 它们不该把用户踢去资产库（2026-11-12 用户反馈：在发现页点「文本 / 视频」被跳走），
+ * 但也确实没有站可以搜关键词 —— 于是给一枚虚拟平台，唯一入口是把页面 / 直链粘进搜索框。
+ * 它不进 PLATFORMS 清单：不参与模式池推导、不出现在设置页的平台开关里，
+ * 只在 platformPoolFor(linkOnly 模式) 与 platformById('link') 处出现。
+ * feeds 为空是刻意的：关键词检索对它无意义，真正的数据来自 discovery-feed 的 feeds.web。
+ */
+export const LINK_PLATFORM=Object.freeze({
+ id:'link',label:'链接解析',hint:'粘贴视频页 / 文档页 / 直链地址，解析成卡片',
+ feeds:[],filters:[],suggestions:[],picture:false,link:true,
+ placeholder:'粘贴视频页、文档页或直链地址，回车解析',
+ note:'视频 / 文本暂无公开聚合源：把页面或直链地址粘到上方搜索框，回车即可解析成卡片。',
+});
 
 /** 设置页卡片第二行的短标签（比 description 短，一行放得下）。 */
 export const PLATFORM_TAG={
@@ -180,11 +264,16 @@ export const PLATFORM_TAG={
  kenney:'3D + 2D 素材',
  freestylized:'风格化资源',
  polyfork:'程序化低模',
+ simready:'USD 仿真模型',
+ uiverse:'UI 动效组件',
 };
 /**
- * 每个平台能给出的内容：model = 可下载 / 转 3D 的资产，image = 图片。
- * 「模型 / 图片」两个模式键靠它决定下拉里该列谁 —— 图片模式下模型平台整条不出现，
- * 模型模式下图站也不出现。ArtStation / Poly Haven / ambientCG / Kenney 两边都算。
+ * 每个平台能给出的内容：model = 可下载 / 转 3D 的资产，image = 图片，video = 视频，ui = 界面代码。
+ * 「模型 / 图片 / 视频」三个模式键靠它决定下拉里该列谁 —— 图片模式下模型平台与视频站都不出现，
+ * 视频模式下只出现视频站。ArtStation / Poly Haven / ambientCG / Kenney 两边都算。
+ *
+ * UI 元素是第三类（code）：不是 3D 模型，也不是图片 —— 它是界面代码。
+ * 所以它只属于 ui 模式的下拉，其他模式的池子里都不出现，避免「选了它却搜不到目标」。
  */
 export const PLATFORM_KINDS={
  sketchfab:['model'],
@@ -195,8 +284,15 @@ export const PLATFORM_KINDS={
  kenney:['model','image'],
  freestylized:['model'],
  polyfork:['model'],
+ uiverse:['ui'],
+ 'pexels-video':['video'],
+ coverr:['video'],
+ 'civitai-video':['video'],
+ 'pixabay-video':['video'],
 };
-export const platformKinds=id=>PLATFORM_KINDS[id]||['model'];
+export const platformKinds=id=>PLATFORM_KINDS[id]||(PICTURE_SITES[id]?.kind==='video'?['video']:['model']);
+/** 视频站：卡片是 <video>，落盘是 mp4，与图片站共用解析链路但归另一个模式。 */
+export const isVideoSite=id=>platformKinds(id).includes('video');
 /** 平台官网：设置页每张卡片的「官网」跳转目标，与 PLATFORMS 的 id 一一对应。 */
 export const PLATFORM_HOME={
  sketchfab:'https://sketchfab.com',
@@ -207,6 +303,8 @@ export const PLATFORM_HOME={
  kenney:'https://kenney.nl',
  freestylized:'https://freestylized.com',
  polyfork:'https://polyfork.dev',
+ simready:'https://hf-mirror.com/datasets/nvidia/simready-assets',
+ uiverse:'https://uiverse.io',
 };
 /**
  * 「既能出 3D 又能出图」的平台：3D 分组里已经有一张卡，图站区再列一张镜像卡（tag 换成图片视角），
@@ -226,18 +324,25 @@ export const DEFAULT_PLATFORM=ALL;
 export const pictureSiteSearchable=id=>Boolean(PICTURE_SITES[id]?.search);
 /** 需要登录态（或过一次人机验证）才放行的站点：这些站显示「登录」按钮。
  *  登录窗口里登录 / 验证完，cookie 自动入库；之后解析走纯 HTTP，不再每次开浏览器。 */
-export const PICTURE_LOGIN_SITES=new Set(['zcool','huaban','pinterest','pixiv','civitai','flickr','500px','pexels','designspiration','artstation']);
+export const PICTURE_LOGIN_SITES=new Set(['zcool','huaban','pinterest','pixiv','civitai','flickr','500px','pexels','designspiration','artstation','xiaohongshu']);
 export const pictureSiteLoginable=id=>PICTURE_LOGIN_SITES.has(String(id||''));
+/** 图站的「首页推荐」入口：切到这个平台时先自动解析这一屏，别让结果区只剩一段说明文字。
+ *  返回空串 = 这个站没有可靠的推荐入口（例如 Pixiv 的首页作品要登录态），保持原来的说明卡。 */
+export const pictureSiteHome=id=>PICTURE_SITES[id]?.home||'';
 
 /** 图站作为「平台」时的形状：能否搜索决定占位符与说明行 —— 能搜的站让用户直接打词，
  *  不能搜的站明确告诉他「把页面地址粘进来」，避免在框里打词却一句提示都没有。 */
 export const picturePlatformById=id=>{
  const site=PICTURE_SITES[id];
  if(!site)return null;
- return {
-  id:site.id,label:site.label,description:site.hint,
-  hint:`${site.label} · ${site.search?'关键词搜索 / 粘贴链接':'粘贴链接解析'}`,
-  feeds:[],filters:[],suggestions:[],picture:true,search:Boolean(site.search),
+  return {
+   id:site.id,label:site.label,description:site.hint,
+   hint:site.summary||site.tag,kind:site.kind||'',
+   feeds:[],filters:[],suggestions:[],picture:true,search:Boolean(site.search),
+   // 登录两件套：能不能登（无登录入口的站不显示登录键），以及「登了才能用什么」。
+   // loginFor 是站点自己的说法（小红书＝「关键词搜索和博主主页」），展示层不再替它编理由。
+   login:pictureSiteLoginable(site.id),
+   loginFor:site.loginFor||'',
   note:site.search
    ?'搜索：直接输入关键词回车；也可以粘作品页 / 作者主页 / 画板页地址。'
    :'按链接解析：把作品页 / 标签页地址粘到搜索框，回车即可。',
@@ -246,13 +351,15 @@ export const picturePlatformById=id=>{
    :`粘贴 ${site.label} 的作品页 / 标签页链接${site.example?`，例如 ${site.example}`:''}`,
  };
 };
-/** 图片模式逐站浏览，不提供跨站整合的「全部平台」选项。 */
+/** 图片 / 视频模式逐站浏览，不提供跨站整合的「全部平台」选项。 */
 export const platformsForMode=mode=>{
- const list=PLATFORMS.filter(item=>item.id===ALL?mode!=='image':!mode||platformKinds(item.id).includes(mode));
- if(mode==='image')for(const site of Object.values(PICTURE_SITES))list.push(picturePlatformById(site.id));
+ // 「全部平台」只属于跨站检索：无模式 / 模型。图片与视频都逐站浏览，UI 只有 Uiverse 一站。
+ const list=PLATFORMS.filter(item=>item.id===ALL?(!mode||mode==='model'):(!mode||platformKinds(item.id).includes(mode)));
+ if(mode==='image')for(const site of Object.values(PICTURE_SITES))if(site.kind!=='video')list.push(picturePlatformById(site.id));
+ if(mode==='video')for(const site of Object.values(PICTURE_SITES))if(site.kind==='video')list.push(picturePlatformById(site.id));
  return list;
 };
-export const platformById=id=>PLATFORMS.find(platform=>platform.id===id)||picturePlatformById(id)||PLATFORMS[0];
+export const platformById=id=>id==='link'?LINK_PLATFORM:(PLATFORMS.find(platform=>platform.id===id)||picturePlatformById(id)||PLATFORMS[0]);
 
 /**
  * 卡片上给「来源」用的名字。
@@ -262,7 +369,9 @@ export const platformById=id=>PLATFORMS.find(platform=>platform.id===id)||pictur
  * 'Sketchfab'，于是 Poly Haven 的资产（既没有面数也没有点赞数）也顶着 Sketchfab 的名字。
  * 需要「这个来源叫什么」时一律问这里，不认识的平台给中性叫法，绝不冒充别家。
  */
-export const platformLabel=id=>PLATFORMS.find(platform=>platform.id===(id||'sketchfab'))?.label||PICTURE_SITES[id]?.label||'3D 资产';
+export const platformLabel=id=>id==='link'
+ ?LINK_PLATFORM.label
+ :(PLATFORMS.find(platform=>platform.id===(id||'sketchfab'))?.label||PICTURE_SITES[id]?.label||'3D 资产');
 
 /**
  * A *model* download enqueue should carry which `kind`, given the picked models. Returns `null`
@@ -277,8 +386,11 @@ export const jobKindOf=models=>{
   if(set.has('polypizza')&&set.size===1)return 'polypizza';
   if(set.has('kenney')&&set.size===1)return 'kenney';
   if(set.has('freestylized')&&set.size===1)return 'freestylized';
+  if(set.has('simready')&&set.size===1)return 'simready';
   if(set.has('polyfork')&&set.size===1)return 'polyfork';
   if(set.has('ambientcg')&&set.size===1)return 'ambientcg';
+  // UI 元素：落的是代码（index.html + style.css），不是图片也不是模型。
+  if(set.has('uiverse')&&set.size===1)return 'uielement';
   if(set.has('artstation')&&set.size===1)return 'artstation';
   if(set.size===1)return 'sketchfab';
   return null;
@@ -293,6 +405,7 @@ const host=(name,suffix)=>name===suffix||name.endsWith(`.${suffix}`);
  */
 export const LINK_ROUTES=[
  ...PICTURE_LINK_ROUTES,
+ ...UI_LINK_ROUTES,
  {id:'artstation',platform:'artstation',label:'ArtStation 作品页',test:url=>host(url.hostname,'artstation.com')&&/^\/artwork\//i.test(url.pathname)},
  // 作者页单独分类：用户粘 "https://sketchfab.com/用户名" 想要的是「这个作者的全部模型」，
  // 它在 scanPage 里已经能解析（/v3/models?user=xxx），但笼统叫「Sketchfab 页面」时

@@ -212,8 +212,29 @@ export async function polyhavenRenders(id,{signal,open=openPublic}={}){
  if(r.status<200||r.status>=300){try{r.stream.destroy();}catch{}throw Error(`Poly Haven 渲染图清单返回 HTTP ${r.status}`);}
  const table=JSON.parse(await readStreamText(r));
  const names=Object.keys(table&&typeof table==='object'?table:{}).filter(name=>/\.(?:png|jpe?g|webp)$/i.test(name));
- if(!names.length)return [{url:`${CDN}/asset_img/primary/${encoded}.png`,title:assetId.slice(0,120),rendition:'original',source:`${API}/renders/${encoded}`}];
- return names.map(name=>({url:`${CDN}/asset_img/renders/${encoded}/${encodeURIComponent(name)}`,title:renderTitle(name),rendition:'original',source:`${API}/renders/${encoded}`}));
+  if(!names.length)return [{url:`${CDN}/asset_img/primary/${encoded}.png`,title:assetId.slice(0,120),rendition:'original',source:`${API}/renders/${encoded}`}];
+  return names.map(name=>({url:`${CDN}/asset_img/renders/${encoded}/${encodeURIComponent(name)}`,title:renderTitle(name),rendition:'original',source:`${API}/renders/${encoded}`}));
+}
+/**
+ * 取单个 Poly Haven 资产的「分类 + 标签」用于图片下载打标。
+ * 上游没有单资产详情接口：categories / tags 都在按 type 拉的全量 map 里，renders 接口不含它们。
+ * 三种 type 各试一遍（命中即停）；loadAssets 带 5 分钟缓存，真机首次最多 3 次请求、之后同类型零成本。
+ * 找不到就回空，不影响图片下载本身。
+ */
+export async function polyhavenAssetMeta(assetId,{signal,open=openPublic}={}){
+  const id=String(assetId||'').trim();
+  if(!id)return {categories:[],tags:[]};
+  for(const type of ['models','textures','hdris']){
+    try{
+      const {payload}=await loadAssets(type,{signal,open});
+      const a=payload&&payload[id];
+      if(a)return {
+        categories:Array.isArray(a.categories)?a.categories.map(String).slice(0,12):[],
+        tags:Array.isArray(a.tags)?a.tags.map(String).slice(0,24):[],
+      };
+    }catch{/* 某个 type 拉取失败不阻断其它 type */}
+  }
+  return {categories:[],tags:[]};
 }
 const RES_EDGES={'1k':1024,'2k':2048,'4k':4096,'8k':8192};
 /** Pick the best-resolution tier: highest when maxEdge<=0, else the largest tier not exceeding it. */

@@ -7,6 +7,7 @@
 // 单飞串行：pin-grabber 全局只有一个 STATE，一次只能跑一个任务。用 chain 把并发 resolve /
 // related 排成队列，每个任务在 fn 内读走 images 快照后才放行下一个，避免 STATE 被覆盖。
 import { ensurePinGrabber, PIN_GRABBER_URL } from './pinterest-launcher.mjs';
+import { tagList } from './tag-list.mjs';
 
 const COLLECT_TIMEOUT = 90_000;
 const STATUS_POLL_INTERVAL = 800;
@@ -59,13 +60,25 @@ const pinCacheKey = (mode, text) => `${mode}:${text}`;
 
 function toItems(images) {
   return (images || [])
-    .map((im) => ({
-      url: im.orig || im.preview,
-      title: '',
-      width: Number(im.w) || 0,
-      height: Number(im.h) || 0,
-      pid: im.pid || null,
-    }))
+    .map((im) => {
+      const title = String(im.title || '');
+      const desc = String(im.description || '');
+      const board = String(im.board || '');
+      // Pinterest 没有 tags 接口，但 pin 资源里的「分类 / 关联信息」能当标签：
+      //   · board 名      —— 画板分类（Interior Ideas / 食谱 …），最像分类
+      //   · 描述里的 #话题 —— 作者显式打的标签
+      // 整句标题 / 描述不按词拆开（避免把一句话拆成几十个噪声标签），只取显式 #话题。
+      const hashtags = `${title} ${desc}`.match(/(?:^|\s)#([^\s#@]+)/g) || [];
+      const tags = tagList([board, ...hashtags.map((t) => t.trim().replace(/^#/, ''))].filter(Boolean));
+      return {
+        url: im.orig || im.preview,
+        title: title || board || '',
+        width: Number(im.w) || 0,
+        height: Number(im.h) || 0,
+        pid: im.pid || null,
+        tags,
+      };
+    })
     .filter((i) => i.url);
 }
 

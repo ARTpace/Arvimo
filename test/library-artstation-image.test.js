@@ -354,3 +354,79 @@ test('fetchProjectJson reads the endpoint the same way the Marmoset resolver doe
  assert.equal(artstationHash(ARTWORK),HASH);
  assert.equal(artstationUid('not a hash'),null);
 });
+
+// ---- 并发与容错：与图站图片包对齐 ----
+//
+// 这条流水线原来是 for 循环串行、一张失败就抛死整包。图站那侧早就改成「并发 + 单张跳过 +
+// 体积边下边判」，ArtStation 的图片作品同样是几十张的批量，没道理维持旧语义。
+
+test('作品图片会并发下载，但清单仍按计划顺序',async()=>{
+ const root=await temp();
+ try{
+  const output=path.join(root,'staging','job.zip.part');
+  const inner=fakeOpen({bodies:pngBodies()});
+  let live=0,peak=0;
+  // 每条图片请求故意慢 60ms：串行时峰值只会是 1，并发才看得到 >1。
+  const open=async url=>{
+   if(/\/projects\/[A-Za-z0-9]+\.json$/.test(String(url)))return inner(url);
+   live++;peak=Math.max(peak,live);
+   try{await new Promise(r=>setTimeout(r,60));return await inner(url);}
+   finally{live--;}
+  };
+  const result=await runArtstationImageJob({uid:UID,url:ARTWORK,output,deliver:'zip',workRoot:root,open});
+  assert.equal(result.imageCount,3);
+  assert.ok(peak>=2,`三张慢图应该同时在飞，实际峰值 ${peak}`);
+  assert.ok(peak<=6,`并发不能超过上限，实际峰值 ${peak}`);
+  const verification=await verifyArchive(output,{uid:UID});
+  assert.deepEqual(verification.images.map(i=>i.name),[
+   'images/01-32829644.png','images/02-Mother Witch.png','images/03-Stamped.png',
+  ],'清单要按 01/02/03 计划顺序，不能按谁先下完');
+ }finally{await fsp.rm(root,{recursive:true,force:true});}
+});
+
+test('单张取不回来只跳过并记 failedCount，不判死整包',async()=>{
+ const root=await temp();
+ try{
+  const output=path.join(root,'staging','job.dir');
+  // 第一张回 404：其余两张照常下完，包必须成功。
+  const bodies=Object.fromEntries(FETCHABLE.slice(1).map(u=>[u,fixturePng()]));
+  const result=await runArtstationImageJob({uid:UID,url:ARTWORK,output,deliver:'folder',workRoot:root,open:fakeOpen({bodies})});
+  assert.equal(result.imageCount,2);
+  assert.equal(result.failedCount,1);
+  assert.equal(result.truncatedCount,0);
+  const info=JSON.parse(await fsp.readFile(path.join(output,'info.json'),'utf8'));
+  assert.equal(info.imageCount,2);
+  assert.equal(info.failedCount,1,'少了几张要写进清单，别让人以为作者只传了两张');
+  const verification=await verifyFolder(output,{uid:UID});
+  assert.equal(verification.images.length,2);
+ }finally{await fsp.rm(root,{recursive:true,force:true});}
+});
+
+test('一张都取不回来时必须失败，并带上真实原因',async()=>{
+ const root=await temp();
+ try{
+  await assert.rejects(
+   runArtstationImageJob({uid:UID,url:ARTWORK,output:path.join(root,'x.zip'),deliver:'zip',workRoot:root,open:fakeOpen({})}),
+   /没有取到任何作品图片/,
+  );
+ }finally{await fsp.rm(root,{recursive:true,force:true});}
+});
+
+test('体积到上限就停并报告剩余张数，而不是下完再作废',async()=>{
+ const root=await temp();
+ try{
+  const output=path.join(root,'staging','job.dir');
+  const png=fixturePng();
+  const result=await runArtstationImageJob({
+   uid:UID,url:ARTWORK,output,deliver:'folder',workRoot:root,
+   open:fakeOpen({bodies:pngBodies()}),maxBytes:png.length*2-1,
+  });
+  // 并发时上限判定会粗一点：同时在飞的几张都会先通过检查，最多多下 2 张。
+  assert.ok(result.imageCount>=2&&result.imageCount<=3,'到上限就停，已下到的照常成包');
+  assert.equal(result.imageCount+result.truncatedCount,3,'下到的 + 没下的 = 全部，一张都不能凭空消失');
+  const info=JSON.parse(await fsp.readFile(path.join(output,'info.json'),'utf8'));
+  assert.equal(info.truncatedCount??0,result.truncatedCount);
+  const verification=await verifyFolder(output,{uid:UID});
+  assert.equal(verification.images.length,result.imageCount);
+ }finally{await fsp.rm(root,{recursive:true,force:true});}
+});

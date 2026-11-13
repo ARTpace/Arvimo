@@ -8,9 +8,10 @@
 import {isSketchfabHost,publicJson} from './public-http.mjs';
 import {fetchProjectJson,projectImageAssets,project3dAssets} from './artstation-project.mjs';
 import {downloadUrl as artstationDownloadUrl} from './artstation-cdn.mjs';
-import {polyhavenRenders} from './polyhaven.mjs';
+import {polyhavenRenders,polyhavenAssetMeta} from './polyhaven.mjs';
 import {ambientcgRenders} from './ambientcg.mjs';
 import {collectPictureAssets,isPictureSite} from './picture-sites.mjs';
+import {tagList} from './tag-list.mjs';
 
 /** How many pictures one asset may contribute. Real uploads sit far below this; anything larger is
  *  a collected gallery and is truncated rather than silently queued for gigabytes. */
@@ -65,7 +66,7 @@ export const IMAGE_SOURCES=Object.freeze({
       const data=await json(`https://api.sketchfab.com/v3/models/${uid}`,{signal});
       const preview=largestSketchfabPreview(data);
       if(!preview)throw Error('这个 Sketchfab 模型没有提供公开图片');
-      return {items:[preview],skipped:[],title:trimmed(data?.name),author:authorName(data),cover:preview.url,source:`https://api.sketchfab.com/v3/models/${uid}`,rendition:'original'};
+      return {items:[preview],skipped:[],title:trimmed(data?.name),author:authorName(data),tags:tagList(data?.tags),cover:preview.url,source:`https://api.sketchfab.com/v3/models/${uid}`,rendition:'original'};
     },
   },
   artstation:{
@@ -78,7 +79,7 @@ export const IMAGE_SOURCES=Object.freeze({
       const planned=planArtstationImages(projectImageAssets(json));
       const scenes=project3dAssets(json);
       if(!planned.items.length&&!scenes.length)throw Error('这个作品没有可预览的图片或 3D 场景');
-      return {...planned,scenes,title:trimmed(json.title),author:trimmed(json.user?.full_name||json.user?.username),authorUrl:json.user?.username?`https://www.artstation.com/${encodeURIComponent(json.user.username)}`:'',description:trimmed(json.description),tags:(json.tags||[]).map(tag=>typeof tag==='string'?tag:tag.name).filter(Boolean),cover:planned.items[0]?.url||null,source:typeof url==='string'?url:null,rendition:'large'};
+      return {...planned,scenes,title:trimmed(json.title),author:trimmed(json.user?.full_name||json.user?.username),authorUrl:json.user?.username?`https://www.artstation.com/${encodeURIComponent(json.user.username)}`:'',description:trimmed(json.description),tags:tagList(json.tags),cover:planned.items[0]?.url||null,source:typeof url==='string'?url:null,rendition:'large'};
     },
   },
   polyhaven:{
@@ -90,7 +91,11 @@ export const IMAGE_SOURCES=Object.freeze({
       const list=await polyhavenRenders(assetId,{signal,open});
       if(!list.length)throw Error('这个 Poly Haven 资产暂时没有提供可下载图片');
       const first=list[0]||{};
-      return {items:list.map(x=>({url:x.url,title:x.title||null,width:null,height:null})),skipped:[],title:String(assetId).slice(0,120),author:'Poly Haven',cover:first?.url||null,source:first?.source||null,rendition:'original'};
+      // Poly Haven 资产的 categories（如 Furniture/Seating/Chairs 路径串）与 tags 是最现成的
+      // 「分类 / 关联信息 → 标签」来源；renders 接口不含它们，这里单独补一次元数据查询。
+      const meta=await polyhavenAssetMeta(assetId,{signal,open});
+      const tags=tagList([...(meta.categories||[]),...(meta.tags||[])]);
+      return {items:list.map(x=>({url:x.url,title:x.title||null,width:null,height:null,tags})),skipped:[],title:String(assetId).slice(0,120),author:'Poly Haven',cover:first?.url||null,source:first?.source||null,rendition:'original',tags};
     },
   },
   ambientcg:{
@@ -102,7 +107,9 @@ export const IMAGE_SOURCES=Object.freeze({
       const list=await ambientcgRenders(assetId,{signal,open});
       if(!list.length)throw Error('这个 ambientCG 材质暂时没有提供可下载图片');
       const first=list[0]||{};
-      return {items:list.map(x=>({url:x.url,title:x.title||null,width:null,height:null})),skipped:[],title:String(assetId).slice(0,120),author:'ambientCG',cover:first?.url||null,source:first?.source||null,rendition:'original'};
+      // ambientcgRenders 已把素材自带 tags 一并取回；逐图与结果顶层都带上，
+      // 下载包 info.json 的「逐图 + 顶层」两路都会收进去。
+      return {items:list.map(x=>({url:x.url,title:x.title||null,width:null,height:null,tags:x.tags})),skipped:[],title:String(assetId).slice(0,120),author:'ambientCG',cover:first?.url||null,source:first?.source||null,rendition:'original',tags:first?.tags};
     },
   },
 });
@@ -110,7 +117,14 @@ export const IMAGE_SOURCES=Object.freeze({
 /** Ask one platform for the pictures of one asset. The registry is the whole dispatch. */
 export async function collectImageAssets(platform,{uid,url,assetId}={},options={}){
   // 图站抓取（素材下载器整合）：命中 PICTURE_SITES 走独立注册表，否则回落 3D 资产图片源。
-  if(isPictureSite(platform))return collectPictureAssets(platform,{url},options);
+  // 图站结果里混着视频（Civitai 的 mp4 投稿）：预览层要播它，但图片库只收图片，
+  // 否则 mp4 会被当成 jpg 存进库里，后面缩略图/对比这些流程全部报错。
+  if(isPictureSite(platform)){
+    const data=await collectPictureAssets(platform,{url},options);
+    const all=Array.isArray(data.items)?data.items:[];
+    const items=all.filter(item=>item.type!=='video');
+    return {...data,items};
+  }
   const source=IMAGE_SOURCES[platform];
   if(!source)throw Error('这个来源暂时不支持下载图片');
   return {...(await source.resolve({uid,url,assetId},options)),platform:source.id,client:source.client,label:source.label};

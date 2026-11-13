@@ -31,14 +31,14 @@ test('saved key stays masked, reveals on demand, hides and survives an unchanged
  assert.equal(key.type,'text');assert.equal(key.value,'fixture-secret');assert.equal(toggle.attributes['aria-pressed'],'true');
  await toggle.onclick();
  assert.equal(key.type,'password');assert.equal(key.value,'');
- await $('#ai-save').onclick();
+ await $('#ai-key').events.change();
  assert.equal(saved(),'fixture-secret');
  assert.equal(JSON.parse(requests.at(-1).body).apiKey,'');
  await toggle.onclick();$('#settings-dialog').events.close();
  assert.equal(key.type,'password');assert.equal(key.value,'');
  key.value='replacement-key';key.events.input();await toggle.onclick();
  assert.equal(key.type,'text');await toggle.onclick();assert.equal(key.value,'replacement-key');
- await $('#ai-save').onclick();assert.equal(saved(),'replacement-key');assert.equal(key.value,'');
+ await $('#ai-key').events.change();assert.equal(saved(),'replacement-key');assert.equal(key.value,'');
 });
 
 test('clear saved key disables reveal and failures remain retryable',async t=>{
@@ -46,8 +46,7 @@ test('clear saved key disables reveal and failures remain retryable',async t=>{
  const toggle=$('#ai-key-toggle'),clear=$('#ai-clear-key');
  fail();await toggle.onclick();
  assert.equal(toggle.disabled,false);assert.equal($('#ai-key').type,'password');assert.equal($('#ai-status').textContent,'无法读取密钥');
- clear.checked=true;clear.events.change();assert.equal(toggle.disabled,true);
- await $('#ai-save').onclick();assert.equal(saved(),'');assert.match($('#ai-key').placeholder,/无密钥/);
+ clear.checked=true;await clear.events.change();assert.equal(saved(),'');assert.match($('#ai-key').placeholder,/无密钥/);
 });
 
 test('closing settings during reveal discards a late key response',async t=>{

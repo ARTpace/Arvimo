@@ -1,3 +1,5 @@
+import {icon} from './icon-set.js';
+import {mergeAutoTags} from './auto-tags.js';
 // ponytail: AI 标签按资产 UID 单独保存，搜索结果刷新不会覆盖平台标签或本地补充。
 export function mergeTags(...groups){
  const seen=new Set(),tags=[];
@@ -8,7 +10,9 @@ export function mergeTags(...groups){
  }
  return tags;
 }
-export function tagsFor(state,model){return mergeTags(model.tags||[],state.aiTags?.[model.uid]||[],state.userTags?.[model.uid]||[]);}
+/** 客观标签（画板 / 平台分类 / 话题 / 来源）虚拟派生，不写入 state：
+ *  历史资产无需回填或重新收藏也能立即显示，改配置即可全库撤销（同 Hydrus 的 parent 展开）。 */
+export function tagsFor(state,model){return mergeAutoTags(mergeTags(model.tags||[],state.aiTags?.[model.uid]||[],state.userTags?.[model.uid]||[]),model);}
 export function addAITags(state,model,incoming){
  const original=mergeTags(model.tags||[]),before=mergeTags(state.aiTags?.[model.uid]||[]);
  const originalKeys=new Set(original.map(tag=>tag.toLocaleLowerCase()));
@@ -74,7 +78,7 @@ export function tagPanel(state,model,esc){
  const platformKeys=new Set(platform.map(tag=>tag.toLocaleLowerCase()));
  const ai=mergeTags(state.aiTags?.[model.uid]||[]).filter(tag=>!platformKeys.has(tag.toLocaleLowerCase()));
  const user=userTagsFor(state,model);
- const chip=(tag,kind)=>`<button type="button" class="tag-chip ${kind}" data-tag="${esc(tag)}">${kind==='ai'?'✦ ':''}${esc(tag)}${kind==='mine'?`<span class="tag-x" data-remove-tag="${esc(tag)}" title="移除这个标签" aria-label="移除标签 ${esc(tag)}">×</span>`:''}</button>`;
- const stars=[1,2,3,4,5].map(n=>`<button type="button" class="star${n<=meta.rating?' on':''}" data-rate="${n}" data-uid="${esc(model.uid)}" title="${n} 星" aria-label="${n} 星">★</button>`).join('');
- return `<section class="asset-tags" data-asset-tags="${esc(model.uid)}"><div class="tag-list">${platform.map(t=>chip(t,'src')).join('')}${ai.map(t=>chip(t,'ai')).join('')}${user.map(t=>chip(t,'mine')).join('')}<button type="button" class="secondary ai-tag-button" data-action="ai-tags" data-uid="${esc(model.uid)}" title="补充 AI 标签并自动保存，保留原有标签">✦ AI标签</button></div><div class="tag-add-row"><input type="text" class="tag-add-input" data-user-tag-input="${esc(model.uid)}" placeholder="添加我的标签，回车确认" maxlength="40" autocomplete="off"><button type="button" class="secondary" data-action="add-user-tag" data-uid="${esc(model.uid)}">添加</button></div><div class="asset-rate-row"><span class="rate-label">我的评分</span><span class="rate-stars">${stars}</span>${meta.rating?`<button type="button" class="text-button rate-clear" data-rate="0" data-uid="${esc(model.uid)}">清除</button>`:''}</div><textarea class="asset-note" data-note-for="${esc(model.uid)}" rows="2" maxlength="2000" placeholder="记一句：用在哪、要注意什么…">${esc(meta.note)}</textarea></section>`;
+ const chip=(tag,kind)=>`<button type="button" class="tag-chip ${kind}" data-tag="${esc(tag)}">${kind==='ai'?icon('sparkle'):''}${esc(tag)}${kind==='mine'?`<span class="tag-x" data-remove-tag="${esc(tag)}" title="移除这个标签" aria-label="移除标签 ${esc(tag)}">×</span>`:''}</button>`;
+ const stars=[1,2,3,4,5].map(n=>`<button type="button" class="star${n<=meta.rating?' on':''}" data-rate="${n}" data-uid="${esc(model.uid)}" title="${n} 星" aria-label="${n} 星">${icon('star')}</button>`).join('');
+ return `<section class="asset-tags" data-asset-tags="${esc(model.uid)}"><div class="tag-list">${platform.map(t=>chip(t,'src')).join('')}${ai.map(t=>chip(t,'ai')).join('')}${user.map(t=>chip(t,'mine')).join('')}<button type="button" class="secondary ai-tag-button" data-action="ai-tags" data-uid="${esc(model.uid)}" title="补充 AI 标签并自动保存，保留原有标签">${icon('sparkle')} AI标签</button></div><div class="tag-add-row"><input type="text" class="tag-add-input" data-user-tag-input="${esc(model.uid)}" placeholder="添加我的标签，回车确认" maxlength="40" autocomplete="off"><button type="button" class="secondary" data-action="add-user-tag" data-uid="${esc(model.uid)}">添加</button></div><div class="asset-rate-row"><span class="rate-label">我的评分</span><span class="rate-stars">${stars}</span>${meta.rating?`<button type="button" class="text-button rate-clear" data-rate="0" data-uid="${esc(model.uid)}">清除</button>`:''}</div><textarea class="asset-note" data-note-for="${esc(model.uid)}" rows="2" maxlength="2000" placeholder="记一句：用在哪、要注意什么…">${esc(meta.note)}</textarea></section>`;
 }

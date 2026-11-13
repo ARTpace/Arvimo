@@ -19,6 +19,11 @@ export async function recoverDownloads(jobs,roots,{onSkipped=()=>{},dismissed=ne
   for(const entry of entries){
    if(entry.isSymbolicLink()||entry.name.startsWith('.'))continue;
    const file=path.join(dir,entry.name),folder=entry.isDirectory();
+   // 「只入库」写出的远程收藏卡只有元数据（status:'remote'），没有可恢复的下载内容：
+   // 交给校验器只会以「清单里声明的图片不存在」失败，在启动日志里刷一行没用的跳过记录。
+   if(folder){
+    try{if(JSON.parse(fs.readFileSync(path.join(file,'info.json'),'utf8'))?.status==='remote')continue;}catch{/* 没有 info.json 或读不动：照常往下走 */}
+   }
    if(folder&&!fs.existsSync(path.join(file,'info.json'))){await scan(root,file,depth+1);continue;}
    if(!folder&&!/\.zip$/i.test(entry.name)||seen.has(canonicalPath(file))||dismissed.has(canonicalPath(file)))continue;
    try{

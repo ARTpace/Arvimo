@@ -268,10 +268,14 @@ test('GET /api/ambientcg/preview serves the lazy resolution behind the local mar
 test('the client payload whitelist carries assetId/hasMarmoset through to the queue snapshot',()=>{
  const card={uid,assetId:'Ground054',platform:'ambientcg',name:'Ground 054',author:'ambientCG',license:'CC0 1.0 通用公共领域贡献',thumbnail:'https://acg-media.struffelproductions.com/x.jpg',downloadable:true,url:'https://ambientcg.com/a/Ground054',viewerUrl:'https://releases.pbr.one/main/material-shading.html#ok',maps:['color'],tags:['sand']};
  const wire=modelPayload(card);
- // 队列键字段必须活着上线；展示字段（url/viewerUrl/maps/tags）不进 POST。
+ // 队列键字段必须活着上线；展示字段（viewerUrl/maps）不进 POST。
+ // `url` 例外：图片任务要靠它区分 ArtStation 作品页与图站链接，所以它一直在白名单里。
  assert.equal(wire.assetId,'Ground054');
  assert.equal(wire.platform,'ambientcg');
- assert.equal('url' in wire,false);assert.equal('viewerUrl' in wire,false);
+ assert.equal('viewerUrl' in wire,false);assert.equal('maps' in wire,false);
+ // `tags` 也必须过：源站抓不到标签的平台（Kenney / Poly Pizza / 花瓣…）全靠库内这组标签
+ // 写进下载包的 info.json，丢了它下载包里就一个标签都没有。
+ assert.deepEqual(wire.tags,['sand']);
  // 抽出的载荷直接过服务端快照——这正是点击下载时走的那条路径，不再报“资产 ID 缺失”。
  assert.equal(modelSnapshot(wire,'ambientcg').assetId,'Ground054');
  // ArtStation 的 2D 标记同理：丢了它，纯图片作品会被派去 Marmoset 转换器。

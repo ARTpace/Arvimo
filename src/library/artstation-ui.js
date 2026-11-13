@@ -107,12 +107,15 @@ async function openPreview(model){
  $('#model-details').innerHTML=`<div class="eyebrow">MARMOSET VIEWER</div><h2>${esc(model.name)}</h2><p class="author-name">by ${esc(model.author)}</p><div class="details-stats"><div><strong>${esc(model.artId||'—')}</strong><span>作品标识</span></div><div><strong>${esc((model.username||'—').slice(0,12))}</strong><span>作者账号</span></div></div><div class="detail-license"><strong>${esc(model.license)}</strong><a href="${esc(artwork)}" target="_blank" rel="noopener noreferrer">在 ArtStation 打开作品 ${icon('external')}</a><p>场景来自作品页内嵌的 Marmoset Viewer；导出任务与 Sketchfab 共用同一个下载管理与校验流程。</p></div><button class="secondary" data-action="collect" data-uid="${esc(model.uid)}">${icon('folder')}加入我的模型库</button><button class="primary" data-action="download" data-uid="${esc(model.uid)}">${icon('download')}下载并转换</button><a class="source-link" href="${esc(artwork)}" target="_blank" rel="noopener noreferrer">ArtStation 作品页 ${icon('external')}</a>`;
  $('#viewer').removeAttribute('src');
  $('#preview-dialog').showModal();
- const hint=$('.viewer-hint');
- hint.textContent='正在识别内嵌的 Marmoset 场景…';
+ // 舞台切换见 library-view.js 的 showFrameStage：iframe 在 index.html 里默认 hidden，
+ // 这条路径不走 gltfPreview，必须自己放出来，否则弹窗里只剩黑底和「正在加载模型…」。
+ const frame=$('#viewer'),stageCanvas=document.getElementById('viewer-canvas'),stageState=document.getElementById('state');
+ if(stageCanvas)stageCanvas.hidden=true;
+ if(frame)frame.hidden=false;
+ if(stageState){stageState.textContent='';stageState.className='';}
   try{
    $('#viewer').src=model.embedUrl||await resolveEmbed(model);
-   hint.textContent='拖动旋转 · 滚轮缩放 · 预览需要联网';
-  }catch(e){hint.textContent=`无法加载交互预览：${e.message}`;}
+  }catch(e){if(stageState){stageState.textContent=`无法加载交互预览：${e.message}`;stageState.className='error';}}
  }
 
 function setup(){

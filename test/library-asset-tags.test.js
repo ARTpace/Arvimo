@@ -29,11 +29,11 @@ test('只在发现页整理也能持久保存，关闭重开或平台重新返�
 });
 test('原始和 AI 标签紧凑合并并安全转义，重复标签不重复显示',()=>{
  const html=tagPanel({aiTags:{[uid]:['TREE','<script>']}},{uid,tags:['tree','rock']},esc);
- assert.doesNotMatch(html,/平台标签|AI 标签 ·|<small>/);assert.match(html,/✦ AI标签/);
+ assert.doesNotMatch(html,/平台标签|AI 标签 ·|<small>/);assert.match(html,/<svg[^>]*>.*?<\/svg><\/i> AI标签/);
  assert.match(html,/&lt;script&gt;/);assert.doesNotMatch(html,/>TREE</);
  assert.match(html,/data-action="ai-tags"/);
 });
-test('所有平台卡片都有统一标签入口，包括只有官方页面的资产',()=>{
+test('卡片上不再有标签入口（标签自动读取、AI 后台生成，改由右键菜单 / 预览面板管理）',()=>{
  const state={favorites:new Set(),models:[],selected:new Set(),tasks:[]};
  // card-view 现在要的是 sendControl（两步式导出控件），旧名 blenderSendButton 传进来它拿不到。
  const cards=createCardView({state,icon:()=>'',esc,fmt:String,queuePulse:new Map(),
@@ -41,7 +41,7 @@ test('所有平台卡片都有统一标签入口，包括只有官方页面的�
   artstationUI:()=>({has3dScene:()=>false}),downloadsUI:()=>({jobs:[]})});
  for(const platform of ['sketchfab','artstation','polyhaven','ambientcg','polypizza','kenney','freestylized']){
   const html=cards.card({uid,platform,name:'Asset',license:'CC0',assetType:'packs'});
-  assert.match(html,/data-action="asset-tags"/,platform);
+  assert.doesNotMatch(html,/data-action="asset-tags"/,platform);
  }
 });
 test('我的标签：增删、跨资产重命名/删除，与平台/AI 层合并检索',()=>{
@@ -61,10 +61,10 @@ test('我的标签：增删、跨资产重命名/删除，与平台/AI 层合并
  assert.deepEqual(userTagsFor(state,{uid}),['机甲']);
  assert.equal(tagsFor(state,{uid,tags:['src']}).length,2);
 });
-test('标签面板三层并排：平台可检索、AI 带 ✦、我的带 ×，评分备注同面板',()=>{
+test('标签面板三层并排：平台可检索、AI 带 SVG、我的带移除按钮，评分备注同面板',()=>{
  const html=tagPanel({aiTags:{[uid]:['ai-tag']},userTags:{[uid]:['mine']},userMeta:{[uid]:{rating:3,note:'ok'}}},{uid,tags:['platform']},esc);
  assert.match(html,/data-tag="platform"/);
- assert.match(html,/✦ ai-tag/);
+ assert.match(html,/<svg[^>]*>.*?<\/svg><\/i>ai-tag/);
  assert.match(html,/data-remove-tag="mine"/);
  assert.match(html,/data-rate="3"/);
  assert.match(html,/>ok</);

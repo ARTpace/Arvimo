@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {PLATFORMS,DEFAULT_PLATFORM,platformById,routeLink,LINK_ROUTES,FEEDS,FEED_LABELS,FEED_ENDPOINTS,ORIGIN_COPY,jobKindOf} from '../src/library/platforms.js';
+import {PLATFORMS,DEFAULT_PLATFORM,platformById,routeLink,LINK_ROUTES,FEEDS,FEED_LABELS,FEED_ENDPOINTS,ORIGIN_COPY,jobKindOf,isPictureSite,isUiSite} from '../src/library/platforms.js';
 
 test('the feed registry is the single place a new result stream is declared',()=>{
  assert.equal(new Set(FEEDS).size,FEEDS.length,'结果流不能重复');
@@ -74,7 +74,10 @@ test('bad input is refused with a reason instead of being sent to the server',()
 
 test('every link rule names a platform the search already understands',()=>{
  for(const rule of LINK_ROUTES){
-  assert.ok(['artstation','web'].includes(rule.platform),`${rule.id} 指向了未知通道 ${rule.platform}`);
+  // 图站 / 视频站的路由本来就在这张表里（PICTURE_LINK_ROUTES 展开进来），
+  // 它们由 /api/picture-site/resolve 承接，不是「未知通道」。
+  const known=['artstation','web','link'].includes(rule.platform)||isPictureSite(rule.platform)||isUiSite(rule.platform);
+  assert.ok(known,`${rule.id} 指向了未知通道 ${rule.platform}`);
   assert.equal(typeof rule.test,'function');
  }
 });

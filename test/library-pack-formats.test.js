@@ -54,10 +54,15 @@ test('EXR 全景要真的能渲染，不许再抛「暂不支持」',()=>{
  assert.match(hdri,/\\.exr\$/i,'Poly Haven HDRI 只有 exr 时也要能预览');
 });
 
-test('后端预览 MIME 覆盖新格式',()=>{
- for(const ext of ['.obj','.stl','.ply','.3mf','.fbx','.exr']){
-  assert.ok(server.includes(`'${ext}'`),`PREVIEW_MIMES 缺 ${ext}`);
+test('后端预览 MIME 覆盖新格式',async()=>{
+ // PREVIEW_MIMES 现在从格式注册表派生（不再有逐扩展名字面量），所以断言真值而不是源码字符串：
+ // 既检查注册表里每种格式的 MIME，也检查服务端确实从 FORMATS 派生而不是另抄一份表。
+ const {FORMATS, formatMime} = await import('../src/library/format-registry.js');
+ for(const ext of ['obj','stl','ply','3mf','fbx','exr']){
+  assert.ok(FORMATS[ext]?.mime,`格式注册表缺 .${ext}`);
+  assert.equal(formatMime(`a.${ext}`),FORMATS[ext].mime,`.${ext} 的 MIME 不一致`);
  }
+ assert.match(server,/PREVIEW_MIMES\s*=\s*Object\.fromEntries\(Object\.values\(FORMATS\)/,'服务端预览 MIME 必须从格式注册表派生');
 });
 
 test('包内挑选规则能挑出 OBJ / STL / PLY / 3MF',()=>{

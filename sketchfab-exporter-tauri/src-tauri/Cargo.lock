@@ -71,6 +71,8 @@ dependencies = [
  "tauri-plugin-single-instance",
  "tauri-plugin-updater",
  "url",
+ "windows",
+ "windows-core",
  "windows-sys 0.61.2",
  "winreg 0.55.0",
  "wry",

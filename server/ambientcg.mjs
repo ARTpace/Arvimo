@@ -20,6 +20,7 @@ import {createReadStream} from 'node:fs';
 import path from 'node:path';
 import {createInflateRaw} from 'node:zlib';
 import {openPublic} from './public-http.mjs';
+import {tagList} from './tag-list.mjs';
 import {crc32} from './archive.mjs';
 import {writeEntriesDeliverable} from './deliverable-writer.mjs';
 import {assertSbsar} from './archive.mjs';
@@ -238,7 +239,7 @@ export async function ambientcgRenders(id,{signal,open=openPublic}={}){
   signal?.throwIfAborted();
   const assetId=String(id||'').trim();
   if(!assetId)throw Error('ambientCG 资产 ID 缺失');
-  const params=new URLSearchParams({id:assetId,include:'title,thumbnails'});
+  const params=new URLSearchParams({id:assetId,include:'title,thumbnails,tags'});
   const r=await open(`${API}/api/v3/assets?${params}`,{signal,timeout:45000});
   if(r.status<200||r.status>=300){try{r.stream.destroy();}catch{}throw Error(`ambientCG 资产信息返回 HTTP ${r.status}`);}
   const payload=JSON.parse(await readStreamText(r));
@@ -251,7 +252,9 @@ export async function ambientcgRenders(id,{signal,open=openPublic}={}){
     .sort((a,b)=>b.size-a.size);
   const best=ranked.find(x=>/JPG/i.test(x.key))||ranked[0];
   if(!best)throw Error('这个 ambientCG 材质暂时没有可下载图片');
-  return [{url:best.url,title:assetId.slice(0,120),rendition:'original',source:`${API}/api/v3/assets?id=${encodeURIComponent(assetId)}`}];
+  // ambientCG 的 tags 是素材自带的关键词（如 Ground / Urban / 4K），正好当标签；
+  // 这里不是「分类 → 标签」而是真正的标签字段，直接归一即可。
+  return [{url:best.url,title:assetId.slice(0,120),rendition:'original',source:`${API}/api/v3/assets?id=${encodeURIComponent(assetId)}`,tags:tagList(asset.tags)}];
 }
 const RES_K={'1K':1,'2K':2,'4K':4,'8K':8};
 /** Pick one ZIP tier: exact `<res>-<fmt>` first, else the same format nearest to the request. */

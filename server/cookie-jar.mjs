@@ -7,6 +7,7 @@
 // 只存 cookie，不存任何账号密码；用户随时可以清掉。
 import fs from 'node:fs';
 import path from 'node:path';
+import {resolveDataDir} from './data-dir.mjs';
 
 /** 域名匹配：`.zcool.com.cn` 也算 `zcool.com.cn` 的子域。这里自带一份，避免反向依赖 cdp。 */
 export function hostMatches(cookieDomain, host) {
@@ -32,9 +33,7 @@ const SERVER_DIR = path.dirname(new URL(import.meta.url).pathname.replace(/^\/([
 const ROOT = path.resolve(SERVER_DIR, '..');
 
 function dataDir() {
-  const env = process.env.SFX_DATA_DIR;
-  if (env && path.isAbsolute(env)) return env;
-  return path.join(ROOT, 'data');
+  return resolveDataDir(ROOT).dir;
 }
 
 export function cookieFile() {
@@ -125,9 +124,10 @@ export function cookieHeaderFor(value) {
   })();
   const picked = load()
     .filter((c) => alive(c) && hostMatches(c.domain, host))
+    .filter((c) => !c.secure || /^https:\/\//i.test(String(value)))
     .filter((c) => {
       const p = c.path || '/';
-      return p === '/' || pathname.startsWith(p);
+      return p === '/' || pathname === p || (pathname.startsWith(p) && (p.endsWith('/') || pathname[p.length] === '/'));
     })
     .sort((a, b) => (b.path || '/').length - (a.path || '/').length);
   if (!picked.length) return '';
@@ -173,6 +173,10 @@ const LOGIN_PROBES = Object.freeze({
   },
   // 500px：`x-500px-access-token-prod` 是 JWT，登录后才带 sub（用户 id）+ iss:"u"。
   // 匿名访客只有 device-id，没有 access-token。
+  // 小红书：登录后才有 web_session。匿名浏览只有 a1 / webId。
+  'xiaohongshu.com': (cookies) => cookies.some((c) => c.name === 'web_session' && String(c.value || '').length > 8) ? true : null,
+  // Flickr：登录后写 cookie_session。没有这条就还是访客。
+  'flickr.com': (cookies) => cookies.some((c) => c.name === 'cookie_session' && String(c.value || '').length > 8) ? true : null,
   '500px.com': (cookies) => {
     const row = cookies.find((c) => c.name === 'x-500px-access-token-prod');
     if (!row) return null;

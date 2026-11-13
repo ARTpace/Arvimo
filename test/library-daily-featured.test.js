@@ -72,20 +72,26 @@ test('daily topics: stable within a day, rotating across days, first one is toda
   assert.equal(tomorrow[0].en,a[1].en,'只推进一格：今天排第二的词就是明天的今日主题');
 });
 
-test('the topic strip shows only while browsing, and its chips search for real',()=>{
-  assert.ok(html.includes('id="topic-strip"'),'搜索面板里要有主题带容器');
-  assert.match(html,/id="topic-strip"[^>]*hidden/,'默认收起，露不露脸交给脚本判断');
-  assert.ok(app.includes('function refreshTopicStrip'),'要有渲染函数');
-  assert.ok(app.includes('strip.hidden=!browsing'),'搜索框里有字就收起来');
-  assert.ok(app.includes("$('#topic-strip').addEventListener('click'"),'要绑点击');
-  assert.ok(app.includes("startSearch({record:true})"),'点主题等同用户手输，要记进最近检索');
-  assert.ok(app.includes('refreshTopicStrip();'),'启动时要渲染一次');
-  // display:flex 会盖掉浏览器默认的 [hidden]{display:none}，必须自己写一条。
-  assert.ok(/\.topic-strip\[hidden\]\{display:none\}/.test(css),'容器自己管 hidden');
-  assert.ok(/\.topic-chip\.today\{/.test(css),'今日主题要有高亮样式');
+test('daily topics live in the grouped search popover, not a permanent strip',()=>{
+ const groups=read('src/library/term-groups.js');
+ const ui=read('src/library/search-history.js');
+ assert.equal(html.includes('id="topic-strip"'),false,'常驻主题带已收进检索浮层');
+ assert.ok(app.includes('function termSources'),'主题 / 相近词由 app.js 整理成一份数据');
+ assert.ok(app.includes('dailyTopics()'),'今日主题仍取自每日词池');
+ assert.ok(app.includes('sources:termSources'),'浮层通过 provider 拿词组，不自己算主题');
+ assert.ok(app.includes('onTerm:pickTerm'),'点任一推荐词走统一检索入口');
+ assert.ok(app.includes("startSearch({record:true})"),'点主题等同用户手输，要记进最近检索');
+ assert.ok(app.includes('refreshTopicStrip();'),'改输入框 / 提交搜索时刷新浮层');
+ for(const id of ['recent','links','daily','related'])assert.ok(groups.includes(`id:'${id}'`),`分组契约里要有 ${id}`);
+ assert.ok(ui.includes('buildTermSections'),'渲染层按契约分区，不写 if-else 长龙');
+ assert.ok(/\.term-chip\.today\{/.test(css),'今日主题要有高亮样式');
+ assert.ok(/\.term-badge\{/.test(css),'首颗主题要带「今日」徽标');
 });
 
 test('capability bit and version bump so the launcher replaces the old process',()=>{
   assert.equal(SERVER_CAPABILITIES.browseFeaturedDaily,true);
-  assert.equal(SERVER_VERSION,'3.12.0');
+  // 版本只升不降：写死具体版本会让每次加能力位（3.12.0 → 3.13.0）都误报。
+  const [major,minor]=SERVER_VERSION.split('.').map(Number);
+  assert.ok(major===3&&minor>=12,`SERVER_VERSION 必须 >= 3.12.0，实际 ${SERVER_VERSION}`);
+  assert.equal(SERVER_CAPABILITIES.version,SERVER_VERSION,'能力位里的版本必须与 SERVER_VERSION 同源');
 });

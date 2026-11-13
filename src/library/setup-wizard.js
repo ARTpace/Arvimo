@@ -126,7 +126,7 @@ export function createSetupWizard({$,esc,icon,toast,downloads}){
   }).join('');
   if(note)note.textContent=report.ready
    ?'依赖已就绪，可以直接开始用。'
-   :`还有 ${report.pending} 项没就位 —— 现在补上最省事，也可以稍后在「导出设置 → 依赖准备」里再装。`;
+   :`还有 ${report.pending} 项没就位 —— 现在补上最省事，也可以稍后在「设置 → 依赖准备」里再装。`;
   if(finishButton)finishButton.innerHTML=report.ready?`${icon('check')}进入工作台`:`${icon('arrow-right')}先这样，进入工作台`;
   // 列表是重画的，输入框节点换了人，引用要跟着换，否则保存读到的是旧节点。
   bindDynamic();

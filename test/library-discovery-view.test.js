@@ -47,6 +47,15 @@ test('aborting a multi-source view aborts each source it represents',()=>{
  assert.deepEqual(aborted,['search','art'],'停止检索必须真的停掉每个平台，不能只停第一个');
 });
 
+test('图站平台上的空结果流要说清「能搜」还是「只能粘链接」',()=>{
+ // 小红书这类站 search:true —— 只说「按链接解析」会让用户以为它搜不了关键词（展示区过去就是这么写的）。
+ assert.match(statusText({sources:[],feeds:{},platform:'xiaohongshu'}),/输入关键词/,'可搜的图站必须先说搜索');
+ assert.ok(!statusText({sources:[],feeds:{},platform:'xiaohongshu'}).includes('按链接解析'));
+ // Pixiv 不做关键词检索：只能说粘链接，不能给一个搜不动的预期。
+ assert.match(statusText({sources:[],feeds:{},platform:'pixiv'}),/按链接解析/);
+ assert.ok(!statusText({sources:[],feeds:{},platform:'pixiv'}).includes('输入关键词'));
+});
+
 test('the status line names each platform when more than one is answering',()=>{
  assert.equal(statusText({sources:['search'],feeds:{search:feed({status:'已加载 3 个模型'})}}),'已加载 3 个模型');
  assert.equal(statusText({sources:['search'],feeds:{search:feed()}}).includes('关键词直接搜索'),true,'单源空闲时要有默认引导');
@@ -97,6 +106,7 @@ test('标题的那句话跟着「谁在回答」走，链接解析结果不冒�
  assert.equal(describeRequest({...base,platform:'sketchfab',feeds:{search:feed()}}),'发现好模型');
  assert.equal(describeRequest({...base,platform:'sketchfab',feeds:{search:feed({request:{category:'characters-creatures'}})},categories:[['characters-creatures','角色与生物']]}),'角色与生物资产');
  assert.equal(describeRequest({...base,platform:'sketchfab',feeds:{search:feed({request:{staffpicked:true}})}}),'精选资产');
+ assert.equal(describeRequest({...base,platform:'sketchfab',feeds:{search:feed({request:{category:'unknown'}})}}),'分类资产','分类标签尚未加载时不显示 undefined');
 });
 
 test('一次失败的检索要把用户送到下一步，而不是复述服务端内部文案',()=>{

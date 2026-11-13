@@ -1,6 +1,12 @@
 export const STORAGE_KEY='sfx-library-v2';
 export const LEGACY_KEY='sfx-library-v1';
 export const UI_KEY='sfx-library-ui';
+/**
+ * 资产条数上限（阶段 3）：原来写死 1000 是因为整块状态塞在 localStorage 里，
+ * 现在服务端有 SQLite 规范化表与分页接口，浏览器不再一次画全库，上限只用来兜住异常数据。
+ * 改成单一常量 = 配置缝：以后调阈值只改这里，别再散落一堆 1000。
+ */
+export const LIBRARY_LIMIT=20000;
 /** 界面开关（折叠状态等）单独存一份：不与模型库 schema 混在一起，加开关不用迁移数据。 */
 export const UI_DEFAULTS={linkPanelOpen:false};
 export const UID=/^[a-f0-9]{32}$/i;
@@ -12,7 +18,7 @@ export function mergeModels(current,incoming){
  for(const m of incoming||[])if(UID.test(m?.uid))map.set(m.uid,mergeModel(map.get(m.uid),m));
  return [...map.values()];
 }
-export function collectModels(current,incoming,limit=1000){
+export function collectModels(current,incoming,limit=LIBRARY_LIMIT){
  const map=new Map(current.map(m=>[m.uid,m]));let added=0,refused=0;
  for(const m of mergeModels([],incoming)){
   const old=map.get(m.uid);if(!old&&map.size>=limit){refused++;continue;}
@@ -51,12 +57,20 @@ function loadMetaMap(data){
 function loadTagMap(data){
  return Object.fromEntries(Object.entries(data&&typeof data==='object'&&!Array.isArray(data)?data:{}).filter(([uid,tags])=>UID.test(uid)&&Array.isArray(tags)).map(([uid,tags])=>[uid,mergeTags(tags)]));
 }
+/** 封面探测缓存：可重建的派生数据，坏记录直接丢掉而不是让整库加载失败。 */
+const PROBE_UID=/^(?:local-)?[a-f0-9]{32}$/i;
+function loadProbeMap(data){
+ const source=data&&typeof data==='object'&&!Array.isArray(data)?data:{};
+ return Object.fromEntries(Object.entries(source).filter(([uid,probe])=>PROBE_UID.test(uid)
+  &&probe&&typeof probe==='object'&&!Array.isArray(probe)&&/^#[0-9a-f]{6}$/i.test(String(probe.hex||''))
+  &&Number.isFinite(Number(probe.width))&&Number.isFinite(Number(probe.height))));
+}
 export function loadLibrary(storage){ let data={},migrated=false,warning='';
  try{
   const v2=storage.getItem(STORAGE_KEY),raw=v2??storage.getItem(LEGACY_KEY);
   if(raw){try{data=JSON.parse(raw);if(!data||typeof data!=='object'||Array.isArray(data))throw Error();migrated=v2===null;}catch{if(!storage.getItem(STORAGE_KEY+'-invalid-backup'))storage.setItem(STORAGE_KEY+'-invalid-backup',raw);warning='本地记录格式损坏，原始内容已备份；未自动覆盖旧版数据。';data={};}}
  }catch{warning='无法访问浏览器存储；请检查隐私设置。';}
- const models=mergeModels([],Array.isArray(data.models)?data.models:[]).slice(0,1000);
+ const models=mergeModels([],Array.isArray(data.models)?data.models:[]).slice(0,LIBRARY_LIMIT);
  const favorites=new Set((Array.isArray(data.favorites)?data.favorites:[]).filter(id=>UID.test(id)));
  const tasks=(Array.isArray(data.tasks)?data.tasks:[]).filter(t=>UID.test(t?.uid)).slice(-80).map(t=>({...t,state:active.has(t.state)?'interrupted':t.state,logs:Array.isArray(t.logs)?t.logs.slice(-80):[]}));
  const history=(Array.isArray(data.history)?data.history:[]).filter(h=>h&&typeof h==='object').map(h=>h.kind==='search'?h:{...h,kind:'web'}).filter(h=>h.kind==='search'?(h.params&&typeof h.params.q==='string'&&h.params.q.trim()!==''):typeof h.url==='string'&&/^https?:\/\//.test(h.url)).slice(0,12);
@@ -64,10 +78,13 @@ export function loadLibrary(storage){ let data={},migrated=false,warning='';
  const userMeta=loadMetaMap(data.userMeta);
  const userTags=loadTagMap(data.userTags);
  const trashed=(Array.isArray(data.trashed)?data.trashed:[]).filter(m=>m&&typeof m==='object'&&UID.test(m.uid)).map(m=>({...m,trashedAt:Number(m.trashedAt)||Date.now()})).slice(0,TRASH_LIMIT);
- return {models,favorites,tasks,history,aiTags,userMeta,userTags,trashed,options:normalizeOptions(data.options),migrated,warning};
+ return {models,favorites,tasks,history,aiTags,userMeta,userTags,assetProbe:loadProbeMap(data.assetProbe),trashed,options:normalizeOptions(data.options),migrated,warning};
 }
 export function saveLibrary(storage,state){
- storage.setItem(STORAGE_KEY,JSON.stringify({version:2,models:state.models,aiTags:state.aiTags||{},userMeta:state.userMeta||{},userTags:state.userTags||{},trashed:(state.trashed||[]).slice(0,TRASH_LIMIT),favorites:[...state.favorites],history:state.history,tasks:state.tasks.slice(-80).map(t=>({...t,logs:t.logs.slice(-80)})),options:state.options}));
+ // 阶段 4：服务端按页取数补进来的模型只用于显示（_remoteOnly），绝不写回 blob ——
+ // 否则「只加载了一页」会把库里其余资产整批抹掉。它们的权威数据始终在服务端。
+ const models=Array.isArray(state.models)?state.models.filter(m=>!m._remoteOnly):[];
+ storage.setItem(STORAGE_KEY,JSON.stringify({version:2,models,aiTags:state.aiTags||{},userMeta:state.userMeta||{},userTags:state.userTags||{},assetProbe:state.assetProbe||{},trashed:(state.trashed||[]).slice(0,TRASH_LIMIT),favorites:[...state.favorites],history:state.history,tasks:state.tasks.slice(-80).map(t=>({...t,logs:t.logs.slice(-80)})),options:state.options}));
 }
 /** 评分与备注：单条资产的用户判断。note 上限 2000 字，超长截断而不是整段拒绝。 */
 export function userMetaFor(state,uid){return state.userMeta?.[uid]||{rating:0,note:''};}

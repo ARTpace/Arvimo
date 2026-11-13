@@ -6,37 +6,13 @@
 //  2. 文件服务只认「调用方给的 root 之下」的路径，防止 rel 里塞 `..` 读到别处去。
 import fs from 'node:fs';
 import path from 'node:path';
+import {extensionOf, formatKind, formatMime, formatGroup} from '../src/library/format-registry.js';
 
 /** 相对路径统一用正斜杠，前端不必再处理两种分隔符。 */
 const toPosix=value=>value.split(path.sep).join('/');
 
-/** 扩到文件类型。同一个扩展名只归一类；`.exr/.hdr` 归环境（库里它们基本都是全景图）。 */
-const KIND_BY_EXT=new Map(Object.entries({
- glb:'model',gltf:'model',fbx:'model',obj:'model',stl:'model',ply:'model','3mf':'model',
- hdr:'env',exr:'env',
- png:'image',jpg:'image',jpeg:'image',jfif:'image',gif:'image',webp:'image',avif:'image',
- svg:'image',bmp:'image',ico:'image',tga:'image',tif:'image',tiff:'image',psd:'image',
- ttf:'font',otf:'font',woff:'font',woff2:'font',ttc:'font',
- wav:'audio',mp3:'audio',ogg:'audio',oga:'audio',m4a:'audio',aac:'audio',flac:'audio',opus:'audio',
- mp4:'video',mov:'video',avi:'video',wmv:'video',webm:'video',mkv:'video',m4v:'video',ogv:'video',
- pdf:'document',html:'document',htm:'document',txt:'document',md:'document',json:'document',
-}));
-
-const MIME_BY_EXT={
- '.png':'image/png','.jpg':'image/jpeg','.jpeg':'image/jpeg','.jfif':'image/jpeg','.gif':'image/gif',
- '.webp':'image/webp','.avif':'image/avif','.svg':'image/svg+xml','.bmp':'image/bmp','.ico':'image/x-icon',
- '.tga':'image/x-tga','.tif':'image/tiff','.tiff':'image/tiff','.psd':'image/vnd.adobe.photoshop',
- '.hdr':'image/vnd.radiance','.exr':'image/x-exr',
- '.gltf':'model/gltf+json','.glb':'model/gltf-binary','.fbx':'model/fbx','.obj':'model/obj',
- '.mtl':'text/plain; charset=utf-8','.stl':'model/stl','.ply':'model/ply','.3mf':'model/3mf',
- '.ttf':'font/ttf','.otf':'font/otf','.woff':'font/woff','.woff2':'font/woff2','.ttc':'font/collection',
- '.wav':'audio/wav','.mp3':'audio/mpeg','.ogg':'audio/ogg','.oga':'audio/ogg','.m4a':'audio/mp4',
- '.aac':'audio/aac','.flac':'audio/flac','.opus':'audio/ogg',
- '.mp4':'video/mp4','.mov':'video/quicktime','.avi':'video/x-msvideo','.wmv':'video/x-ms-wmv',
- '.webm':'video/webm','.mkv':'video/x-matroska','.m4v':'video/x-m4v','.ogv':'video/ogg',
- '.pdf':'application/pdf','.html':'text/html; charset=utf-8','.htm':'text/html; charset=utf-8',
- '.txt':'text/plain; charset=utf-8','.md':'text/markdown; charset=utf-8','.json':'application/json',
-};
+// 扩展名 → kind / MIME / 分组 / 预览策略只有一份事实源（src/library/format-registry.js）。
+// 这里不再维护平行清单：新增一种格式只改注册表那一行，扫描、文件流、筛选、预览一起生效。
 
 /** 这些目录永远不进索引：依赖、版本库、回收站、系统缓存。 */
 const SKIP_DIRS=new Set(['node_modules','.git','.svn','.hg','$recycle.bin','system volume information','__pycache__','.cache','.workbuddy','.assetvault']);
@@ -46,13 +22,11 @@ const MAX_FILES=4000;
 const MAX_FOLDERS=20000;
 
 export function fileKind(name){
- const ext=path.extname(String(name||'')).slice(1).toLowerCase();
- return KIND_BY_EXT.get(ext)||'other';
+ return formatKind(name);
 }
 
 export function localMime(name){
- const ext=path.extname(String(name||'')).toLowerCase();
- return MIME_BY_EXT[ext]||'application/octet-stream';
+ return formatMime(name);
 }
 
 function requireFolder(value){
@@ -96,10 +70,14 @@ export async function listLocalFolder({folder,limit=MAX_FILES}={}){
    if(entry.name.startsWith('.')){stats.skipped++;continue;}
    let stat=null;
    try{stat=await fs.promises.stat(path.join(dir,entry.name));}catch{stats.skipped++;continue;}
+   const ext=extensionOf(entry.name);
    files.push({
     rel:childRel,
     name:entry.name,
-    ext:path.extname(entry.name).slice(1).toLowerCase(),
+    ext,
+    // format/group 是筛选用的稳定字段：前端不必自己再 parse 文件名，服务端与 UI 共用一份分组。
+    format:ext,
+    group:formatGroup(entry.name),
     kind:fileKind(entry.name),
     bytes:stat.size,
     mtime:Math.round(stat.mtimeMs),

@@ -31,9 +31,9 @@ const cardModel={uid:'u'.repeat(32),name:'Robot',author:'stud',platform:'sketchf
 
 test('导出控件是两步式：目标名胶囊 + 纯图标导出键，选目标不导出',()=>{
  const html=build().card(cardModel);
- // 控件在缩略图下方的常驻行里（与「标签」同行），不在封面上
- assert.match(html,/card-meta-actions[^]*export-control/,'导出控件应在缩略图下方的信息行');
- assert.doesNotMatch(html,/card-bottom[^]*export-control/,'导出控件不该再叠在封面底栏');
+ // 控件已移到卡片底部动作行（与「下载」同处一行，下载后原地变成导出），不再占缩略图下方信息行
+ assert.match(html,/card-bottom[^]*export-control/,'导出控件应在卡片底部动作行');
+ assert.doesNotMatch(html,/card-meta-actions[^]*export-control/,'导出控件不应再占缩略图下方信息行');
  // 左边是显示软件名的下拉，右边是纯图标的导出键
  assert.match(html,/data-action="export-toggle"[^>]*>\s*<i[^>]*><\/i>\s*<span>Blender<\/span>/,'下拉键应显示当前目标软件名');
  const go=html.match(/<button class="export-go"[^>]*>([\s\S]*?)<\/button>/);
@@ -45,10 +45,12 @@ test('导出控件是两步式：目标名胶囊 + 纯图标导出键，选目�
  assert.doesNotMatch(html,/data-action="export-send"/,'不再有一步到位的发送动作');
 });
 
-test('已下载的卡片封面完全干净：不再渲染空的底栏',()=>{
+test('已下载的卡片底部动作行显示导出控件（下载键消失后原地变成导出）',()=>{
  const html=build().card(cardModel);
- // 下载键消失后底栏没内容了，就不该留一个空壳（会显示成一条空的渐变斜角）
- assert.doesNotMatch(html,/card-bottom/,'没有动作时整块底栏都不该渲染');
+ // 下载键消失后，底部动作行改用「软件选择 + 导出」承接，控件仍在底部（封面叠层仍干净）
+ assert.match(html,/card-bottom[^]*export-control/,'已下载的卡片底部应有导出控件');
+ assert.doesNotMatch(html,/data-action="download"/,'已下载不应再有下载键');
+ assert.doesNotMatch(html,/card-meta-actions[^]*export-control/,'导出控件不应占缩略图下方信息行');
 });
 
 test('未下载的卡片仍有下载键，且底栏不是空的',()=>{

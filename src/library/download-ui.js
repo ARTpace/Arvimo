@@ -13,11 +13,11 @@ const needsBrowser=j=>j.kind==='sketchfab'&&!TERMINAL.has(j.state);
  *  converter), `platform` tells picture jobs which source their pictures live on. The whitelist
  *  exists to keep accidental card baggage (feeds, caches, DOM handles) out of the POST body —
  *  extend it deliberately when the queue learns a new field. */
-export const modelPayload=({uid,name,author,license,thumbnail,downloadable,artworkUrl,artId,platform,assetId,assetType,sourceType,hasMarmoset,url})=>({uid,name,author,license,thumbnail,downloadable,artworkUrl,artId,platform,assetId,assetType,sourceType,hasMarmoset,url});
+export const modelPayload=({uid,name,author,license,thumbnail,downloadable,artworkUrl,artId,platform,assetId,assetType,sourceType,hasMarmoset,url,tags,elementId,elementType,elementTheme,elementUsername,elementSlug,elementVersion,isTailwind})=>({uid,name,author,license,thumbnail,downloadable,artworkUrl,artId,platform,assetId,assetType,sourceType,hasMarmoset,url,tags:Array.isArray(tags)?tags.slice(0,24):[],...(platform==='uiverse'?{elementId,elementType,elementTheme,elementUsername,elementSlug,elementVersion,isTailwind}:{})});
 export function createDownloadUI({$,icon,esc,toast,legacy,requestLegacy,onUpdate,isVisible}){
  const visitor=isLanVisitor(),clientDirectory=createClientDirectory();
  const ui={jobs:[],settings:null,connected:false,filter:'all',selected:new Set(),revision:-1,timer:null,pending:false};
- const card=createTaskCard({esc,icon,visitor});
+ const card=createTaskCard({esc,icon,visitor}),cardMarkup=new WeakMap();
  const folderPicker=createFolderPicker({esc,icon});
  const directoryReady=visitor?clientDirectory.restore().catch(()=>{}):Promise.resolve();
  let browserStorage;try{browserStorage=window.localStorage;}catch{}
@@ -41,7 +41,7 @@ export function createDownloadUI({$,icon,esc,toast,legacy,requestLegacy,onUpdate
   setTimeout(()=>{try{dialog.showModal();$('#download-path-input').focus();}catch{}},0);
  }
  function accept(data){const signature=data.jobs.map(j=>j.id+':'+j.state+':'+j.fileExists).join('|');const changed=signature!==ui.signature;ui.signature=signature;ui.jobs=data.jobs;ui.settings=data.settings;ui.defaultFolder=data.defaultFolder;ui.folderStatus=data.folderStatus||{ok:true};if(ui.folderStatus.ok)ui.pathPromptedFor='';ui.connected=true;ui.browserAvailable=data.browserAvailable;ui.blenderAvailable=data.fbxAvailable;const pathWarning=ui.folderStatus&&!ui.folderStatus.ok?ui.folderStatus.message:'';ui.warning=data.storageError||data.warning||pathWarning||(!data.browserAvailable&&data.jobs.some(needsBrowser)?'未找到后台 Chrome/Edge，Sketchfab 模型转换需要浏览器；ArtStation 转换不受影响。':'');ui.lastWarning=ui.warning;ui.selected=new Set([...ui.selected].filter(id=>ui.jobs.some(j=>j.id===id)));onUpdate(changed);if(isVisible())render();promptForFolder();}
- async function refresh(){if(ui.pending)return;ui.pending=true;try{const data=await api();if(data)accept(data);else{const disconnected=!ui.connected;ui.connected=true;ui.warning=ui.lastWarning||'';if(isVisible()&&(disconnected||ui.jobs.some(j=>ACTIVE.has(j.state))))render();}}catch(e){ui.connected=false;ui.warning='后台服务未连接：'+e.message;if(isVisible())render();}finally{ui.pending=false;}}
+ async function refresh(){if(ui.pending)return;ui.pending=true;try{const data=await api();if(data)accept(data);else{const disconnected=!ui.connected;ui.connected=true;ui.warning=ui.lastWarning||'';if(isVisible()){if(disconnected)renderHeader();if(ui.jobs.some(j=>ACTIVE.has(j.state)))renderList();}}}catch(e){ui.connected=false;ui.warning='后台服务未连接：'+e.message;if(isVisible())renderHeader();}finally{ui.pending=false;}}
  function visible(){return ui.jobs.filter(j=>ui.filter==='all'||ui.filter==='active'&&ACTIVE.has(j.state)||ui.filter==='waiting'&&WAITING.has(j.state)||ui.filter==='saved'&&j.state==='saved'||ui.filter==='failed'&&['failed','interrupted'].includes(j.state)||ui.filter==='cancelled'&&j.state==='cancelled');}
  function renderHeader(){
   $('#task-count').textContent=ui.jobs.length;$('#download-service').innerHTML=`<span class="live-dot"></span>${ui.connected?'后台服务在线 · 关页仍可下载':'等待连接后台服务'}`;
@@ -61,12 +61,41 @@ export function createDownloadUI({$,icon,esc,toast,legacy,requestLegacy,onUpdate
    count.textContent=groups[b.dataset.taskFilter]??0;
   });
  }
+ // Preserve controls, loaded images and expanded logs while updating changed text/attributes.
+ function patchNode(node,next){
+  if(node.isEqualNode(next))return;
+  if(node.nodeType!==next.nodeType||node.nodeName!==next.nodeName){node.replaceWith(next);return;}
+  if(node.nodeType!==1){node.nodeValue=next.nodeValue;return;}
+  for(const attr of [...node.attributes])if(!next.hasAttribute(attr.name))node.removeAttribute(attr.name);
+  for(const attr of [...next.attributes])if(node.getAttribute(attr.name)!==attr.value)node.setAttribute(attr.name,attr.value);
+  if(node.nodeName==='INPUT')node.checked=next.checked;
+  const children=[...node.childNodes],incoming=[...next.childNodes];
+  incoming.forEach((child,i)=>{if(children[i])patchNode(children[i],child);else node.append(child);});
+  for(const child of children.slice(incoming.length))child.remove();
+ }
  function renderList(){
-  // The list is rebuilt every refresh, so which disclosures are open is read back from the DOM
-  // and keyed by card position ("details:id"), never by class alone.
   const open=new Set([...document.querySelectorAll('.task details[open]')].map(d=>d.dataset.kind+':'+d.dataset.id));
   const rows=visible();
-  $('#tasks').innerHTML=rows.length?[...rows].reverse().map(t=>card(t,{selected:ui.selected.has(t.id),openDetails:open.has('details:'+t.id),openLog:open.has('log:'+t.id)})).join(''):'<div class="tasks-empty">'+icon('download')+'<h3>这个分组暂时没有任务</h3><p>在发现资产或模型库中点击下载，任务会由后台处理。</p></div>';
+  const list=$('#tasks'),existing=new Map([...list.querySelectorAll(':scope > [data-job]')].map(node=>[node.dataset.job,node]));
+  if(!rows.length){if(!list.querySelector('.tasks-empty'))list.innerHTML='<div class="tasks-empty">'+icon('download')+'<h3>这个分组暂时没有任务</h3><p>在发现资产或模型库中点击下载，任务会由后台处理。</p></div>';}
+  else{
+   list.querySelector('.tasks-empty')?.remove();
+   let cursor=list.firstElementChild;
+   for(const t of [...rows].reverse()){
+    const html=card(t,{selected:ui.selected.has(t.id),openDetails:open.has('details:'+t.id),openLog:open.has('log:'+t.id)});
+    let node=existing.get(t.id);
+    if(!node||cardMarkup.get(node)!==html){
+    const template=document.createElement('template');
+    template.innerHTML=html;
+    const next=template.content.firstElementChild;
+    if(node)patchNode(node,next);else node=next;
+    cardMarkup.set(node,html);
+    }
+    if(node!==cursor)list.insertBefore(node,cursor);
+    cursor=node.nextElementSibling;existing.delete(t.id);
+   }
+   for(const node of existing.values())node.remove();
+  }
   $('#task-batch-count').textContent=ui.selected.size;$('#task-batch').hidden=!ui.selected.size;
   $('#legacy-tasks').hidden=!legacy().length;$('#legacy-list').innerHTML=legacy().slice(-30).reverse().map(t=>`<div><span>${esc(t.name)} <small>旧版记录 · 本地文件位置未核实</small></span><button data-legacy-download="${esc(t.uid)}">重新加入后台下载</button></div>`).join('');
  }
@@ -109,8 +138,18 @@ export function createDownloadUI({$,icon,esc,toast,legacy,requestLegacy,onUpdate
   $('#browse-download-path').onclick=()=>chooseFolder($('#download-path-input'),$('#download-path-error'));
   $('#download-refresh').onclick=refresh;$('#open-download-folder').onclick=async()=>{try{await api('/reveal',{});}catch(e){toast(e.message);}};
   $('#clear-tasks').onclick=()=>{if(confirm('清除已结束的后台任务记录？不会删除磁盘文件。'))batch('remove',ui.jobs.filter(t=>TERMINAL.has(t.state)).map(t=>t.id));};
-  const poll=async()=>{await refresh();if(ui.connected)delivery.accept(ui.jobs);};
-  poll();ui.timer=setInterval(poll,750);document.addEventListener('visibilitychange',()=>{if(!document.hidden)poll();});
+  let pollToken=0;
+  const poll=async()=>{
+   const token=++pollToken;
+   clearTimeout(ui.timer);
+   await refresh();if(token!==pollToken)return;if(ui.connected)delivery.accept(ui.jobs);
+   const active=ui.jobs.some(j=>ACTIVE.has(j.state)||['queued','retry_wait'].includes(j.state));
+   // 只在「下载页」且「有活动任务」时才高频（750ms）；离开下载页或空闲都放慢：
+   // 轮询本就只为刷新下载页，用户不在那页（在资产库 / 发现页）时用不着拉满频率。
+   const onPage=isVisible();
+   ui.timer=setTimeout(poll,document.hidden?5000:(onPage?(active?750:3000):(active?4000:8000)));
+  };
+  poll();document.addEventListener('visibilitychange',()=>{if(!document.hidden)poll();});
  }
   // `platform` rides along for picture jobs: the queue stores it so a restored job still asks the
   // right source where its pictures live, instead of guessing from the URL shape.

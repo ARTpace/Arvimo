@@ -5,6 +5,7 @@ import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {createCardView} from '../src/library/card-view.js';
 import {platformLabel} from '../src/library/platforms.js';
+import {favoriteUid,registerFavoriteTarget,favoriteTarget,favoriteSkipsCollect,favoriteButtonHtml} from '../src/library/favorite-targets.js';
 
 const css=fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)),'..','src','library','app.css'),'utf8');
 
@@ -26,18 +27,32 @@ const build=(state={favorites:new Set(),models:[],selected:new Set(),tasks:[]},d
 
 const render=model=>build().card(model);
 
-test('image discovery cards preview locally without model-library actions in every layout',()=>{
+test('image discovery cards keep the local preview but always offer favorite (2026-11-12)',()=>{
  const state={route:'discover',platform:'artstation',modelOnly:false,favorites:new Set(),models:[],selected:new Set(),tasks:[]};
  const model={uid:'a'.repeat(32),platform:'artstation',name:'Picture',thumbnail:'https://example.com/image.jpg'};
- for(const options of [{},{gallery:true},{compact:true}]){
-  state.compact=!!options.compact;
+ for(const options of [{},{gallery:true}]){
   const html=build(state).card(model,options);
-  assert.doesNotMatch(html,/data-action="collect"|data-action="favorite"/);
+  // 图片作品不摆「加入模型库」角标，但收藏键现在全平台都要有，不再被 pictureMode 吃掉。
+  assert.doesNotMatch(html,/data-action="collect"/);
+  assert.match(html,/data-action="favorite"/);
   assert.match(html,/查看作品图片/);
   assert.match(html,/data-action="preview"/);
  }
  state.modelOnly=true;
- assert.match(build(state).card(model),/data-action="collect"/);
+ // 入库角标已收进右键菜单，卡片上不再出现 data-action="collect"。
+ assert.doesNotMatch(build(state).card(model),/data-action="collect"/);
+});
+
+test('every model platform gets the same favorite button and a collectable target',()=>{
+ const state={route:'discover',platform:'sketchfab',modelOnly:false,favorites:new Set(),models:[],selected:new Set(),tasks:[]};
+ for(const platform of ['sketchfab','artstation','polyhaven','ambientcg','kenney','freestylized','uiverse']){
+  const model={uid:'b'.repeat(32),platform,name:'Asset',thumbnail:'https://example.com/a.jpg'};
+  const html=build(state).card(model);
+  assert.match(html,/data-action="favorite"/,`${platform} 缺收藏键`);
+  assert.match(html,/class="favorite"/,`${platform} 收藏键类名不统一`);
+ }
+ const saved=build({...state,favorites:new Set(['b'.repeat(32)])}).card({uid:'b'.repeat(32),platform:'sketchfab',name:'Asset'});
+ assert.match(saved,/class="favorite saved"/,'已收藏要回填高亮态');
 });
 
 test('ambientCG models hide texture tiers and recognise existing model files at any resolution',()=>{
@@ -47,7 +62,7 @@ test('ambientCG models hide texture tiers and recognise existing model files at 
   const html=build(undefined,()=>({jobs:[job]})).card(model);
   assert.doesNotMatch(html,/data-material-resolution/);
   assert.doesNotMatch(html,/data-action="download"/,'已下载的模型卡不再显示下载键，只留发送到');
-  assert.match(html,/data-action="reveal-download"/);
+  assert.doesNotMatch(html,/data-action="reveal-download"/,'打开下载文件夹已收进右键菜单');
   const missing=build(undefined,()=>({jobs:[{...job,fileExists:false}]})).card(model);
   assert.match(missing,/data-action="download"/,'文件不在时应能重新下载');
  }
@@ -108,11 +123,11 @@ test('the resolution picker marks which tiers are already downloaded',()=>{
  const jobs=[{id:'j4',uid:tex.uid,kind:'polyhaven',state:'saved',fileExists:true,options:{output:'folder',resolution:'4K',textureFormat:'JPG'}}];
  const picker=build(undefined,()=>({jobs})).card(tex).match(/<select class="material-resolution"[^>]*>.*?<\/select>/s)?.[0];
  assert.ok(picker,'材质卡片要有精度选择');
- assert.ok(picker.includes('<option value="4K" selected>4K ✓</option>'),'已下载的 4K 要打勾');
- assert.ok(!picker.includes('2K ✓')&&!picker.includes('8K ✓'),'没下载过的档位不能误标');
+ assert.ok(picker.includes('<option value="4K" selected>4K（已下载）</option>'),'已下载的 4K 要打勾');
+ assert.ok(!picker.includes('2K（已下载）')&&!picker.includes('8K（已下载）'),'没下载过的档位不能误标');
  // 没有任务的卡片四档都不标，默认 2K 选中（select 的 title 说明里也有 ✓ 字样，只查 option 文本）
  const fresh=render({uid:'u'.repeat(32),name:'Bricks',author:'ambientCG',platform:'ambientcg',assetId:'Bricks',thumbnail:'',license:'CC0',downloadable:true});
- assert.ok(!fresh.includes('>1K ✓<')&&!fresh.includes('>2K ✓<'),'未下载时不打勾');
+ assert.ok(!fresh.includes('>1K（已下载）<')&&!fresh.includes('>2K（已下载）<'),'未下载时不打勾');
 });
 
 test('platformLabel resolves every known platform and never impersonates another',()=>{
@@ -175,47 +190,30 @@ test('the resolution picker reflects the model choice, defaulting to 2K',()=>{
  assert.equal(/<option value="2K" selected>/.test(html),false,'2K 不再选中');
 });
 
-test('library and folder affordances live on the thumbnail corners, not the bottom row',()=>{
+test('入库 / 打开文件夹已收进右键菜单，封面四角不再摆按钮',()=>{
  const model={uid:'c'.repeat(32),name:'Ground 054',author:'ambientCG',platform:'ambientcg',assetId:'Ground054',thumbnail:'',license:'CC0',downloadable:true};
- const mediaOf=html=>html.slice(html.indexOf('card-media'),html.indexOf('card-meta'));
- // 未加入：左下角是可点的「加入模型库」；底部不再有 collect 图标键
- const plain=build();
- const html=plain.card(model);
- assert.ok(mediaOf(html).includes('collect-badge'),'加入模型库标识应在缩略图内');
- assert.ok(mediaOf(html).includes('加入模型库'),'未加入时要显示可点的加入文案');
- assert.equal(html.includes('collect-button'),false,'底部的旧加入模型库图标键应已移除');
- // 已加入：同一位置显示「已加入模型库」，且置为不可点
- const joined=build({favorites:new Set(),models:[{uid:model.uid}],selected:new Set(),tasks:[]});
- const joinedHtml=joined.card(model);
- assert.ok(mediaOf(joinedHtml).includes('collect-badge collected'),'已加入时标识应带 collected 状态');
- assert.ok(mediaOf(joinedHtml).includes('已加入模型库'));
- // 打开文件夹：已下载的卡片上出现在缩略图内（右下角），不在底部行
- const saved=build(undefined,()=>({jobs:[{uid:model.uid,state:'saved',fileExists:true,id:'job-1'}]}));
- const savedHtml=saved.card(model);
- assert.ok(mediaOf(savedHtml).includes('open-folder'),'打开文件夹按键应落在缩略图内');
- assert.ok(savedHtml.includes('data-action="reveal-download"'));
+ const html=build().card(model);
+ assert.doesNotMatch(html,/collect-badge/,'入库角标不再画在卡片上');
+ assert.doesNotMatch(html,/data-action="collect"/);
+ assert.doesNotMatch(html,/collect-button/);
+ // 已下载的卡片同样不摆「打开下载文件夹」小图标，动作由右键菜单按任务号给出。
+ const saved=build(undefined,()=>({jobs:[{uid:model.uid,state:'saved',fileExists:true,id:'job-1'}]})).card(model);
+ assert.doesNotMatch(saved,/open-folder/);
+ assert.doesNotMatch(saved,/data-action="reveal-download"/);
 });
 
-test('compact view moves the thumbnail overlays into the info column',()=>{
+test('compact list view is gone: overlays stay on the thumbnail in both remaining views',()=>{
+ // 紧凑视图已移除。这里特意保留 state.compact:true，验证旧持久化字段不会再把控件搬进信息栏。
+ const state={favorites:new Set(),models:[],selected:new Set(),tasks:[],compact:true};
  const model={uid:'g'.repeat(32),name:'Ground 054',author:'ambientCG',platform:'ambientcg',assetId:'Ground054',thumbnail:'https://x/t.jpg',license:'CC0',downloadable:true};
- const html=build({favorites:new Set(),models:[],selected:new Set(),tasks:[],compact:true}).card(model);
- const controls=html.slice(html.indexOf('card-controls'),html.indexOf('card-meta'));
- for(const cls of ['card-type','favorite','card-select','collect-badge','compact-preview']){
-  assert.ok(controls.includes(cls),`紧凑视图的 ${cls} 应在信息栏内`);
+ for(const options of [{},{gallery:true}]){
+  const html=build(state).card(model,options);
+  assert.equal(html.includes('card-controls'),false,'不应再渲染紧凑视图的独立控件行');
+  assert.equal(html.includes('compact-preview'),false,'紧凑视图专属预览键应已移除');
+  const media=html.slice(html.indexOf('card-media'),html.indexOf('card-meta'));
+  assert.ok(media.includes('preview-hit')&&media.includes('favorite')&&media.includes('card-type'),'角标与按键仍叠在缩略图上');
+  assert.ok(html.includes('thumbnail'),'缩略图本身要保留');
  }
- const media=html.slice(html.indexOf('card-media'),html.indexOf('card-controls'));
- for(const cls of ['favorite','card-select','collect-badge','preview-hit','card-type']){
-  assert.equal(media.includes(cls),false,`缩略图上不该再叠 ${cls}`);
- }
- assert.ok(html.includes('thumbnail'),'缩略图本身要保留');
-});
-
-test('the gallery view keeps overlays on the thumbnail even when compact was toggled before',()=>{
- const model={uid:'h'.repeat(32),name:'Ground 054',author:'ambientCG',platform:'ambientcg',assetId:'Ground054',thumbnail:'https://x/t.jpg',license:'CC0',downloadable:true};
- const html=build({favorites:new Set(),models:[],selected:new Set(),tasks:[],compact:true}).card(model,{gallery:true});
- assert.equal(html.includes('card-controls'),false,'画廊视图不应渲染紧凑控件行');
- const media=html.slice(html.indexOf('card-media'),html.indexOf('card-meta'));
- assert.ok(media.includes('preview-hit')&&media.includes('favorite'),'画廊视图控件仍叠在缩略图上');
 });
 
 test('an already downloaded card shows no download button, only the export one',()=>{
@@ -244,7 +242,9 @@ test('the meta row drops the downloadable tag and folds the license into a hint 
  const by=render({uid:'m'.repeat(32),name:'X',author:'a',thumbnail:'',license:'CC BY-NC-SA 4.0',downloadable:true});
  assert.ok(by.includes('CC BY-NC-SA 4.0 · 可下载不代表可商用'),'CC BY-NC-SA 全文进 title');
  // 标题固定单行：长名字一律省略号截断，不再撑到两行把卡片拉高（2026-10-16 用户要求）
- assert.equal(/-webkit-line-clamp/.test(css),false,'标题不再允许两行');
+ // 只约束资产卡标题自身：图站搜索卡与图片包脚注标题另有两行截断需求，不该被全局断言误伤。
+ const cardTitleRule=(css.match(/\.card-title\{[^}]*\}/)||[])[0]||'';
+ assert.equal(/-webkit-line-clamp/.test(cardTitleRule),false,'资产卡标题不再允许两行');
  assert.ok(/\.card-title\{[^}]*white-space:nowrap/.test(css),'标题强制单行');
  assert.ok(/\.card-title\{[^}]*text-overflow:ellipsis/.test(css),'单行溢出用省略号');
  // 下载键所在的动作行也必须保持一行：行与行内分组都不换行，按键文案 nowrap
@@ -299,17 +299,67 @@ test('LAN visitors see no library-membership badge or remove button',()=>{
  const guest=build({favorites:new Set(),models:[model],selected:new Set(),tasks:[]},()=>({jobs:[]}),true).card(model);
  assert.doesNotMatch(guest,/collect-badge/);
  assert.doesNotMatch(guest,/data-action="remove"/);
- assert.match(build({favorites:new Set(),models:[model],selected:new Set(),tasks:[]},()=>({jobs:[]})).card(model),/collect-badge/);
+ assert.doesNotMatch(build({favorites:new Set(),models:[model],selected:new Set(),tasks:[]},()=>({jobs:[]})).card(model),/collect-badge/,'主机卡片也不再摆入库角标');
 });
 test('有评分才在卡片显示星级；回收站筛选下移除键换成恢复/彻底删除，访客没有写身份',()=>{
  const m={uid:'c'.repeat(32),platform:'sketchfab',name:'Rated',license:'CC0'};
  assert.doesNotMatch(build().card(m),/card-rating/);
  const rated=build({favorites:new Set(),models:[],selected:new Set(),tasks:[],userMeta:{[m.uid]:{rating:4,note:'x'}}}).card(m);
  assert.match(rated,/class="card-rating"/);
- assert.match(rated,/★★★★/);
+ assert.equal((rated.match(/<span class="on">/g)||[]).length,4);
+ assert.equal((rated.match(/<i class="star">/g)||[]).length,5);
  const trashed=build({favorites:new Set(),models:[],selected:new Set(),tasks:[],filter:'trash'}).card(m);
  assert.match(trashed,/data-action="restore"/);
  assert.match(trashed,/data-action="purge"/);
  assert.doesNotMatch(trashed,/data-action="remove"/);
  assert.doesNotMatch(build({favorites:new Set(),models:[],selected:new Set(),tasks:[],filter:'trash'},()=>({jobs:[]}),true).card(m),/data-action="restore"/);
+});
+
+/* ══ 全平台统一收藏 + 撤下选择方块（2026-11-12）══ */
+const src=name=>fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)),'..','src','library',name),'utf8');
+
+test('可收藏目标：稳定 32 位 uid、登记可读、素材包跳过入库',()=>{
+ const uid=favoriteUid('picture','huaban:https://example.com/a.jpg');
+ assert.match(uid,/^[a-f0-9]{32}$/i,'uid 必须过 library-state 的 UID 校验');
+ assert.equal(favoriteUid('picture','huaban:https://example.com/a.jpg'),uid,'同一个资产每次算出同一个 uid');
+ assert.notEqual(favoriteUid('picture','huaban:https://example.com/b.jpg'),uid);
+ assert.equal(favoriteTarget(uid),null);
+ registerFavoriteTarget(uid,{uid,name:'A',platform:'huaban'});
+ assert.equal(favoriteTarget(uid).name,'A');
+ assert.equal(favoriteSkipsCollect(uid),false,'在线资产要 collect 进模型库');
+ const pkg=favoriteUid('package','root|folder');
+ registerFavoriteTarget(pkg,{uid:pkg,name:'Pack'},{skipCollect:true});
+ assert.equal(favoriteSkipsCollect(pkg),true,'本地素材包已在库里，不能再塞一份模型卡');
+ assert.equal(registerFavoriteTarget('not-a-uid',{uid:'x'}),'not-a-uid','非法 uid 不该登记');
+});
+
+test('统一心形键：同一份 HTML，已收藏回填高亮与 aria-pressed',()=>{
+ const icon=name=>`<i class="${name}"></i>`;
+ const off=favoriteButtonHtml({uid:'a'.repeat(32),saved:false,icon});
+ const on=favoriteButtonHtml({uid:'a'.repeat(32),saved:true,icon});
+ assert.match(off,/data-action="favorite"/);
+ assert.match(off,/class="favorite"/);
+ assert.match(off,/aria-pressed="false"/);
+ assert.match(on,/class="favorite saved"/);
+ assert.match(on,/aria-pressed="true"/);
+ assert.match(on,/<i class="heart">/);
+});
+
+test('图站单图 / 本地素材包都画心形键，模型卡不再有 pictureMode 例外',()=>{
+ const view=src('library-view.js'),local=src('local-files.js'),card=src('card-view.js');
+ assert.match(view,/favoriteButtonHtml\(\{uid:favUid/,'图站卡片要有收藏键');
+ assert.match(view,/registerFavoriteTarget\(favUid/,'图站资产要登记成可收藏目标');
+ assert.match(local,/favoriteButtonHtml\(\{uid:favUid/,'素材包卡片要有收藏键');
+ assert.match(local,/skipCollect:true/,'素材包不能重复入库');
+ assert.match(card,/const favoriteButton=favoriteButtonHtml/);
+ assert.doesNotMatch(card,/favoriteButton=pictureMode/,'收藏键不能被图片模式屏蔽');
+});
+
+test('收藏链路与选择方块：findModel 兜底、skipCollect 生效、方块只隐藏不删节点',()=>{
+ const app=src('app.js');
+ assert.match(app,/favoriteTarget\(uid\)/,'findModel 要能找到登记过的图站资产');
+ assert.match(app,/favoriteSkipsCollect\(uid\)/,'本地素材包跳过 collect');
+ assert.match(app,/favorites:\(\)=>state\.favorites/,'素材包卡片要能读到收藏状态');
+ assert.match(css,/\.card-media>\.card-select\{display:none!important\}/,'右上角方块不再显示');
+ assert.match(src('card-view.js'),/data-select=/,'DOM 与 data-select 契约仍保留给框选 / Shift 连选');
 });

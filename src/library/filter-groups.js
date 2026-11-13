@@ -17,22 +17,22 @@ import {zhArtCategory} from './filter-labels.js';
 
 /** ArtStation 的一级分组：id 给样式/单测认，names 是官方英文分类名，一个不多一个不少。 */
 const ARTSTATION_GROUPS=[
- {id:'character',icon:'🧝',label:'角色与生物',color:'#8fe0a8',names:[
+ {id:'character',icon:'user',label:'角色与生物',color:'#8fe0a8',names:[
   'Anatomy','Animals & Wildlife','Character Animation','Character Design','Character Modeling','Creatures','Portraits',
  ]},
- {id:'scene',icon:'🏛️',label:'场景与环境',color:'#8fbbf0',names:[
+ {id:'scene',icon:'grid',label:'场景与环境',color:'#8fbbf0',names:[
   'Architectural Concepts','Architectural Visualization','Environmental Concept Art & Design','Games and Real-Time 3D Environment Art','Matte Painting',
  ]},
- {id:'props',icon:'⚙️',label:'道具与工业',color:'#c3a4f0',names:[
+ {id:'props',icon:'settings',label:'道具与工业',color:'#c3a4f0',names:[
   'Automotive','Fashion & Costume Design','Hard Surface','Industrial & Product Design','Mechanical Design','Mecha','Props','Textures & Materials','Toys & Collectibles','Vehicles','Weapons',
  ]},
- {id:'genre',icon:'🎨',label:'题材与风格',color:'#f0ab8a',names:[
+ {id:'genre',icon:'image',label:'题材与风格',color:'#f0ab8a',names:[
   'Abstract','Anime & Manga','Concept Art','Fan Art','Fantasy','Horror','Pixel and Voxel Art','Realism','Science Fiction','Stylized','Visual Development',
  ]},
- {id:'graphic',icon:'🖌️',label:'插画与平面',color:'#eed892',names:[
+ {id:'graphic',icon:'image',label:'插画与平面',color:'#eed892',names:[
   'Board & Card Game Art','Book Illustration',"Children's Art",'Comic Art','Cover Art','Editorial Illustration','Graphic Design','Illustration','Motion Graphics','Scientific Illustration & Visualization','Sketches','Still Life','Storyboards','User Interface (UI) Art','Web and App Design',
  ]},
- {id:'production',icon:'🎬',label:'游戏影视与技术',color:'#8fd8d0',names:[
+ {id:'production',icon:'play',label:'游戏影视与技术',color:'#8fd8d0',names:[
   'Game Art','Gameplay & Level Design','Lighting','Photogrammetry & 3D Scanning','Scripts & Tools','Technical Art','Tutorials','VFX for Film, TV & Animation','VFX for Real-Time & Games','Virtual and Augmented Reality',
  ]},
 ];
@@ -60,7 +60,7 @@ export const FOLD_AFTER=12;
 /** 折起来的那个组至少要有这么多项，才值得多一次点击；尾巴太短就整列平铺，不做没必要的折叠。 */
 export const FOLD_MIN_TAIL=4;
 /** 「更多分类」组头：与手工分组表同一套渲染，只是没有主题色（灰调）。 */
-export const MORE_GROUP={id:'folded',icon:'✳',label:'更多分类',color:'#9fb0bf'};
+export const MORE_GROUP={id:'folded',icon:'list',label:'更多分类',color:'#9fb0bf'};
 
 /**
  * 长列表 → [常驻项, 折起来的项]（后者为空数组即「不折」）。

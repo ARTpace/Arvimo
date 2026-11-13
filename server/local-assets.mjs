@@ -11,6 +11,7 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import {createInflateRaw} from 'node:zlib';
 import {fileKind} from './local-browse.mjs';
+import {FORMATS} from '../src/library/format-registry.js';
 import {mapLimit} from './bounded-map.mjs';
 
 const SKIP_DIRS = new Set(['node_modules', '.git', '.svn', '.hg', '$recycle.bin', 'system volume information', '__pycache__', '.cache', '.assetvault']);
@@ -26,8 +27,9 @@ const MAX_LISTED_ENTRIES = 200;
 // 扫描时的 stat 并发度：可用 SFX_SCAN_CONCURRENCY 覆盖，0/非法值回落到默认 24。
 const STAT_CONCURRENCY = Math.max(1, Number(process.env.SFX_SCAN_CONCURRENCY) || 24);
 
-const MODEL_EXT = new Set(['glb', 'gltf', 'fbx', 'obj', 'stl', 'ply', '3mf']);
-const MODEL_PRIORITY = ['glb', 'gltf', 'fbx', 'obj', 'stl', 'ply', '3mf'];
+// 哪些后缀算「模型文件」由格式注册表决定（kind:'model'），此处不再维护第二份清单。
+const MODEL_EXT = new Set(Object.values(FORMATS).filter(item => item.kind === 'model').map(item => item.ext));
+const MODEL_PRIORITY = ['glb', 'gltf', 'fbx', 'obj', 'stl', 'ply', '3mf', 'usd', 'usda', 'usdc', 'usdz'];
 // PSD 也算可用封面：前端拿它走 /api/local/thumb 转码，卡片封面才不会是一片图标。
 const COVER_EXT = /\.(png|jpe?g|webp|gif|avif|bmp|svg|psd)$/i;
 
@@ -123,6 +125,15 @@ function describe({ info, entries, root, rel, type, mtime, bytes, fileCount, cat
     truncatedEntries: listed.length > MAX_LISTED_ENTRIES,
     // 目录里有没有能解析的 info.json：前端据此决定要不要给「登记」按钮。
     hasMeta: hasMeta === true,
+    // 图片包边下边写时清单带 status / imageCount：前端据此显示「下载中 N 张」，
+    // 不把半成品画板伪装成已完成的资产。
+    status: String(info.status || ''),
+    // 「只入库」写出的远程收藏卡（status:'remote'）：目录里只有 info.json，没有一张图。
+    // 卡片据此显示「远程收藏 · N 张」并给「下载原图」入口，而不是当成空包或零文件素材。
+    remote: String(info.status || '') === 'remote',
+    // 出处页：远程卡靠它回填「下载原图」任务，用户不必再回去粘一次链接。
+    sourceUrl: String(info.url || info.source_url || ''),
+    imageCount: Number.isSafeInteger(info.imageCount) ? info.imageCount : 0,
   };
 }
 
@@ -238,14 +249,17 @@ function inflate(bytes) {
  * - packages：一个资产一条（含元信息、封面、主文件、总大小）；
  * - files：不属于任何包的文件，也就是用户自己拷进资产库目录的素材。
  */
-export async function scanLibraryPackages({ roots = [], limit = DEFAULT_FILE_LIMIT } = {}) {
+export async function scanLibraryPackages({ roots = [], limit = DEFAULT_FILE_LIMIT, packageCache = null, changedPaths = null } = {}) {
   const fileLimit = Math.max(1, Number(limit) || DEFAULT_FILE_LIMIT);
   const packages = [];
   const files = [];
   const byUid = new Map();
   let truncated = false;
+  const previous=packageCache?new Map(packageCache):null;
+  packageCache?.clear();
 
   const addPackage = item => {
+    packageCache?.set(path.resolve(item.root,item.rel),{...item});
     // 同一 uid 出现多次＝同一个资产被下载了多份（含历史编码错误写出的重复目录）：
     // 只留最新那份，其余记进 copies，避免同一个资产占两张卡。
     const previous = item.uid ? byUid.get(item.uid) : null;
@@ -261,6 +275,14 @@ export async function scanLibraryPackages({ roots = [], limit = DEFAULT_FILE_LIM
   };
 
   async function walk(dir, root, rel, depth) {
+    const cached=previous?.get(path.resolve(dir));
+    if(cached&&changedPaths&&!changedPaths.some(changed=>{
+      const toItem=path.relative(changed,dir),toChange=path.relative(dir,changed);
+      const contains=rel=>rel===''||(!rel.startsWith(`..${path.sep}`)&&rel!=='..'&&!path.isAbsolute(rel));
+      return contains(toItem)||contains(toChange);
+    })){
+      addPackage({...cached});return;
+    }
     const entries = await readEntries(dir);
     const names = new Set(entries.map(entry => entry.name));
     if (names.has('info.json')) {

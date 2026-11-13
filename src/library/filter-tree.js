@@ -20,21 +20,22 @@
  *   - 两者都没有：平铺成单层 —— 新平台不写任何配置也渲染得出东西。
  */
 import {ARTSTATION_CATEGORY_GROUPS,MORE_GROUP,foldLongList} from './filter-groups.js';
+import {setTreeOpen} from './disclosure-motion.js';
 
 // 19 个 Sketchfab 分类按主题归到 5 组。没被列到的分类会兜进「其他」，
 // 以后官方加新分类也不会从树上凭空消失。
 const GROUPS=[
- {id:'life',icon:'🐾',label:'生物',color:'#8fe0a8',values:['animals-pets','characters-creatures','nature-plants','people']},
- {id:'scene',icon:'🏛️',label:'场景',color:'#8fbbf0',values:['architecture','places-travel','furniture-home']},
- {id:'art',icon:'🎨',label:'人文',color:'#f0ab8a',values:['art-abstract','cultural-heritage-history','music','news-politics','fashion-style']},
- {id:'build',icon:'⚙️',label:'造物',color:'#c3a4f0',values:['cars-vehicles','electronics-gadgets','weapons-military','science-technology']},
- {id:'daily',icon:'🍰',label:'生活',color:'#eed892',values:['food-drink','sports-fitness']},
+ {id:'life',icon:'user',label:'生物',color:'#8fe0a8',values:['animals-pets','characters-creatures','nature-plants','people']},
+ {id:'scene',icon:'grid',label:'场景',color:'#8fbbf0',values:['architecture','places-travel','furniture-home']},
+ {id:'art',icon:'image',label:'人文',color:'#f0ab8a',values:['art-abstract','cultural-heritage-history','music','news-politics','fashion-style']},
+ {id:'build',icon:'settings',label:'造物',color:'#c3a4f0',values:['cars-vehicles','electronics-gadgets','weapons-military','science-technology']},
+ {id:'daily',icon:'heart',label:'生活',color:'#eed892',values:['food-drink','sports-fitness']},
 ];
-const OTHER={id:'more',icon:'✳',label:'其他',color:'#9fb0bf'};
+const OTHER={id:'more',icon:'list',label:'其他',color:'#9fb0bf'};
 const ACCENT='#c9f581';
 
 const SPECS=[
- {row:'#filters-sketchfab',plate:{emoji:'🧊',label:'Sketchfab',tone:'#9fd0a0'},reset:'#reset-search-filters',fields:[
+ {row:'#filters-sketchfab',plate:{icon:'cube',label:'Sketchfab',tone:'#9fd0a0'},reset:'#reset-search-filters',fields:[
   {key:'category',label:'分类',icon:'list',open:true,groups:GROUPS,control:'#online-category'},
   {key:'sort',label:'排序',icon:'sort',control:'#online-sort'},
   {key:'scope',label:'范围',icon:'check',checks:[
@@ -43,7 +44,7 @@ const SPECS=[
    {label:'精选',selector:'#online-staffpicked'},
   ]},
  ]},
- {row:'#filters-artstation',plate:{emoji:'🖼️',label:'ArtStation',tone:'#e8a6b8'},reset:'#art-reset-filters',fields:[
+ {row:'#filters-artstation',plate:{icon:'image',label:'ArtStation',tone:'#e8a6b8'},reset:'#art-reset-filters',fields:[
   // A 站官方有 59 个分类，平铺出来是一列看不到头的清单；按用途归到 6 组（filter-groups.js），
   // 组默认折着，只有当前选中的那一组会自动展开。分组只看显示文案，请求参数仍是官方数字 id。
   {key:'category',label:'分类',icon:'list',groups:ARTSTATION_CATEGORY_GROUPS,control:'#art-category'},
@@ -54,28 +55,32 @@ const SPECS=[
  ]},
  // 下面四个平台的分类清单来自各自接口：词表长、彼此不通、还混着 collection 之类的合集前缀，
  // 没有可依赖的手工分组表，所以声明 fold —— 清单本身按官方热度排序，超过阈值就折起来。
- {row:'#filters-polyhaven',plate:{emoji:'🏛️',label:'Poly Haven',tone:'#9ec6e8'},fields:[
+ {row:'#filters-polyhaven',plate:{icon:'grid',label:'Poly Haven',tone:'#9ec6e8'},fields:[
   {key:'type',label:'类型',icon:'cube',control:'#polyhaven-type'},
   {key:'category',label:'分类',icon:'list',fold:true,control:'#polyhaven-category'},
  ]},
- {row:'#filters-ambientcg',plate:{emoji:'🪨',label:'ambientCG',tone:'#c3b49a'},fields:[
+ {row:'#filters-ambientcg',plate:{icon:'cube',label:'ambientCG',tone:'#c3b49a'},fields:[
   {key:'type',label:'类型',icon:'cube',control:'#ambientcg-type'},
   {key:'category',label:'分类',icon:'list',open:true,fold:true,control:'#ambientcg-category'},
  ]},
- {row:'#filters-freestylized',plate:{emoji:'🎨',label:'FreeStylized',tone:'#d7b4e8'},fields:[
+ {row:'#filters-freestylized',plate:{icon:'image',label:'FreeStylized',tone:'#d7b4e8'},fields:[
   {key:'type',label:'类型',icon:'cube',control:'#freestylized-type'},
   {key:'category',label:'分类',icon:'list',fold:true,control:'#freestylized-category'},
  ]},
- {row:'#filters-kenney',plate:{emoji:'🎮',label:'Kenney',tone:'#a8d8b0'},fields:[
+ {row:'#filters-kenney',plate:{icon:'play',label:'Kenney',tone:'#a8d8b0'},fields:[
   {key:'category',label:'类型',icon:'cube',fold:true,control:'#kenney-category'},
   {key:'series',label:'系列',icon:'list',fold:true,control:'#kenney-series'},
  ]},
- {row:'#filters-polypizza',plate:{emoji:'🍕',label:'Poly Pizza',tone:'#e8b48c'},fields:[
+ {row:'#filters-polypizza',plate:{icon:'cube',label:'Poly Pizza',tone:'#e8b48c'},fields:[
   {key:'license',label:'许可',icon:'check',checks:[{label:'仅 CC0',selector:'#polypizza-cc0'}]},
  ]},
- {row:'#filters-polyfork',plate:{emoji:'🌳',label:'Polyfork',tone:'#9dc8e8'},fields:[
+ {row:'#filters-polyfork',plate:{icon:'globe',label:'Polyfork',tone:'#9dc8e8'},fields:[
   {key:'class',label:'类别',icon:'cube',control:'#polyfork-class'},
   {key:'sort',label:'排序',icon:'list',control:'#polyfork-sort'},
+ ]},
+ {row:'#filters-uiverse',plate:{icon:'sparkle',label:'Uiverse',tone:'#c9f581'},fields:[
+  {key:'type',label:'类型',icon:'cube',control:'#uiverse-type'},
+  {key:'theme',label:'主题',icon:'image',control:'#uiverse-theme'},
  ]},
 ];
 
@@ -135,7 +140,7 @@ function buildPanel({$,icon,host,spec}){
  tree.setAttribute('aria-label','筛选');
  if(spec.plate){                                    // 全部平台下两棵树并排出现，先报一遍自己是谁
   const plate=el('div','ftree-plate');plate.style.setProperty('--tone',spec.plate.tone||'');
-  plate.append(el('span','ftree-plate-emoji',spec.plate.emoji),el('span','ftree-plate-name',spec.plate.label));
+  plate.append(svgBox(icon,spec.plate.icon),el('span','ftree-plate-name',spec.plate.label));
   tree.append(plate);
  }
  const views=fields.map(field=>buildField({field,icon,keep}));
@@ -196,10 +201,10 @@ function buildField({field,icon,keep}){
  section.append(head,body);
 
  const state={open:field.open!==false,wideOpen:null,last:null,signature:''};
- const setOpen=open=>{state.open=open;section.classList.toggle('open',open);head.setAttribute('aria-expanded',String(open));};
+ const setOpen=(open,animate=false)=>{state.open=open;setTreeOpen(section,open,animate);};
  // 点击时读 DOM 上的 .open 类，而不是内部的 state.open：抽屉会在打开时直接给分支加 .open，
  // 内部 state 若不同步，第一次点击就会算反方向（看着像没反应）。
- head.addEventListener('click',()=>setOpen(!section.classList.contains('open')));
+ head.addEventListener('click',()=>setOpen(!section.classList.contains('open'),true));
 
  let sync=()=>{};
 
@@ -217,7 +222,7 @@ function buildField({field,icon,keep}){
    node.dataset.value=option.value;
    node.title=option.label;
    if(tone)node.style.setProperty('--tone',tone);
-   node.append(el('i','ftree-dot'),el('span','ftree-leaf-label',option.label),el('i','ftree-spark','✦'));
+   node.append(el('i','ftree-dot'),el('span','ftree-leaf-label',option.label),Object.assign(el('i','ftree-spark'),{innerHTML:icon('sparkle')}));
    node.addEventListener('click',()=>choose(option.value));
    return node;
   };
@@ -228,13 +233,13 @@ function buildField({field,icon,keep}){
    const groupHead=el('button','ftree-group-head');groupHead.type='button';
    groupHead.setAttribute('aria-expanded','false');
    const groupCaret=el('span','ftree-caret');groupCaret.innerHTML=icon('chevron');
-   groupHead.append(groupCaret,el('span','ftree-emoji',group.icon),el('span','ftree-name',group.label),el('span','ftree-count',String(items.length)));
+   groupHead.append(groupCaret,svgBox(icon,group.icon),el('span','ftree-name',group.label),el('span','ftree-count',String(items.length)));
    const groupBody=el('div','ftree-body');
    const groupKids=el('div','ftree-kids');
    for(const option of items)groupKids.append(makeLeaf(option,group.color));
    groupBody.append(groupKids);
    wrap.append(groupHead,groupBody);
-   groupHead.addEventListener('click',()=>setGroupOpen(wrap,!wrap.classList.contains('open')));
+   groupHead.addEventListener('click',()=>setGroupOpen(wrap,!wrap.classList.contains('open'),true));
    setGroupOpen(wrap,false);   // 子分组默认折叠（只展开父级，避免抽屉里列表拉太长）
    return wrap;
   };
@@ -328,10 +333,8 @@ function buildField({field,icon,keep}){
  }};
 }
 
-function setGroupOpen(group,open){
- group.classList.toggle('open',open);
- const head=group.querySelector('.ftree-group-head');
- if(head)head.setAttribute('aria-expanded',String(open));
+function setGroupOpen(group,open,animate=false){
+ setTreeOpen(group,open,animate);
 }
 
 function svgBox(icon,name){

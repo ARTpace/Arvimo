@@ -65,9 +65,9 @@ test('submitting an empty box (browse popular) is not remembered either',async()
 
 test('requestFeed defaults record to false, so no caller forgets the flag and starts recording',()=>{
  const feed=code(read('src/library/discovery-feed.js'));
- assert.ok(/async function requestFeed\(mode,request,\{more=false,all=false,record=false\}=\{\}\)/.test(feed),
+ assert.ok(/async function requestFeed\(mode,request,\{[^}]*record=false[^}]*\}=\{\}\)/.test(feed),
   'requestFeed 的 record 必须默认 false：漏传参数的入口不该悄悄开始记历史');
- assert.ok(/if\(!more&&mode==='search'&&record&&String\(request\.q\|\|''\)\.trim\(\)\)\{?remember\(/.test(feed),
+ assert.ok(/if\(!more&&mode==='search'&&record&&String\((?:originalRequest|request)\.q\|\|''\)\.trim\(\)\)\{?remember\(/.test(feed),
   '关键词那一路要 record 为真、且确实带关键词才记录');
  assert.ok(/function startSearch\(\{record=false\}=\{\}\)/.test(feed),'startSearch 同样默认不记录');
  assert.ok(/requestFeed\(mode,readRequest\(mode\),\{record\}\)/.test(feed),'startSearch 要把 record 透传下去');
@@ -76,19 +76,20 @@ test('requestFeed defaults record to false, so no caller forgets the flag and st
 test('only the search box submit turns recording on — filters, tags and replay never do',()=>{
  const app=code(read('src/library/app.js'));
  const hits=app.match(/startSearch\(\{record:true\}\)/g)||[];
- // 只有两个入口：搜索框回车提交，以及点「今日主题」胶囊（后者等同用户在框里敲了那个词）。
+ // 只有两个入口：搜索框回车提交，以及点浮层里的推荐词（后者等同用户在框里敲了那个词）。
  // 其余入口（分类/排序/复选、标签点选、重置筛选、浏览全部、历史回放）一律走默认的不记录。
- assert.equal(hits.length,2,`只允许「搜索框提交」与「今日主题」两处开启记录，实际 ${hits.length} 处`);
+ assert.equal(hits.length,2,`只允许「搜索框提交」与「推荐词」两处开启记录，实际 ${hits.length} 处`);
  assert.ok(/\$\('#asset-search-form'\)\.addEventListener\('submit'[\s\S]{0,120}startSearch\(\{record:true\}\)/.test(app),
   '开启记录的一处必须是搜索表单的 submit');
- assert.ok(/\$\('#topic-strip'\)\.addEventListener\('click'[\s\S]{0,500}startSearch\(\{record:true\}\)/.test(app),
-  '另一处必须是今日主题胶囊：它等同用户自己输入关键词');
+ assert.ok(/function pickTerm\(term\)\{[\s\S]{0,200}startSearch\(\{record:true\}\)/.test(app),
+  '另一处必须是浮层推荐词的统一入口：它等同用户自己输入关键词');
  // 标签点选、重置筛选、浏览全部这几处都会改动搜索条件，它们只能走默认（不记录）的那条路。
- for(const call of ["const tag=e.target.closest('[data-tag]');if(tag){$('#preview-dialog').close();writeSearch({q:tag.dataset.tag});startSearch();}",
-  "$('#reset-search-filters').onclick=()=>{writeSearch({q:$('#asset-query').value});startSearch();};",
-  "$('#empty-explore').onclick=()=>{writeSearch({sort:'popular'});refreshTopicStrip();startSearch();};"]){
-  assert.ok(app.includes(call),`这处调用应保持不带 record：${call.slice(0,40)}…`);
- }
+ // 只断言「入口存在 + 调用不带参数」，不锁死整行源码 —— 之前整行比对在旁边加个分支就假红。
+ for(const [pattern,label] of [
+  [/const tag=e\.target\.closest\('\[data-tag\]'\)[\s\S]{0,240}?startSearch\(\);/, '标签点选'],
+  [/\$\('#reset-search-filters'\)\.onclick[\s\S]{0,160}?startSearch\(\);/, '重置筛选'],
+  [/\$\('#empty-explore'\)\.onclick[\s\S]{0,180}?startSearch\(\);/, '浏览全部'],
+ ])assert.ok(pattern.test(app),`${label} 应保持不带 record`);
 });
 
 test('history entries without a keyword are dropped when the store is loaded',()=>{
@@ -109,7 +110,7 @@ test('the history popover lists compact chips and drops keyword-less entries whe
 
 test('the platform picker announces itself so the popover can get out of the way',()=>{
  const picker=code(read('src/library/picker.js'));
- assert.ok(/document\.dispatchEvent\(new CustomEvent\('picker:open'\)\)/.test(picker),
+ assert.ok(/document\.dispatchEvent\(new CustomEvent\('picker:open'(?:,\{detail:\{id\}\})?\)\)/.test(picker),
   'picker 打开时要广播 picker:open');
 });
 

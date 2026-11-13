@@ -12,6 +12,7 @@
 import {openPublic} from './public-http.mjs';
 import {readStreamText,ARTSTATION_HASH,artstationUid} from './artstation-project.mjs';
 import {coverUrl} from './artstation-cdn.mjs';
+import {tagList} from './tag-list.mjs';
 
 // Identity lives with the project module (the .mview pipeline needs the same id in its
 // info.json for archive provenance checks); re-exported here so search callers keep one import.
@@ -146,7 +147,7 @@ export function normalizeArtstationProject(project){
     // 「可转 3D」和「只是图片」，否则用户会以为点下载就能拿到模型。
     hasMarmoset:project.icons?.marmoset===true,
     downloadable:false,license:'ArtStation 作品 · 需确认授权',
-    categories:[],tags:[],publishedAt:null,
+    categories:[],tags:tagList(project.tags),publishedAt:null,
   };
 }
 

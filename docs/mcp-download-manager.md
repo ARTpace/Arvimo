@@ -85,8 +85,10 @@
 （`已识别 ArtStation 作品《xx》，已加入 N 个 ArtStation 转换任务`）。toast 只有一个槽位，结果消息总会顶掉先弹的提示，
 所以上下文必须并进最终那条，不能自己弹一条再被冲走。
 
-**最近检索**：不再常驻左侧栏。点搜索框（`#asset-query`）弹出 `#history-pop` 浮层，由 `src/library/search-history.js` 负责
-渲染、定位与键盘选中；浮层挂在 `body` 上（`position:fixed`），因为搜索卡片是 `overflow:hidden`，留在里面会被裁掉。
+**检索词组浮层**：不再有常驻的「今日主题 / 相近词」条，也不再常驻左侧栏。点搜索框（`#asset-query`）弹出 `#history-pop`，
+由 `src/library/search-history.js` 负责渲染、定位与键盘选中；分组契约在 `src/library/term-groups.js`，
+按「最近检索 / 链接解析 / 今日主题 / 相近词」四类分区，数据由 `app.js` 的 `termSources()` 注入。
+浮层挂在 `body` 上（`position:fixed`），因为搜索卡片是 `overflow:hidden`，留在里面会被裁掉。
 
 **多源合并**：`src/library/discovery-view.js` 的 `combine()` 把若干结果流投影成一个只读视图，
 `interleave()` 让两个平台**交错**出现——直接拼接会让第一个平台的长列表把另一个整个压到看不见。

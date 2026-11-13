@@ -35,6 +35,7 @@ sketchfab-exporter-tauri/licensing/
 scripts/tmp-*.mjs
 sketchfab-exporter-tauri/src/app.js
 sketchfab-exporter-tauri/src/engine.js
+sketchfab-exporter-tauri/src/gltf-preview.js
 sketchfab-exporter-tauri/src/app.css
 sketchfab-exporter-tauri/src/index.html
 sketchfab-exporter-tauri/src/favicon.svg
@@ -49,3 +50,26 @@ sketchfab-exporter-tauri/src/splash.css
 vendor/browser/
 **/__pycache__/
 *.pyc
+
+# ── 抓包 / 调试残留（2026-11 基线整理，不入库）──
+/c.json
+/s.json
+/u.json
+/v.json
+/w.json
+/uic.json
+/fs.json
+/scratch-v.json
+/scratch_u.json
+/page.html
+# 根目录下名为 folder 的 3.6MB ZIP 调试包
+/folder
+/tmp-fs-diag-out/
+/.workbuddy/
+
+# ── Artflow 构建产物拷贝（由 build-library / 打包脚本生成，不入库）──
+/sketchfab-exporter-tauri/src/artflow/
+/sketchfab-exporter-tauri/src/doc-render.js
+
+# ── 同步工具冲突副本（Syncthing *sync-conflict*）──
+*.sync-conflict-*

@@ -1,45 +1,28 @@
+import {icon} from './icon-set.js';
 /** Visual feedback adapted from the supplied design; business requests remain in app.js. */
-export function initSearchMotion(panel){
+export function initSearchMotion(panel,{notify}={}){
  if(!panel||panel.dataset.motionReady)return;
  panel.dataset.motionReady='1';
  const input=panel.querySelector('#asset-query'),clear=panel.querySelector('#search-clear');
- const mascot=panel.querySelector('#search-mascot'),bubble=panel.querySelector('#search-mascot-bubble');
+ const mascot=panel.querySelector('#search-mascot');
  const mini=panel.querySelector('.search-mini-bot'),search=panel.querySelector('#search-button'),ai=panel.querySelector('#theme-breakdown-btn'),kbd=panel.querySelector('kbd');
  const reduced=window.matchMedia('(prefers-reduced-motion: reduce)');
  const eyes=[...panel.querySelectorAll('.bot-eye,.vault-bot-eye')];
  panel.querySelector('.global-search>i')?.classList.add('search-icon-svg');
  search.querySelector('i')?.classList.add('search-icon-svg');
- let bubbleTimer,typeTimer,frame=0,point={x:innerWidth/2,y:innerHeight/2},bias={x:0,y:0},busy=false,audio;
+ let happyTimer,frame=0,buttonFrame=0,buttonPoint,point={x:innerWidth/2,y:innerHeight/2},bias={x:0,y:0},busy=false,audio;
  const visible=()=>!document.hidden&&!panel.hidden&&panel.getClientRects().length>0;
  const later=(fn,ms)=>setTimeout(()=>{if(visible()&&!reduced.matches)fn();},ms);
  const animate=(node,name)=>{if(reduced.matches)return;node.classList.remove(name);void node.offsetWidth;node.classList.add(name);};
  const sync=()=>{clear.hidden=!input.value;clear.classList.toggle('visible',!!input.value);panel.classList.toggle('has-search-text',!!input.value);};
- const happy=()=>{if(updateBubble)return;mascot.classList.add('happy');clearTimeout(bubbleTimer);bubbleTimer=setTimeout(()=>{bubble.classList.remove('show');mascot.classList.remove('happy');},2200);};
- let updateBubble=false;
- const greet=text=>{if(updateBubble)return;bubble.textContent=text;bubble.classList.add('show');happy();};
- function showUpdate(detail){
-  mascot.classList.toggle('has-update',!!detail.available);
-  if(!updateBubble&&!detail.available)return;
-  updateBubble=true;clearTimeout(bubbleTimer);
-  bubble.classList.add('show','update-bubble');
-  const text=document.createElement('span');text.className='update-bubble-text';text.textContent=detail.message||'正在检查更新…';
-  const close=document.createElement('button');close.type='button';close.className='update-bubble-close';close.textContent='×';close.setAttribute('aria-label','关闭更新提示');
-  close.onclick=()=>{updateBubble=false;bubble.classList.remove('show','update-bubble');};
-  bubble.replaceChildren(text);
-  if(detail.available&&detail.phase!=='downloading'){
-   const action=document.createElement('button');action.type='button';action.className='update-bubble-action';action.textContent=detail.actionLabel;action.disabled=!!detail.disabled;
-   action.onclick=()=>window.dispatchEvent(new Event('assetvault:install-update'));bubble.append(action);
-  }else if(detail.phase==='error'){
-   const retry=document.createElement('button');retry.type='button';retry.className='update-bubble-action';retry.textContent='重试';retry.onclick=()=>window.dispatchEvent(new Event('assetvault:check-updates'));bubble.append(retry);
-  }
-  bubble.append(close);
- }
- window.addEventListener('assetvault:update-state',event=>showUpdate(event.detail));
- mascot.setAttribute('aria-label','小猫助手：检查软件更新');mascot.title='点击检查软件更新';
+ const happy=()=>{mascot.classList.add('happy');clearTimeout(happyTimer);happyTimer=setTimeout(()=>mascot.classList.remove('happy'),2200);};
+ const greet=text=>{notify?.({type:'hint',text});happy();};
+ mascot.title='和小猫打个招呼';
  const thinking=on=>{mascot.classList.toggle('thinking',on);bias=on?{x:-2.2,y:-2.4}:{x:0,y:0};updateEyes();};
  function updateEyes(){
   if(reduced.matches||!visible())return;
-  for(const eye of eyes){const r=eye.getBoundingClientRect(),dx=point.x-r.left-r.width/2,dy=point.y-r.top-r.height/2,d=Math.max(28,Math.hypot(dx,dy)),max=eye.classList.contains('bot-eye')?3:2;eye.style.transform='translate('+(dx/d*max+bias.x)+'px,'+(dy/d*max+bias.y)+'px)';}
+  const transforms=eyes.map(eye=>{const r=eye.getBoundingClientRect(),dx=point.x-r.left-r.width/2,dy=point.y-r.top-r.height/2,d=Math.max(28,Math.hypot(dx,dy)),max=eye.classList.contains('bot-eye')?3:2;return 'translate('+(dx/d*max+bias.x)+'px,'+(dy/d*max+bias.y)+'px)';});
+  eyes.forEach((eye,i)=>{eye.style.transform=transforms[i];});
  }
  function sound(sparkle=false,freq=600){
   try{
@@ -62,22 +45,19 @@ export function initSearchMotion(panel){
  const blinkLoop=()=>{if(visible()&&!reduced.matches){blink();if(Math.random()<.3)later(blink,280);}setTimeout(blinkLoop,3200+Math.random()*4200);};
  const glance=()=>{if(visible()&&!reduced.matches&&!mascot.classList.contains('thinking')){const dirs=[[3,0],[-3,0],[2,2],[-2,1],[0,2.5],[-3,-1]],d=dirs[Math.floor(Math.random()*dirs.length)];bias={x:d[0],y:d[1]};updateEyes();later(()=>{if(!mascot.classList.contains('thinking')){bias={x:0,y:0};updateEyes();}},800+Math.random()*600);}setTimeout(glance,5500+Math.random()*5500);};
  setTimeout(blinkLoop,2000);setTimeout(glance,4500);
- const curiosity=()=>{if(visible()&&!reduced.matches&&!mascot.matches(':hover')&&!mascot.classList.contains('thinking')&&Math.random()>.5){mascot.style.rotate=(Math.random()*7-3.5)+'deg';setTimeout(()=>mascot.style.rotate='',750);}setTimeout(curiosity,7000);};setTimeout(curiosity,7000);
- mascot.addEventListener('animationend',event=>{if(event.target===mascot)mascot.classList.remove('enter','duck','peek');});
+ mascot.addEventListener('animationend',event=>{if(event.target===mascot)mascot.classList.remove('enter','duck','peek','tap');});
  input.addEventListener('focus',()=>{thinking(true);greet('喵～随时为你检索 3D 资产');sound(false,480);});
  input.addEventListener('blur',()=>{if(!busy)thinking(false);});
  input.addEventListener('input',()=>{sync();greet(input.value.trim()?'准备搜索：“'+input.value.trim().slice(0,12)+'”':'等待输入关键词…');});
  input.addEventListener('keydown',event=>{if(event.key==='Enter'&&!event.isComposing)animate(kbd,'pressed');});
  kbd.addEventListener('animationend',()=>kbd.classList.remove('pressed'));
  clear.addEventListener('click',()=>{input.value='';input.dispatchEvent(new Event('input',{bubbles:true}));input.focus();sound(false,320);greet('已重置输入框');});
- mascot.addEventListener('click',event=>{animate(mascot,'duck');burst(event,mascot,6);sound(false,850);updateBubble=true;showUpdate({phase:'checking',message:'正在检查软件版本…'});window.dispatchEvent(new Event('assetvault:check-updates'));});
+ mascot.addEventListener('click',()=>{blink();input.focus();notify?.({type:'greeting'});});
  panel.addEventListener('change',event=>{
   if(event.target.id!=='search-platform')return;
   sync();sound(false,750);greet('已切换至 '+event.target.selectedOptions[0].textContent);
-  const text=input.placeholder;clearInterval(typeTimer);
-  if(!reduced.matches){let i=0;input.placeholder='';typeTimer=setInterval(()=>{input.placeholder=text.slice(0,++i);if(i>=text.length)clearInterval(typeTimer);},22);}
  });
- panel.addEventListener('submit',()=>{sync();sound(true);animate(mascot,'duck');});
+ panel.addEventListener('submit',()=>{sync();sound(true);});
  // Capture gives feedback before business handlers disable buttons or rerender dynamic chips.
  panel.addEventListener('click',event=>{
   const button=event.target.closest('#search-button,#theme-breakdown-btn,.topic-chip,#search-platform-trigger');if(!button||button.disabled)return;
@@ -92,16 +72,25 @@ export function initSearchMotion(panel){
   point={x:event.clientX,y:event.clientY};if(frame)return;
   frame=requestAnimationFrame(()=>{frame=0;updateEyes();});
  });
- search.addEventListener('pointermove',event=>{if(reduced.matches||event.pointerType==='touch')return;const r=search.getBoundingClientRect();search.style.setProperty('--mx',Math.max(-4,Math.min(4,(event.clientX-r.left-r.width/2)*.12))+'px');search.style.setProperty('--my',Math.max(-4,Math.min(4,(event.clientY-r.top-r.height/2)*.18))+'px');});
- search.addEventListener('pointerleave',()=>{search.style.setProperty('--mx','0px');search.style.setProperty('--my','0px');});
+ search.addEventListener('pointermove',event=>{
+  if(reduced.matches||event.pointerType==='touch')return;
+  buttonPoint={x:event.clientX,y:event.clientY};if(buttonFrame)return;
+  buttonFrame=requestAnimationFrame(()=>{buttonFrame=0;const r=search.getBoundingClientRect();search.style.setProperty('--mx',Math.max(-4,Math.min(4,(buttonPoint.x-r.left-r.width/2)*.12))+'px');search.style.setProperty('--my',Math.max(-4,Math.min(4,(buttonPoint.y-r.top-r.height/2)*.18))+'px');});
+ });
+ search.addEventListener('pointerleave',()=>{cancelAnimationFrame(buttonFrame);buttonFrame=0;search.style.setProperty('--mx','0px');search.style.setProperty('--my','0px');});
+ const pauseMotion=()=>panel.classList.toggle('motion-paused',document.hidden);
+ document.addEventListener('visibilitychange',pauseMotion);pauseMotion();
  panel.addEventListener('search-motion-state',event=>{
   busy=event.detail.busy;search.classList.toggle('searching-active',busy);search.setAttribute('aria-busy',String(busy));sync();
-  if(busy){thinking(true);greet('正在检索资产…');animate(mascot,'duck');}
-  else{thinking(document.activeElement===input);if(event.detail.ok){greet('检索完成');animate(mascot,'peek');animate(panel,'flash');}else greet('检索未完成，请查看结果区提示');}
+  if(event.detail.reset){thinking(false);notify?.({type:'context'});return;}
+  notify?.({type:'search',busy,ok:event.detail.ok});
+  if(busy){thinking(true);}
+  else{thinking(document.activeElement===input);if(event.detail.ok){animate(panel,'flash');}}
  });
  panel.addEventListener('animationend',event=>{if(event.target===panel)panel.classList.remove('motion-enter','flash');if(event.target.classList.contains('topic-chip'))event.target.classList.remove('pop');});
  // AI's real disabled state controls its loading animation, even when its text changes.
  new MutationObserver(()=>{ai.classList.toggle('searching-active',ai.disabled);if(ai.disabled)thinking(true);else if(!busy)thinking(document.activeElement===input);sync();}).observe(ai,{attributes:true,attributeFilter:['disabled']});
- const sparkle=document.createElement('span');sparkle.className='sparkle-icon';sparkle.textContent='✦';ai.replaceChildren(sparkle,document.createTextNode(' AI 拆解'));
- animate(panel,'motion-enter');animate(mascot,'enter');sync();
+ // AI 拆解已收进输入框右端、只留一颗图标。初始化时只放回图标，别再把「AI 拆解」文字写回来。
+ const sparkle=document.createElement('span');sparkle.className='sparkle-icon';sparkle.innerHTML=icon('sparkle');ai.replaceChildren(sparkle);
+ animate(panel,'motion-enter');sync();
 }

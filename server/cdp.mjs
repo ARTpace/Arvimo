@@ -235,8 +235,74 @@ export async function launchBrowser({ mode = 'headless', profileDir, timeout = 3
   return { page: cdpPage, child, port, exe, mode };
 }
 
-/** 让浏览器退出，尽量干净。 */
-export function killBrowser(child, { grace = 3000 } = {}) {
+/**
+ * 借一张**新标签页**来跑页面，而不是占用现有那一张。
+ *
+ * 为什么要这么绕：登录窗口和后台抓取共用同一个 profile（同一份登录态），所以能借它的实例 ——
+ * 但直接 `goto` 会把用户正在看的那一页导航走（他可能还停在登录页确认状态）。开一张背景页签
+ * 两个目的都满足：同一浏览器 = 同一登录态，用户那一页原样不动。跑完只关这张页签。
+ *
+ * 返回 { page, targetId, close() }。
+ */
+export async function openPageTarget(port, { url = 'about:blank' } = {}) {
+  const version = await (await fetch(`http://127.0.0.1:${port}/json/version`)).json();
+  const browserWs = new WebSocket(version.webSocketDebuggerUrl);
+  await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('连接浏览器超时')), 10000);
+    browserWs.addEventListener('open', () => { clearTimeout(timer); resolve(); }, { once: true });
+    browserWs.addEventListener('error', () => { clearTimeout(timer); reject(new Error('连接浏览器失败')); }, { once: true });
+  });
+
+  let seq = 0;
+  const pending = new Map();
+  browserWs.addEventListener('message', (ev) => {
+    let msg;
+    try { msg = JSON.parse(ev.data); } catch { return; }
+    const slot = msg.id ? pending.get(msg.id) : null;
+    if (!slot) return;
+    pending.delete(msg.id);
+    clearTimeout(slot.timer);
+    if (msg.error) slot.reject(new Error(msg.error.message || 'CDP 调用失败'));
+    else slot.resolve(msg.result);
+  });
+  const call = (method, params = {}, timeout = 15000) => new Promise((resolve, reject) => {
+    const id = ++seq;
+    const timer = setTimeout(() => { pending.delete(id); reject(new Error(`CDP ${method} 超时`)); }, timeout);
+    pending.set(id, { resolve, reject, timer });
+    try { browserWs.send(JSON.stringify({ id, method, params })); }
+    catch (e) { clearTimeout(timer); pending.delete(id); reject(e); }
+  });
+
+  const { targetId } = await call('Target.createTarget', { url });
+  const list = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
+  const info = list.find((t) => t.id === targetId);
+  if (!info?.webSocketDebuggerUrl) {
+    try { browserWs.close(); } catch { /* 已关 */ }
+    throw new Error('页面新建失败');
+  }
+  const ws = new WebSocket(info.webSocketDebuggerUrl);
+  await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('连接新页面超时')), 10000);
+    ws.addEventListener('open', () => { clearTimeout(timer); resolve(); }, { once: true });
+    ws.addEventListener('error', () => { clearTimeout(timer); reject(new Error('连接新页面失败')); }, { once: true });
+  });
+
+  const page = new CdpPage(ws);
+  await page.send('Page.enable', {}, 10000).catch(() => {});
+  await page.send('Network.enable', {}, 10000).catch(() => {});
+
+  return {
+    page,
+    targetId,
+    async close() {
+      page.close();
+      await call('Target.closeTarget', { targetId }).catch(() => {});
+      try { browserWs.close(); } catch { /* 已关 */ }
+    },
+  };
+}
+
+/** 让浏览器退出，尽量干净。 */export function killBrowser(child, { grace = 3000 } = {}) {
   if (!child || child.exitCode !== null) return;
   return new Promise((resolve) => {
     const timer = setTimeout(() => {

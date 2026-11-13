@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import {createLibraryStorage,restoreLibraryCovers} from '../server/library-storage.mjs';
+import {createLibraryStorage,restoreLibraryCovers,stateFileFor} from '../server/library-storage.mjs';
 import {mergeModels,collectModels} from '../src/library/library-state.js';
 import {createPersistentStorage} from '../src/library/persistent-storage.js';
 
@@ -41,6 +41,25 @@ test('frontend restores downloads and favorites across different page storage or
  const second=await createPersistentStorage({getItem:()=>null,setItem(){}},request);
  assert.deepEqual(JSON.parse(second.getItem('sfx-library-v2')),saved);
 });
+test('pending saves merge keys and keep the latest value without concurrent writes',async()=>{
+ const posts=[];let release;
+ const request=async(_url,options)=>{
+  if(options.method!=='POST')return {ok:true,json:async()=>({values:{'sfx-library-v2':'{}'}})};
+  posts.push(JSON.parse(options.body));
+  if(posts.length===1)await new Promise(resolve=>{release=resolve;});
+  return {ok:true};
+ };
+ const storage=await createPersistentStorage({getItem:()=>null,setItem(){}},request);
+ storage.setItem('sfx-library-v2','first');storage.setItem('sfx-library-ui','ui');
+ await new Promise(resolve=>setImmediate(resolve));
+ assert.deepEqual(posts,[{'sfx-library-v2':'first','sfx-library-ui':'ui'}]);
+ storage.setItem('sfx-library-v2','obsolete');storage.setItem('sfx-library-v2','latest');
+ storage.setItem('sfx-discovery-v1','discovery');
+ assert.equal(posts.length,1);assert.equal(storage.getItem('sfx-library-v2'),'latest');
+ release();await new Promise(resolve=>setImmediate(resolve));
+ assert.deepEqual(posts[1],{'sfx-library-v2':'latest','sfx-discovery-v1':'discovery'});
+});
+
 test('library persists across server instances, recovers existing downloads and preserves removals',async()=>{
  const dir=await fs.mkdtemp(path.join(os.tmpdir(),'assetvault-storage-'));
  try{
@@ -53,7 +72,7 @@ test('library persists across server instances, recovers existing downloads and 
   assert.equal((await second.load()).values['sfx-library-v2'],saved);
   assert.equal((await second.load()).values['sfx-library-ui'],'{}');
   assert.throws(()=>first.save({'../../outside':'bad'}));
-  await fs.writeFile(path.join(dir,'library-state.json'),'invalid');
+  await fs.writeFile(stateFileFor(dir,'sfx-library-v2'),'invalid');
   await assert.rejects(second.load(),/保留原文件/);
  }finally{await fs.rm(dir,{recursive:true,force:true});}
 });

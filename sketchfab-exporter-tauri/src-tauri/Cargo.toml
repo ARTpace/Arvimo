@@ -32,3 +32,18 @@ winreg = "0.55"
 tauri-plugin-updater = "2"
 tauri-plugin-single-instance = "2"
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_System_JobObjects", "Win32_System_Threading"] }
+# 原生拖出（dragout.rs）：IDataObject/IDropSource + GlobalAlloc + 窗口反查进程。
+# windows-core 必须单列：#[implement] 展开出来的代码直接引用 windows_core::…。
+windows-core = "0.62"
+windows = { version = "0.62", features = [
+  "Win32_Foundation",
+  "Win32_Graphics_Gdi",
+  "Win32_System_Com",
+  "Win32_System_Com_StructuredStorage",
+  "Win32_System_Memory",
+  "Win32_System_Ole",
+  "Win32_System_SystemServices",
+  "Win32_System_Threading",
+  "Win32_UI_Shell",
+  "Win32_UI_WindowsAndMessaging",
+] }

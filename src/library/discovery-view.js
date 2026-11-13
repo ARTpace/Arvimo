@@ -4,7 +4,7 @@
 // 于是「多源怎么合并」「状态行怎么说」「分页按钮叫什么」这些规则全部收在这里，
 // 它们不需要 DOM 也不需要网络，可以直接单元测试。
 
-import {FEED_LABELS,feedLabel,ORIGIN_COPY,platformById,isPictureSite} from './platforms.js';
+import {FEED_LABELS,feedLabel,ORIGIN_COPY,platformById,isPictureSite,pictureSiteSearchable} from './platforms.js';
 
 export const SOURCE_LABELS=FEED_LABELS;
 export const DEFAULT_STATUS='关键词直接搜索，不需要先复制官网网址。';
@@ -34,8 +34,15 @@ export function combine({sources,feeds}){
 }
 
 /** 多平台时逐源报进度，否则第二个平台的失败会被第一个平台的「已加载」盖住。 */
-export function statusText({sources,feeds}){
- if(!sources.length)return '这个平台按链接解析：把作品页 / 标签页地址粘到搜索框，回车即可。';
+export function statusText({sources,feeds,platform}){
+ if(!sources.length){
+  // 图站没有检索流。能搜的站要先说「输入关键词」，只说「粘链接」会让小红书这类站
+  // 看起来根本搜不了（展示区同样按这个判据分文案，两处别长成两套说法）。
+  if(isPictureSite(platform)&&pictureSiteSearchable(platform)){
+   return `在 ${platformById(platform).label} 里输入关键词回车即可搜索；也可以粘作品页 / 博主主页地址。`;
+  }
+  return '这个平台按链接解析：把作品页 / 标签页地址粘到搜索框，回车即可。';
+ }
  if(sources.length===1)return feeds[sources[0]].status||DEFAULT_STATUS;
  return sources.map(mode=>`${SOURCE_LABELS[mode]}：${feeds[mode].busy?'检索中…':feeds[mode].status||'待检索'}`).join(' · ');
 }
@@ -84,5 +91,5 @@ export function describeRequest({source,platform,feeds,categories,describeArt}){
  if(platform==='all')return request?.q?`“${request.q}” 的跨平台结果`:'最新精选';
  if(!request)return '发现好模型';
  const category=categories.find(([key])=>key===request.category)?.[1];
- return request.q?`“${request.q}” 的搜索结果`:request.category?`${category}资产`:request.staffpicked?'精选资产':'发现好模型';
+ return request.q?`“${request.q}” 的搜索结果`:request.category?(category?`${category}资产`:'分类资产'):request.staffpicked?'精选资产':'发现好模型';
 }

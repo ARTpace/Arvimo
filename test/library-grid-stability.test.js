@@ -27,7 +27,7 @@ test('online platform results preserve loaded card nodes while inserting and reo
    this.children.splice(index,0,node);
   },
  };
- const context={$:()=>grid,state:{sort:'recent',compact:false},extraCards:()=>[],cardView:{card:model=>`[${model.uid}]`}};
+ const context={$:()=>grid,state:{sort:'recent'},extraCards:()=>[],cardView:{card:model=>`[${model.uid}]`}};
  vm.createContext(context);
  vm.runInContext(source.slice(source.indexOf('let cardHtml='),source.indexOf('function renderDisplayButtons')),context);
  const paint=ids=>context.paintGrid(ids.map(uid=>({uid})),false,true,true);
@@ -42,4 +42,22 @@ test('online platform results preserve loaded card nodes while inserting and reo
  assert.equal(grid.children[1],a);
  assert.deepEqual(grid.children.map(node=>node.dataset.uid),['d','a']);
  assert.equal(rebuilds,1);
+});
+
+test('failed online covers retain the asset card after the original-image fallback',()=>{
+ const source=readFileSync(new URL('../src/library/library-view.js',import.meta.url),'utf8');
+ let onError,removed=false,broken=false;
+ class HTMLImageElement {}
+ class HTMLVideoElement {}
+ const grid={dataset:{},addEventListener:(event,handler)=>{assert.equal(event,'error');onError=handler;}};
+ const context={grid,HTMLImageElement,HTMLVideoElement,encodeURIComponent};
+ vm.createContext(context);
+ const start=source.indexOf('if(!grid.dataset.brokenHook)');
+ vm.runInContext(source.slice(start,source.indexOf('// 视频卡片悬停',start)),context);
+ const image=new HTMLImageElement();
+ image.dataset={url:'https://hf-mirror.com/datasets/nvidia/simready-assets/resolve/main/chair/cover.png'};
+ image.closest=selector=>selector==='.card-media'?{classList:{add:value=>{broken=value==='is-broken';}}}:{remove:()=>{removed=true;}};
+ onError({target:image});assert.match(image.src,/full=1/);assert.equal(broken,false);
+ onError({target:image});assert.equal(broken,true);assert.equal(removed,false);
+ assert.equal(image.dataset.failed,'1');
 });

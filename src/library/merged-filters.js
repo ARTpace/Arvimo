@@ -15,6 +15,7 @@
  * 「ArtStation 专属」分支里的类型 / 艺术家是同一批原生节点搬进来的（不是复制），
  * refresh / release 负责在统一树与平台树之间往返，切回单平台五个字段一个不少。
  */
+import {setTreeOpen} from './disclosure-motion.js';
 import {ALL} from './platforms.js';
 
 // 分类目录与派生函数住在 merged-catalog.js（纯函数，单测直接钉它）；这里 import 自用，
@@ -71,19 +72,19 @@ export function createMergedFilters({$,icon,state,onReset,onSearch}){
   const body=el('div','ftree-body');const kids=el('div','ftree-kids');body.append(kids);
   section.append(head,body);
   const box={section,head,kids,chip,open:!!open,wideOpen:null};
-  head.addEventListener('click',()=>setOpen(box,!box.section.classList.contains('open')));
+  head.addEventListener('click',()=>setOpen(box,!box.section.classList.contains('open'),true));
   return box;
  };
- const setOpen=(box,open)=>{box.open=open;box.section.classList.toggle('open',open);box.head.setAttribute('aria-expanded',String(open));};
+ const setOpen=(box,open,animate=false)=>{box.open=open;setTreeOpen(box.section,open,animate);};
 
  const makeLeaf=(label,value,color,onPick)=>{
   const node=el('button','ftree-leaf');node.type='button';node.dataset.value=value;node.title=label;
   if(color)node.style.setProperty('--tone',color);
-  node.append(el('i','ftree-dot'),el('span','ftree-leaf-label',label),el('i','ftree-spark','✦'));
+  node.append(el('i','ftree-dot'),el('span','ftree-leaf-label',label),Object.assign(el('i','ftree-spark'),{innerHTML:icon('sparkle')}));
   node.addEventListener('click',onPick);
   return node;
  };
- const setGroupOpen=(group,open)=>{group.classList.toggle('open',open);const head=group.querySelector('.ftree-group-head');if(head)head.setAttribute('aria-expanded',String(open));};
+ const setGroupOpen=(group,open,animate=false)=>setTreeOpen(group,open,animate);
  const mapNote=el('p','ftree-own-hint');
  const mapToggle=el('button','text-button');mapToggle.type='button';mapToggle.textContent='对照';mapToggle.hidden=true;
  const mapDetail=el('p','ftree-own-hint');mapDetail.hidden=true;
@@ -129,8 +130,9 @@ export function createMergedFilters({$,icon,state,onReset,onSearch}){
   const groupHead=el('button','ftree-group-head');groupHead.type='button';groupHead.setAttribute('aria-expanded','false');
   groupHead.title=`一键筛选「${group.label}」整组（${items.length} 类），再点一次取消`;
   const toggle=el('span','ftree-caret');toggle.innerHTML=icon('chevron');
-  toggle.addEventListener('click',event=>{event.stopPropagation();setGroupOpen(wrap,!wrap.classList.contains('open'));});
-  groupHead.append(toggle,el('span','ftree-emoji',group.icon),el('span','ftree-name',group.label),
+  toggle.addEventListener('click',event=>{event.stopPropagation();setGroupOpen(wrap,!wrap.classList.contains('open'),true);});
+  const groupIcon=el('span','ftree-ic');groupIcon.innerHTML=icon(group.icon);
+  groupHead.append(toggle,groupIcon,el('span','ftree-name',group.label),
    el('span','ftree-count',String(items.length)));
   const groupBody=el('div','ftree-body');const groupKids=el('div','ftree-kids');
   for(const item of items)groupKids.append(makeLeaf(item.label,item.value,group.color,()=>pickCategory(item.value)));

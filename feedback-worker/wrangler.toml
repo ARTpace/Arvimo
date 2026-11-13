@@ -1,0 +1,14 @@
+name = "assetvault-feedback"
+main = "src/index.js"
+compatibility_date = "2025-01-01"
+
+# 部署前先 `wrangler d1 create assetvault-feedback`，把返回的 database_id 填进来。
+[[d1_databases]]
+binding = "DB"
+database_name = "assetvault-feedback"
+database_id = "REPLACE_WITH_DATABASE_ID"
+
+# SALT / ADMIN_TOKEN / WEBHOOK_URL 用 secret 配，不要写在这个文件里：
+#   wrangler secret put SALT
+#   wrangler secret put ADMIN_TOKEN
+#   wrangler secret put WEBHOOK_URL   （可选，企微/飞书机器人地址）

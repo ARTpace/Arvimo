@@ -10,7 +10,7 @@ import test from 'node:test';
 // 独立缓存目录：必须在 import 之前设好，模块里是顶层常量。
 const cacheDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'thumb-cache-test-'));
 process.env.ASSETVAULT_THUMB_DIR = cacheDir;
-const { thumbFor, decodePng, trimCache, canThumb, cacheStats } = await import('../server/thumb-cache.mjs');
+const { thumbFor, decodePng, trimCache, canThumb, cacheStats, externalProcessOptions } = await import('../server/thumb-cache.mjs');
 const { encodePng } = await import('../server/psd-preview.mjs');
 
 function pngSize(buffer) {
@@ -112,4 +112,31 @@ test('缓存超过上限时按最久未用淘汰', async () => {
   assert.ok(removed > 0, '超过上限应该删掉一些');
   assert.equal(fs.existsSync(oldest), false, '最久未用的那份应该被删掉');
   assert.ok((await cacheStats()).bytes <= stats.bytes / 2 * 0.9 + 1);
+});
+
+// Windows 上服务是 VBS 静默拉起的无控制台进程；派生 ffmpeg / powershell / taskkill
+// 这类控制台程序时不加 windowsHide，系统会为每次调用新建一个可见命令行窗口。
+// 打开一个 222 张 jpg 的图集曾连闪上百个黑框，把「不再漏」锁死。
+test('外部命令默认隐藏 Windows 控制台，仍保留其它选项', () => {
+  assert.equal(externalProcessOptions().windowsHide, true);
+  assert.deepEqual(externalProcessOptions({ timeout: 5000, encoding: 'buffer' }),
+    { windowsHide: true, timeout: 5000, encoding: 'buffer' });
+  assert.equal(externalProcessOptions({ windowsHide: false }).windowsHide, false,
+    '调用方显式覆盖时以调用方为准');
+});
+
+test('ffmpeg 探测与转码都走隐藏窗口包装，启动/停止脚本也不漏', () => {
+  const read = rel => fs.readFileSync(new URL(rel, import.meta.url), 'utf8');
+  const thumb = read('../server/thumb-cache.mjs');
+  assert.match(thumb, /externalProcessOptions\(options\)/, '外部命令要经过统一包装');
+  assert.match(thumb, /windowsHide:\s*true/, '包装里必须默认带 windowsHide:true');
+  assert.ok((thumb.match(/\brun\(/g) || []).length >= 2, '探测与转码两处都要用包装');
+  assert.doesNotMatch(thumb, /await\s+execFile\(/, '不许再裸调 execFile');
+
+  for (const rel of ['../scripts/start-library-background.mjs', '../scripts/stop-library-background.mjs']) {
+    for (const [i, line] of read(rel).split('\n').entries()) {
+      if (!/execFileSync\(/.test(line)) continue;
+      assert.match(line, /windowsHide:\s*true/, `${rel}:${i + 1} 的同步子进程要隐藏控制台`);
+    }
+  }
 });

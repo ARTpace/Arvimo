@@ -4,9 +4,9 @@ import fs from 'node:fs';
 import vm from 'node:vm';
 const source=fs.readFileSync(new URL('../scripts/start-library-background.mjs',import.meta.url),'utf8');
 const handler=source.slice(source.indexOf('async function stopOldIfNeeded()'),source.indexOf('/** 用默认浏览器'));
-function launch(jobs,current=false){
+function launch(jobs,current=false,status=200){
  let replaced=0;
- const sandbox={discoverOwner:async()=>({pid:123}),capabilities:async()=>({}),serverIsCurrent:()=>current,fetch:async()=>({ok:true,json:async()=>({jobs})}),AbortSignal,replaceLibraryOwner:()=>{replaced++;return true;},note(){},base:'http://127.0.0.1:7579',fs:{rmSync(){}},pidPath:'test.pid',projectServerPids:()=>[],console:{log(){}},sleep:async()=>{}};
+ const sandbox={discoverOwner:async()=>({pid:123}),capabilities:async()=>({}),serverIsCurrent:()=>current,localHeaders:()=>({'X-SFX-Local':'1'}),fetch:async()=>({ok:status<400,status,json:async()=>({jobs})}),AbortSignal,replaceLibraryOwner:()=>{replaced++;return true;},note(){},base:'http://127.0.0.1:7579',fs:{rmSync(){}},pidPath:'test.pid',projectServerPids:()=>[],console:{log(){}},sleep:async()=>{}};
  vm.runInNewContext(handler,sandbox);
  return {run:()=>sandbox.stopOldIfNeeded(),replaced:()=>replaced};
 }
@@ -19,4 +19,6 @@ test('空闲旧后台允许升级，运行或排队任务阻止接管',async()=>
   const busy=launch([{state}]);await assert.rejects(busy.run(),/旧后台有下载任务/);assert.equal(busy.replaced(),0);
  }
  const unknown=launch(null);await assert.rejects(unknown.run(),/无法确认旧后台任务状态/);assert.equal(unknown.replaced(),0);
+ // 站点上锁后自检可能被 401 挡住：提示要指向 Stop-Library，不能再劝人「退出托盘」
+ const denied=launch(null,false,401);await assert.rejects(denied.run(),/拒绝了启动器的自检/);assert.equal(denied.replaced(),0);
 });

@@ -18,9 +18,30 @@ test('远端资产卡菜单：预览/下载/收藏/标签/加入模型库都在'
  assert.ok(names.includes('打开预览'));
  assert.ok(names.includes('下载到本地'));
  assert.ok(names.includes('收藏'));
- assert.ok(names.includes('标签与评分'));
+ assert.ok(names.some(n=>String(n||'').startsWith('标签与评分')));
  assert.ok(names.includes('加入模型库'));
  assert.equal(spec.title,'Robot');
+});
+
+test('发现页菜单（realm=discover）：只给获取与整理，不给本地管理动作',()=>{
+ const spec=assetMenuItems({card:{},model,uid,canDownload:true,revealId:'job-9',canExport:true,favorite:false,inLibrary:false,isTrash:false,isVisitor:false,realm:'discover'});
+ const names=labels(spec.items);
+ assert.ok(names.includes('打开预览'));
+ assert.ok(names.includes('下载到本地'));
+ assert.ok(names.includes('加入模型库'),'发现页应能把在线资产收进库');
+ assert.ok(names.includes('复制官方链接'),'源链接在发现页就该给');
+ assert.ok(!names.includes('打开下载文件夹'),'发现页不该给打开下载文件夹');
+ assert.ok(!names.includes('发送到其它软件…'),'发现页不该给发送给软件');
+ assert.ok(!names.includes('加入画板…'),'发现页不该给加入画板');
+ assert.ok(!names.includes('从模型库移除'),'发现页不该给移除');
+ assert.ok(!names.includes('删除'),'发现页不该给删除');
+});
+
+test('发现页已收进库的资产：不再给「加入模型库」',()=>{
+ const spec=assetMenuItems({card:{},model,uid,canDownload:true,revealId:'',canExport:false,favorite:false,inLibrary:true,isTrash:false,isVisitor:false,realm:'discover'});
+ const names=labels(spec.items);
+ assert.ok(!names.includes('加入模型库'),'已在库中不重复给加入');
+ assert.ok(!names.includes('从模型库移除'),'移除是库内管理动作，发现页不给');
 });
 
 test('已下载的卡片：给「打开下载文件夹」而不是「下载到本地」',()=>{

@@ -19,19 +19,21 @@ export function createSearchTranslation({fetchImpl=fetch}={}){
  };
 }
 
-export function bindLocalSearch({$,state,renderGrid,parse,delay=450}){
+export function bindLocalSearch({$,state,renderGrid,parse,delay=450,inputSelector='#model-search',enabled=()=>true,onState=()=>{}}){
  const KIND_LABEL={models:'3D 模型',textures:'材质',hdris:'HDRI / 天空盒',images:'图片 / Alpha',packs:'资源包'};
  let timer,version=0;
  const hint=text=>{const el=$('#local-translation');el.textContent=text;el.title=text;el.hidden=!text;};
  function reset(){clearTimeout(timer);version++;state.searchEnglish='';hint('');}
- $('#model-search').oninput=event=>{
+ function search(event){
+  if(!enabled())return;
   reset();state.search=event.target.value;state.selected.clear();renderGrid();
   const query=state.search.trim(),token=version;
-  if(event.isComposing||!query){if(!query)$('#local-kind').value='';return;}
+  if(event.isComposing||!query){if(!query)$('#local-kind').value='';onState({busy:false,ok:true});return;}
   hint('等待解析…');
   timer=setTimeout(async()=>{
-   hint('正在解析…');const result=await parse(query);
-   if(token!==version||state.search.trim()!==query)return;
+   if(!enabled()||token!==version)return;
+   onState({busy:true});hint('正在解析…');const result=await parse(query);
+   if(token!==version||state.search.trim()!==query||!enabled())return;
    state.search=result.search||query;
    state.searchEnglish=result.english.join(' ');
    if(result.kind)$('#local-kind').value=result.kind;
@@ -41,9 +43,11 @@ export function bindLocalSearch({$,state,renderGrid,parse,delay=450}){
    if(result.english.length)parts.push(`附加=${result.english.join(' / ')}`);
    hint(parts.length?`AI 解析：${parts.join('，')}`:(result.reason||'使用原词搜索'));
    renderGrid();
+   onState({busy:false,ok:true});
   },delay);
- };
- return {reset};
+ }
+ $(inputSelector).oninput=event=>{if(enabled())search(event);};
+ return {reset,search:()=>search({target:$(inputSelector)})};
 }
 
 export function createSearchExpansion({fetchImpl=fetch}={}){
@@ -95,10 +99,13 @@ export function createThemeBrainstorm({fetchImpl=fetch}={}){
 }
 
 export function createTagSuggester({fetchImpl=fetch}={}){
- return async function suggest({name,author='',kind='',existing=[]}){
+ return async function suggest({name,author='',kind='',existing=[],meta=null,probe=null}){
   if(!name||!name.trim())return {name,author,kind,existing,tags:[],tagged:false,reason:'缺少资产名称'};
+  // meta 是采集时抓到的来源信息（画板 / 类目 / 出处 / 话题），probe 是封面采样出的颜色与构图。
+  // 两者都可能为空：为空时不进请求体，服务端提示词与旧版逐字一致。
+  const extra={...(meta&&typeof meta==='object'?{meta}:{}),...(probe&&typeof probe==='object'?{probe}:{})};
   try{
-   const response=await fetchImpl('/api/ai/tags',{method:'POST',headers:{'Content-Type':'application/json','X-SFX-Local':'1'},body:JSON.stringify({name,author,kind,existing}),signal:AbortSignal.timeout(35000)});
+   const response=await fetchImpl('/api/ai/tags',{method:'POST',headers:{'Content-Type':'application/json','X-SFX-Local':'1'},body:JSON.stringify({name,author,kind,existing,...extra}),signal:AbortSignal.timeout(35000)});
    if(!response.ok)throw Error();const data=await response.json();
    if(data.tagged===true&&Array.isArray(data.tags))return data;
    return {name,author,kind,existing,tags:[],tagged:false,reason:data.reason||'未能生成标签'};

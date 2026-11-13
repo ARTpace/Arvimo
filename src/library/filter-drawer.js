@@ -3,7 +3,8 @@
 // 做法：折叠时把内联的 #side-filters 整体「藏起来」（CSS：仅在它仍嵌在 .sidebar 内才
 // display:none），并在侧栏加一枚「分类」图标键；点开左侧抽屉面板时，把同一个 #side-filters
 // 节点 portal 进抽屉。这样抽屉里就是完整的筛选 UI，而且所有按 ID 绑定的逻辑
-// （#filter-rows / #side-modes / 筛选树事件）都不用改——搬的是同一批节点。关抽屉再移回侧栏。
+// （#filter-rows / 筛选树事件）都不用改——搬的是同一批节点。关抽屉再移回侧栏。
+import {setTreeOpen} from './disclosure-motion.js';
 export function setupFilterDrawer() {
   const trigger = document.getElementById('filter-drawer-trigger');
   const drawer = document.getElementById('filter-drawer');
@@ -12,7 +13,8 @@ export function setupFilterDrawer() {
   const spacer = document.getElementById('side-spacer');
   if (!trigger || !drawer || !body || !sidebar) return;
 
-  let open = false;
+  let open = false,restoreTimer=0;
+  drawer.inert=true;
 
   const portalToDrawer = () => {
     const sf = document.getElementById('side-filters');
@@ -29,7 +31,9 @@ export function setupFilterDrawer() {
 
   const openDrawer = () => {
     if (open) return;
+    clearTimeout(restoreTimer);
     portalToDrawer();
+    drawer.inert=false;
     drawer.classList.add('open');
     drawer.setAttribute('aria-hidden', 'false');
     trigger.setAttribute('aria-expanded', 'true');
@@ -43,9 +47,7 @@ export function setupFilterDrawer() {
   // 所以用户再点分支标题就能手动折叠回去。
   const expandParents = () => {
     for (const section of body.querySelectorAll('.ftree-sec')) {
-      section.classList.add('open');
-      const head = section.querySelector('.ftree-branch');
-      if (head) head.setAttribute('aria-expanded', 'true');
+      setTreeOpen(section,true);
     }
   };
 
@@ -56,7 +58,10 @@ export function setupFilterDrawer() {
     trigger.setAttribute('aria-expanded', 'false');
     document.documentElement.classList.remove('filter-drawer-open');
     open = false;
-    restoreToSidebar();
+    drawer.inert=true;
+    if(drawer.contains(document.activeElement))trigger.focus({preventScroll:true});
+    if(window.matchMedia('(prefers-reduced-motion: reduce)').matches)restoreToSidebar();
+    else restoreTimer=setTimeout(restoreToSidebar,220);
   };
 
   trigger.addEventListener('click', () => (open ? closeDrawer() : openDrawer()));
@@ -70,9 +75,10 @@ export function setupFilterDrawer() {
   // 用户在抽屉开着时把侧栏展开：先把分类移回侧栏并关抽屉，避免分类卡在抽屉里。
   const narrow = window.matchMedia('(max-width:780px)');
   const syncDrawer = () => {
-    if (!narrow.matches && !document.documentElement.classList.contains('side-collapsed') && open) closeDrawer();
+    if (document.body.dataset.route === 'canvas' && open) closeDrawer();
   };
   const mo = new MutationObserver(syncDrawer);
   mo.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
+  mo.observe(document.body, { attributes: true, attributeFilter: ['data-route'] });
   narrow.addEventListener('change', syncDrawer);
 }

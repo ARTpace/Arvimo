@@ -17,6 +17,7 @@ const PLATFORMS = [
   ['Poly Pizza', '#filters-polypizza', ['#polypizza-cc0']],
   ['FreeStylized', '#filters-freestylized', ['#freestylized-type', '#freestylized-category']],
   ['Polyfork', '#filters-polyfork', ['#polyfork-class', '#polyfork-sort']],
+  ['Uiverse', '#filters-uiverse', ['#uiverse-type', '#uiverse-theme']],
 ];
 
 test('六个平台的筛选面板全部登记进筛选树，没有平台掉队', () => {
@@ -82,7 +83,8 @@ test('每个平台的筛选面板都会被搬进左侧栏（FILTER_ROWS 一个�
   // 树是渲染在面板内部的，面板本身得先搬到 #filter-rows 才看得见。
   // 漏一个的直接后果：宽屏下那个平台的分类还挂在搜索框下面，侧栏里空着。
   const rows = (view.match(/const FILTER_ROWS=\[([\s\S]*?)\];/) || [])[1] || '';
-  const listed = new Set([...rows.matchAll(/'#([a-z-]+)'/g)].map(m => m[1]));
+  // 清单里的写法允许带不带 #：两种都要认，免得改一种就把这条测试弄失效。
+  const listed = new Set([...rows.matchAll(/'#?([a-z-]+)'/g)].map(m => m[1]));
   const panels = [...html.matchAll(/class="online-filters" id="(filters-[a-z]+)"/g)].map(m => m[1]);
   assert.ok(panels.length >= 8, 'html 里的平台筛选面板数量不对，正则可能失效了');
   for (const id of panels) {

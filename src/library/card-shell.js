@@ -26,8 +26,14 @@ export function assetCard({
   side = '',
   metaActions = '',
   actions = '',
+  foot = '',
 } = {}) {
   const classes = ['model-card', className].filter(Boolean).join(' ');
+  // 脚注模式：名称 / 平台 / 下载全部叠在封面底部（图片内部），不占封面外的独立文字栏。
+  // 用于本地图片素材包（单图 + 图集），让卡片更紧凑、信息内聚。调用方把内容拼进 foot 即可。
+  if (foot) {
+    return `<article class="${classes}" data-${keyName}="${keyValue}"><div class="card-media">${media}${overlay}${foot}</div></article>`;
+  }
   // 底栏是叠在缩略图右下角的一层。没内容时整块不渲染：否则会剩一条空的渐变斜角，看着像坏了。
   const bottom=actions?`<div class="card-bottom"><div class="card-primary-actions">${actions}</div></div>`:'';
   return `<article class="${classes}" data-${keyName}="${keyValue}"><div class="card-media">${media}${overlay}</div><div class="card-meta"><button class="card-title" ${titleAttrs}>${title}</button>${byline}${side}${metaActions?`<div class="card-meta-actions">${metaActions}</div>`:''}</div>${bottom}</article>`;
@@ -35,7 +41,7 @@ export function assetCard({
 
 /** 封面：有图给 img，没图给占位块。裁切由卡片上的 thumb-contain 决定，这里不做判断。 */
 export function cardMedia({src = '', alt = '', icon = '', text = '暂无缩略图', className = 'thumbnail'} = {}) {
-  if (src) return `<img class="${className}" src="${src}" alt="${alt}" loading="lazy">`;
+  if (src) return `<img class="${className}" src="${src}" alt="${alt}" loading="lazy" decoding="async">`;
   return `<div class="image-placeholder">${icon}<span>${text}</span></div>`;
 }
 

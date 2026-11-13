@@ -5,13 +5,64 @@
 // the grid is redrawn. Keeping them together is what stops "search" and "load more" from drifting
 // on warnings, cancellation or what counts as having results.
 
-import {feedEndpoint,feedLabel,routeLink,isPictureSite,platformById,pictureSiteSearchable} from './platforms.js';
+import {feedEndpoint,feedLabel,routeLink,isPictureSite,platformById,pictureSiteSearchable,pictureSiteHome} from './platforms.js';
 import {createSearchTranslation} from './search-translation.js';
 import {fetchSearchPage,splitSearchTerms} from './multi-search.js';
 
 // 图站两级解析的返回栈：作者主页（画板墙）→ 某块画板（图片）。
 // 放在模块级而不是 state 里：它是纯界面导航痕迹，不该被持久化，也不参与卡片签名。
 let boardTrail=[];
+
+// 当前这一轮图站解析的序号：后台重抓可能比用户的手快（切平台、切页面都算），
+// 回来时若已经不是同一轮，就只把结果写进缓存，不许它改写眼前的画面。
+let pictureToken=0;
+
+// 图站结果缓存。解析一次动辄几秒到几十秒（Pinterest 要开无头浏览器、花瓣要翻好几页），
+// 切页面 / 切平台 / 刷新浏览器都不该重跑一遍 —— 和模型检索那套 resultCache 同一个思路，
+// 区别只在于图站结果要跨刷新存活，所以额外落一份 localStorage（刷新后先铺缓存，再谈要不要重抓）。
+const PICTURE_CACHE_MS=10*60*1000;
+const PICTURE_CACHE_MAX=16;
+const PICTURE_STORE='assetvault-picture-cache-v1';
+/** key → {platform,url,data,usedAt}；Map 的插入顺序即最近使用顺序。 */
+const pictureCache=new Map();
+try{
+ const stored=JSON.parse(localStorage.getItem(PICTURE_STORE)||'[]');
+ if(Array.isArray(stored))for(const entry of stored){
+  if(!entry?.key||!entry?.data)continue;
+  pictureCache.set(entry.key,{platform:String(entry.platform||''),url:String(entry.url||''),data:entry.data,usedAt:Number(entry.usedAt)||0});
+ }
+}catch{}
+const pictureKey=(platform,url)=>`${platform}|${url}`;
+let pictureStoreTimer=0;
+function savePictureCache(platform,url,data){
+ const key=pictureKey(platform,url);
+ pictureCache.delete(key);
+ pictureCache.set(key,{platform,url,data,usedAt:Date.now()});
+ while(pictureCache.size>PICTURE_CACHE_MAX)pictureCache.delete(pictureCache.keys().next().value);
+ clearTimeout(pictureStoreTimer);
+ // 写盘压一下：连续切平台时不必每次都序列化几万个字符。
+ pictureStoreTimer=setTimeout(()=>{
+  try{localStorage.setItem(PICTURE_STORE,JSON.stringify([...pictureCache.entries()].map(([key,entry])=>({key,...entry}))));}
+  catch{/* 超配额就当没有持久化，内存缓存仍然生效 */}
+ },500);
+}
+/** 这一屏到底变了没有：只比对会影响画面的字段，避免后台重抓回来把同一批图重绘一遍。 */
+const pictureSignature=data=>`${data?.mode||''}|${(data?.items||[]).map(it=>it.url).join('|')}|${(data?.boards||[]).map(b=>b.id).join('|')}`;
+/** 首帧用：把上次那一屏直接从缓存取出来铺进去，不发任何请求。
+ *  刷新页面时结果本来就在 localStorage 里，没道理先空一屏、再等异步把图补回来 ——
+ *  那样虽然数据是缓存命中，用户看到的仍然是「图片又加载了一次」。 */
+export function restorePictureSnapshot(platform){
+ const entry=lastPictureEntry(platform);
+ const data=entry?.data;
+ if(!data||(!(data.items||[]).length&&!(data.boards||[]).length))return null;
+ return {platform,url:entry.url,source:entry.url,...data,busy:false,error:false,status:''};
+}
+/** 上次看过的那个图站页面：刷新页面 / 切回该站时优先恢复它，而不是重新拉首页推荐。 */
+function lastPictureEntry(platform){
+ let best=null;
+ for(const entry of pictureCache.values())if(entry.platform===platform&&(!best||entry.usedAt>best.usedAt))best=entry;
+ return best;
+}
 
 // 搜索条件属于整个发现页；清除时也必须让隐藏平台及在途响应失效。
 export function resetDiscoveryFeeds(state){
@@ -125,9 +176,21 @@ function startSearch({record=false}={}){
  resetDiscoveryFeeds(state);
  if(/^https?:\/\//i.test(raw))return submitLink(raw);
  // 图站里能搜的那几家（Pinterest / 花瓣…）：非 URL 输入直接当关键词解析，不进 3D 平台检索。
- if(isPictureSite(state.platform)&&pictureSiteSearchable(state.platform)&&!/^https?:\/\//i.test(raw))return showPictureSite(raw,state.platform);
+ if(isPictureSite(state.platform)&&pictureSiteSearchable(state.platform)&&!/^https?:\/\//i.test(raw)){
+  // 搜索框是空的：展示站点首页，不要拿空地址去解析（否则就是「需要 platform 与 url」）。
+  if(!raw){
+   const home=pictureSiteHome(state.platform);
+   if(home)return showPictureSite(home,state.platform,{refresh:true,keepQuery:true,home:true});
+  }
+  return showPictureSite(raw,state.platform,{refresh:true});
+ }
  state.source='search';
  if(!activeModes().length){
+  // 链接解析（文本 / 视频）：LINK_PLATFORM.feeds 是空的，能做的只有粘链接，不能拿「平台已关闭」糊弄。
+  if(platformById(state.platform).link){
+   toast('把视频页 / 文档页或直链地址粘到搜索框，回车即可解析');
+   renderGrid();return;
+  }
   // 图站没有关键词检索流，框里打词是搜不出东西的；这里直接告诉用户该怎么用，而不是报「所有平台已关闭」。
   toast(isPictureSite(state.platform)?`${platformById(state.platform).label} 按链接解析：把作品页 / 标签页地址粘到搜索框回车即可`:'所有平台已关闭，请在设置 → 平台模块中开启');
   renderGrid();return;
@@ -165,7 +228,8 @@ function submitLink(raw=$('#asset-query').value){
  state.pictureSite=null;
  boardTrail=[];                                  // 新的顶层链接：丢弃上一轮的画板导航栈
  // 图站（素材下载器整合）：粘贴 Pixiv 等图站链接 → 解析整站图片 → 画廊瀑布流 → 下载进图片库。
- if(isPictureSite(target.platform))return showPictureSite(raw,target.platform);
+ // 粘链接是明确动作，绕过缓存重新抓一次（切平台 / 回页面才吃缓存）。
+ if(isPictureSite(target.platform))return showPictureSite(raw,target.platform,{refresh:true});
  if(ctx.feedEnabled&&!ctx.feedEnabled(target.platform==='artstation'?'art':'web')){toast('该平台已关闭，请在设置 → 平台模块中开启');return;}
  if(target.error){toast(target.error);return;}
  $('#asset-query').value=target.url;
@@ -195,24 +259,68 @@ async function showPictureSite(raw,platform,opts={}){
  //（「最近检索」重放链接时不会触发输入事件，这里兜住）。
  adoptPlatform?.(platform);
  state.source='link';
+ const token=++pictureToken;
  const base={platform,url:targetUrl,source:targetUrl,fromBoards:!!opts.fromBoards};
- state.pictureSite={...base,items:[],boards:[],mode:'images',title:'',author:'',cover:null,busy:true,error:false,status:isUrl?'正在解析图站链接…':`正在搜索 ${platformById(platform).label}…`};
- renderGrid();
+ // 缓存优先：切页面 / 切平台 / 刷新浏览器回来时先把上次那屏直接铺上，一帧都不等。
+ // 只有「用户主动重搜粘链接」（opts.refresh）或缓存过期（10 分钟）才回源；过期也是先铺再静默更新。
+ const cached=pictureCache.get(pictureKey(platform,targetUrl));
+ if(cached){
+  const age=Date.now()-cached.usedAt;
+  cached.usedAt=Date.now();
+  state.pictureSite={...base,...cached.data,busy:false,error:false,status:''};
+  renderGrid();
+  if(!opts.refresh&&age<PICTURE_CACHE_MS)return;
+ }else{
+  state.pictureSite={...base,items:[],boards:[],mode:'images',title:'',author:'',cover:null,busy:true,error:false,status:opts.home?`正在加载 ${platformById(platform).label} 的推荐图…`:(isUrl?'正在解析图站链接…':`正在搜索 ${platformById(platform).label}…`)};
+  renderGrid();
+ }
  try{
   // limit：只取前若干张做预览（图站整站动辄上千张，全量解析会让一次点击等很久）；下载仍是整站全量。
+  // 一屏 60 张，与模型平台一屏的张数对齐；滑到底由 library-view.js 递增再要下一屏。
   // 画板列表这一层不受 limit 影响（画板数量本来就少），服务端按 mode:'boards' 返回。
-  const res=await fetch(`/api/picture-site/resolve?platform=${encodeURIComponent(platform)}&limit=48&url=${encodeURIComponent(targetUrl)}`,{headers:{'x-sfx-local':'1'}});
+  const res=await fetch(`/api/picture-site/resolve?platform=${encodeURIComponent(platform)}&limit=60&url=${encodeURIComponent(targetUrl)}`,{headers:{'x-sfx-local':'1'}});
   const data=await res.json();
   if(!res.ok)throw new Error(data.error||'解析失败');
-  state.pictureSite={...base,mode:data.mode==='boards'?'boards':'images',items:data.items||[],boards:data.boards||[],user:data.user||null,title:data.title||'',author:data.author||'',cover:data.cover||null,busy:false,error:false,status:'',truncated:!!data.truncated,total:Number(data.total)||0};
+  const payload={mode:data.mode==='boards'?'boards':'images',items:data.items||[],boards:data.boards||[],albums:data.albums||[],user:data.user||null,title:data.title||'',author:data.author||'',cover:data.cover||null,truncated:!!data.truncated,total:Number(data.total)||0};
+  // fromBoards 一起存：刷新后从这块画板恢复时，「← 返回画板」不能丢。
+  savePictureCache(platform,targetUrl,{...payload,fromBoards:!!opts.fromBoards});
+  // 这一轮已经过期（用户切了平台 / 换了页面）：结果只进缓存，画面交给后来那轮。
+  if(token!==pictureToken)return;
+  // 后台重抓回来的还是同一批图：画面别动，整屏重绘会让图片闪一下。
+  if(cached&&pictureSignature(cached.data)===pictureSignature(payload))return;
+  state.pictureSite={...base,...payload,busy:false,error:false,status:''};
   // 作者主页不是「一次检索」，别把作者页塞进最近检索；纯关键词搜索也不记 ——
   // 最近检索的条目重放时当链接走 routeLink，塞个关键词进去只会被判成「无效网址」。
-  if(data.mode!=='boards'&&isUrl)rememberLink(targetUrl,data.title||data.author);
+  if(data.mode!=='boards'&&isUrl&&!opts.home)rememberLink(targetUrl,data.title||data.author);
   renderGrid();
  }catch(e){
+  if(token!==pictureToken)return;
+  // 手上已有缓存就别让一次失败把画面清空（站方临时拦截 / 网络抽风），继续显示上次结果。
+  if(cached){toast?.(`重新抓取失败，继续显示上次结果：${e.message}`);return;}
   state.pictureSite={...base,items:[],boards:[],mode:'images',title:'',author:'',cover:null,busy:false,error:true,status:e.message};
   renderGrid();
  }
+}
+/** 切到图站平台时预载首页推荐：结果区直接出图，而不是一大块「请粘贴链接」的说明。
+ *  取不到（站点拦截 / 需要登录）就退回收拾好的说明卡，不把「解析失败」留在那儿吓人。
+ *  不做的事：不写最近检索（那不是一次用户检索）、不改搜索框内容、不自动下载。 */
+async function openPictureHome(platform){
+ const last=lastPictureEntry(platform);
+ // 启动时已经把这一屏从缓存铺好了（restorePictureSnapshot），而且它还新鲜：
+ // 再走一遍解析流程只会让 renderGrid 重画一次 —— 数据没变，用户看到的却是「图又加载了一遍」。
+ const current=state.pictureSite;
+ if(current&&current.platform===platform&&!current.error&&(current.items||[]).length&&last&&Date.now()-last.usedAt<PICTURE_CACHE_MS)return true;
+ // 上次看过的那一屏优先：刷新页面 / 切回这个站时直接回到原处，而不是从首页推荐重新抓一遍。
+ const home=last?.url||pictureSiteHome(platform);
+ if(!home)return false;
+ if(state.route!=='discover')routeTo('discover');
+ await showPictureSite(home,platform,{keepQuery:true,home:true});
+ if(state.pictureSite?.error&&state.pictureSite.platform===platform){
+  state.pictureSite=null;
+  renderGrid();
+  toast?.(`${platformById(platform).label} 的首页推荐取不到，把作品页链接粘到搜索框试试`);
+ }
+ return true;
 }
 /** 从画板墙点进某块画板：记住上一层，图片层才有「返回画板」。 */
 async function openPictureBoard(board){
@@ -240,5 +348,23 @@ function backToPictureBoards(){
  renderGrid();
  return true;
 }
- return {requestFeed,startSearch,submitLink,openPictureBoard,openPictureAuthor,backToPictureBoards};
+/** 登录窗口关掉之后，原地重跑刚才那一次图站解析 —— 关键词、作品页、画板页都能接着看。
+ *  状态里本来就存着那一屏的来源（platform + url），所以用户不需要再输一遍；
+ *  没搜过（刚切到这个站、还没动作）就退回站点首页推荐，首页也没有的站返回 false，
+ *  由调用方提示「登录完成，输入关键词即可」。 */
+async function reloadPictureSite(){
+ const ps=state.pictureSite;
+ const platform=ps?.platform||(isPictureSite(state.platform)?state.platform:'');
+ if(!platform)return false;
+ const typed=String($('#asset-query')?.value||'').trim();
+ const raw=ps?.url||typed||pictureSiteHome(platform);
+ if(!raw)return false;
+ await showPictureSite(raw,platform,{refresh:true,keepQuery:true,fromBoards:!!ps?.fromBoards});
+ return true;
+}
+ async function openPictureUrl(url){
+  if(state.route!=='discover')routeTo('discover');
+  return showPictureSite(url,state.platform,{keepQuery:true,refresh:true});
+ }
+ return {requestFeed,startSearch,submitLink,openPictureBoard,openPictureAuthor,backToPictureBoards,openPictureHome,reloadPictureSite,openPictureUrl};
 }

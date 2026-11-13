@@ -144,6 +144,9 @@ export async function verifyFolder(dir, { uid, signal } = {}) {
     const declared = Array.isArray(info.files) ? info.files : [];
     if (!declared.length) throw Error('导出目录里没有登记的文件');
     for (const item of declared) if (!files.some(f => f.relative === item.file)) throw Error(`导出目录里缺少已登记的文件：${item.file}`);
+  } else if (info.platform === 'simready') {
+    if(!Array.isArray(info.files)||!info.files.length||!info.files.some(f=>/\.(usd|usdc|usda|usdz)$/i.test(f.file)))throw Error('SimReady 缺少 USD 文件清单');
+    for(const item of info.files){const file=files.find(f=>f.relative===item.file);if(!file||file.size!==item.bytes)throw Error(`SimReady 文件缺失或不完整：${item.file}`);}
   } else if (info.platform === 'polyhaven') {
     const mesh = files.filter(f => /\.(?:fbx|gltf|glb|blend|usdc|usd)$/i.test(f.relative));
     if (!mesh.length) throw Error('导出目录里没有 Poly Haven 的模型文件');

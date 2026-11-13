@@ -4,6 +4,7 @@
   "description": "",
   "main": "index.js",
   "scripts": {
+    "clean:build": "node scripts/clean-build-cache.mjs",
     "test": "echo \"Error: no test specified\" && exit 1",
     "tauri": "tauri",
     "build": "node scripts/build-release.mjs",

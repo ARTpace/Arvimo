@@ -107,3 +107,16 @@ test('clearing local search prevents a late parse from changing results',async()
  release({search:'wooden chair',english:['wooden chair'],kind:'',parsed:true});await new Promise(resolve=>setTimeout(resolve,0));
  assert.equal(state.searchEnglish,'');assert.equal(nodes['#local-translation'].hidden,true);
 });
+
+test('shared search input filters locally only in library mode and ignores late results after switching away',async()=>{
+ const nodes={'#asset-query':{value:'木椅'},'#local-translation':{},'#local-kind':{value:''}};
+ const state={selected:new Set(),search:''};let library=false,release,calls=0;
+ const local=bindLocalSearch({$:id=>nodes[id],state,renderGrid:()=>{},inputSelector:'#asset-query',enabled:()=>library,delay:0,parse:()=>{calls++;return new Promise(resolve=>{release=resolve;});}});
+ nodes['#asset-query'].oninput({target:nodes['#asset-query']});
+ assert.equal(state.search,'');assert.equal(calls,0);
+ library=true;local.search();assert.equal(state.search,'木椅');
+ await new Promise(resolve=>setTimeout(resolve,5));assert.equal(calls,1);
+ library=false;release({search:'chair',english:['wooden chair'],kind:'models'});
+ await new Promise(resolve=>setTimeout(resolve,0));assert.equal(state.search,'木椅');assert.equal(state.searchEnglish,'');assert.equal(nodes['#local-kind'].value,'');
+ local.reset();
+});

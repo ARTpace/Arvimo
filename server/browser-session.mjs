@@ -7,7 +7,7 @@
 //   3. 兜底抓图   —— 监听 Network 响应，把页面真实加载过的图片地址全捞出来
 import fs from 'node:fs';
 import path from 'node:path';
-import { launchBrowser, killBrowser } from './cdp.mjs';
+import { launchBrowser, killBrowser, openPageTarget } from './cdp.mjs';
 import { cookieFile, mergeCookies, cookieStats, browserProfileDir, siteKey } from './cookie-jar.mjs';
 
 const PROFILE_DIR = browserProfileDir();
@@ -211,8 +211,38 @@ export function harvestCookies({ timeout = 15000, host = '' } = {}) {
   });
 }
 
-export function sessionStatus() {
-  return {
+/**
+ * 借一张页签把某个页面跑一遍，交给 handler(page, instance) 去观察 ——
+ * 「让页面自己发出带签名的请求，我们从网络层捞结果」这条路全走在这里。
+ *
+ * 实例复用顺序（顺序很重要）：
+ *   1. 已经有实例（用户正开着的登录窗口也算）→ **借它一张新页签**，绝不 release 它：
+ *      关掉登录窗口等于让用户重登一次，而且它本来就是我们唯一的登录态来源。
+ *   2. 没有实例 → 起一个 headless 并留着复用（空闲 90 秒由 sweeper 回收）。
+ * 全程走 serialize()：同一个 profile 不能被两个浏览器进程同时打开。
+ */
+export function watchPage(handler, { timeout = 40000 } = {}) {
+  return serialize(async () => {
+    let instance = alive() ? active : null;
+    if (instance) instance.lastUsed = Date.now();
+    if (!instance) {
+      const b = await launchBrowser({ mode: 'headless', profileDir: PROFILE_DIR, timeout });
+      instance = { ...b, startedAt: Date.now(), lastUsed: Date.now() };
+      active = instance;
+      const child = instance.child;
+      child.once('exit', () => { if (active?.child === child) active = null; });
+    }
+    const tab = await openPageTarget(instance.port);
+    try {
+      return await handler(tab.page, instance);
+    } finally {
+      instance.lastUsed = Date.now();
+      await tab.close().catch(() => {});
+    }
+  });
+}
+
+export function sessionStatus() {  return {
     ok: true,
     profileDir: PROFILE_DIR,
     profileExists: fs.existsSync(PROFILE_DIR),

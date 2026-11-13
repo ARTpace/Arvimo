@@ -8,6 +8,8 @@ import {coverRendition} from './gallery-view.js';
 import {authorButton} from './asset-author.js';
 import {assetCard,cardMedia} from './card-shell.js';
 import {userMetaFor} from './library-state.js';
+import {uiElementSlot} from './ui-element-preview.js';
+import {registerFavoriteTarget,favoriteButtonHtml} from './favorite-targets.js';
 
 export function createCardView({icon,esc,fmt,state,queuePulse,imageDownload,sendControl,platformLabel,artstationUI=()=>null,downloadsUI=()=>null,isVisitor=false}){
 /** 封面一律走本地代理，代理负责按需降级到能取到的档位；
@@ -45,11 +47,14 @@ function materialFormatSelect(m){
 function materialResolutionSelect(m,downloadedRes=new Set()){
  if(m.platform==='ambientcg'&&materialFormat(m)==='SBSAR')return '';
  if(!isMaterial(m)&&!isHdri(m)&&!(m.platform==='freestylized'&&m.assetType==='skybox'))return '';
- return `<select class="material-resolution" data-material-resolution="${m.uid}" aria-label="材质下载精度" title="材质贴图下载精度（✓ = 已下载）">${['1K','2K','4K','8K'].map(r=>`<option value="${r}"${(m.materialResolution||'2K')===r?' selected':''}>${r}${downloadedRes.has(r)?' ✓':''}</option>`).join('')}</select>`;
+ return `<select class="material-resolution" data-material-resolution="${m.uid}" aria-label="材质下载精度" title="材质贴图下载精度（已下载精度会标注）">${['1K','2K','4K','8K'].map(r=>`<option value="${r}"${(m.materialResolution||'2K')===r?' selected':''}>${r}${downloadedRes.has(r)?'（已下载）':''}</option>`).join('')}</select>`;
 }
 function card(m,{gallery=false}={}){
  const pictureMode=state.route==='discover'&&m.platform==='artstation'&&!state.modelOnly;
- const art=m.platform==='artstation',art3d=art&&artstationUI().has3dScene(m),saved=state.favorites.has(m.uid),collected=state.models.some(x=>x.uid===m.uid),selected=state.selected.has(m.uid),backendJobs=downloadsUI()?.jobs||[],task=backendJobs.findLast(t=>t.uid===m.uid)||state.tasks.findLast(t=>t.uid===m.uid);
+ const art=m.platform==='artstation',art3d=art&&artstationUI().has3dScene(m),saved=state.favorites.has(m.uid),selected=state.selected.has(m.uid),backendJobs=downloadsUI()?.jobs||[],task=backendJobs.findLast(t=>t.uid===m.uid)||state.tasks.findLast(t=>t.uid===m.uid);
+ // 所有模型平台（含 ArtStation 图片模式）都登记成可收藏目标：图片模式以前不画心形键，
+ // 现在统一补上，且 collect() 能通过 findModel 的兜底真正把这条记录留在资产库里。
+ registerFavoriteTarget(m.uid,m);
  // 有精度选择的资产（材质/HDRI/天空盒），「已下载」必须按精度对上：8K 下载过不代表 2K 也
  // 有了。历史任务没记精度的一律视为默认 2K，老记录不会集体变灰。
  const hasResSelect=isMaterial(m)||isHdri(m)||m.platform==='freestylized'&&m.assetType==='skybox';
@@ -67,12 +72,9 @@ function card(m,{gallery=false}={}){
  const fsNoScene=m.platform==='freestylized'&&!['models','textures','skybox'].includes(m.assetType||'models');
  const previewLabel=art&&!art3d?'查看作品图片':fsNoScene?'打开官方页面':'交互式 3D 预览';
  const previewIcon=art&&!art3d?'image':fsNoScene?'external':'rotate';
- // 缩略图上的两个角标：左下角是「加入模型库」状态（点一下即加入），右下角是打开下载文件夹
- // （只有已下载的卡片才有）。多选复选框因此挪到右上角收藏键左边，四个角各司其职不重叠。
- const openFolder=savedJob&&!isVisitor?`<button class="card-icon-action open-folder" data-action="reveal-download" data-id="${esc(savedJob.id)}" title="打开下载所在文件夹" aria-label="打开下载所在文件夹">${icon('folder')}</button>`:'';
- // 入库角标与底部移除键都是「改主机资产库」的动作，访客没有这个身份：
- // 卡片一旦显示「已加入模型库」，访客会以为是自己的库，点一下又改到主机头上，所以整块不给。
- const collectedBadge=isVisitor||pictureMode?'':`<button class="collect-badge ${collected?'collected':''}" data-action="collect" data-uid="${m.uid}" ${collected?'disabled':''} title="${collected?'已在模型库中':'加入模型库'}" aria-label="${collected?'已加入模型库':'加入模型库'}">${icon(collected?'check':'folder')}<span>${collected?'已加入模型库':'加入模型库'}</span></button>`;
+ // 「加入模型库」徽标和「打开下载文件夹」小图标已收进右键菜单：封面上只留预览热区、
+ // 收藏心形、选择方块与资源类型角标，别让四个角各摆一颗带中文的按钮。
+ // savedJob 仍供下面的导出控件 / 下载态判定使用。
  // 「发送到」控件：先挑目标（按键上显示软件名），再点旁边的图标键才真正导出。
  // 访客只能把整包模型推给自己电脑上的 Blender，由 applicableTargets 过滤掉其余。
  // 类名不用 card-download：那套样式是「下载键」的（34px 圆形、灰底），会让发送键变成看不懂的图标。
@@ -81,7 +83,8 @@ function card(m,{gallery=false}={}){
  // ambientCG 卡片在下载键左边带一个精度选择：选择写回模型对象（materialResolution），
  // 重渲染后原样回填；下载时队列从模型上读，整批取第一张的选择（服务端会再校验一次）。
  // 卡片底栏一律图标化（2026-10-28）：文案收进 <span> 由 CSS 隐藏，保留在 DOM 里给无障碍与测试读。
- const materialResolution=`<button class="text-button" data-action="asset-tags" data-uid="${esc(m.uid)}" title="查看平台标签与管理 AI 标签" aria-label="查看平台标签与管理 AI 标签">${icon('tag')}<span>标签</span></button>`+materialFormatSelect(m)+materialResolutionSelect(m,downloadedRes);
+ // 标签键已移除：平台标签现在自动读取、AI 标签后台生成，卡片上不再需要「标签」入口。
+    const materialResolution=materialFormatSelect(m)+materialResolutionSelect(m,downloadedRes);
  // 访客的下载键永远是「下载到我这台电脑」：主机上已有副本只意味着这次可以直传、不用重新下载，
  // 不该把按钮变成「已下载」并禁用——那会让访客以为文件已经在自己的电脑里。
  const dlBusy=busy,dlDisabled=busy||(!isVisitor&&downloaded);
@@ -93,45 +96,72 @@ function card(m,{gallery=false}={}){
  const downloadButton=(downloaded&&!isVisitor)?'':`<button class="card-download${dlBusy?' busy':''}" data-action="download" data-uid="${m.uid}" ${dlDisabled?'disabled':''} title="${dlTitle}" aria-label="${dlAria}">${icon(busy?'clock':'download')}<span>${dlLabel}</span></button>`;
  // meta 一行化：作者与平台标签重复时（如 ambientCG）不再显示，只留「标题 · 作者 · 许可」。
  const byline=m.author&&m.author.trim()!==platformLabel(m.platform)?authorButton(m,'card-byline'):'';
- // 控件拆成可复用的片段：紧凑视图缩略图只有 96px，角标与按键全叠在上面等于糊成一团，
- // 所以紧凑视图把它们整体搬进右侧信息栏（图片本身不再叠层，标题与预览键仍可打开预览）。
  // 左上角只放资源类型标志（模型/材质/HDRI/天空盒…）。下载与导出状态由左下角「已加入模型库」、
  // 右下角文件夹键和底部下载键各自表达，不再挤占类型位（2026-10-16 用户要求）。
- const typeLabel=`<div class="card-type">${icon(art3d?'rotate':isHdri(m)?'image':isMaterial(m)?'image':'cube')}${art?(art3d?'MARMOSET 3D':'ARTSTATION 图片'):isHdri(m)?'HDRI':isMaterial(m)?'PBR 材质':m.platform==='kenney'?'资源包':m.platform==='freestylized'?(m.assetType==='skybox'?'天空盒':m.assetType==='textures'?'材质':m.assetType==='packs'?'资源包':m.assetType==='alphas'?'Alpha':m.assetType==='smart'?'智能材质':'3D 模型'):'3D ASSET'}</div>`;
- const favoriteButton=pictureMode?'':`<button class="favorite ${saved?'saved':''}" data-action="favorite" data-uid="${m.uid}" title="${saved?'取消收藏（仍保留在模型库）':'收藏并加入模型库'}" aria-label="${saved?'取消收藏':'收藏模型'}" aria-pressed="${saved}">${icon('heart')}</button>`;
+ // 类型角标：先按资产形态（图片/视频/材质/HDRI/模型/资源包）判，再让平台特例覆盖。
+ // 采集进库的图站资产以前一律落到 '3D ASSET'，看着像模型、预览又打不开；现在按 assetType 归位。
+ const KIND_LABELS={image:'图片',images:'图片',video:'视频',textures:'PBR 材质',hdris:'HDRI',models:'3D 模型',packs:'资源包',alphas:'Alpha',smart:'智能材质',skybox:'天空盒',uielement:'UI 动效'};
+ const imageLike=art&&!art3d||['image','images','video'].includes(m.assetType);
+ // UI 元素有自己的图标：它既不是图片也不是模型，用 cube 会误导。
+ const uiElement=m.assetType==='uielement'||m.platform==='uiverse';
+ const typeText=art?(art3d?'MARMOSET 3D':'ARTSTATION 图片')
+  :uiElement?'UI 动效'
+  :isHdri(m)?'HDRI'
+  :isMaterial(m)?'PBR 材质'
+  :m.platform==='kenney'?'资源包'
+  :KIND_LABELS[m.assetType]||'3D ASSET';
+ const typeLabel='';
+ // 来源平台：采集进库的卡片必须能一眼看出「这张是从哪个平台收来的」。
+ // Sketchfab 是默认来源，占绝大多数，逐张标等于噪声，所以只在非默认来源时出现。
+ const sourceName=platformLabel(m.platform)||'';
+ const sourceBadge='';
+ // 收藏键不再看 pictureMode：所有平台、所有视图共用心形键与同一条 toggleFavorite 链路。
+ const favoriteButton=favoriteButtonHtml({uid:m.uid,saved,icon,esc});
+ // 多选方块按 2026-11-12 反馈不再显示（app.css 里 .card-media>.card-select{display:none}）。
+ // DOM 与 data-select 仍保留：range-select 的框选 / Shift 连选契约认这个节点，恢复只需改一行样式。
  const selectLabel=`<label class="card-select"><input type="checkbox" data-select="${m.uid}" aria-label="选择 ${esc(m.name)}" ${selected?'checked':''}></label>`;
- // gallery 视图虽然 state.compact 可能仍为 true，但样式类不挂 compact，这里必须同步判断。
- const compact=!!state.compact&&!gallery;
- const controls=compact?`<div class="card-controls">${typeLabel}${selectLabel}${favoriteButton}<button class="card-icon-action compact-preview" data-action="preview" data-uid="${m.uid}" title="${previewLabel}" aria-label="${previewLabel} ${esc(m.name)}">${icon(previewIcon)}</button>${collectedBadge}${openFolder}</div>`:'';
  // 许可在这行里只是一颗说明键：全称（「ArtStation 作品 · 需确认授权」）会把标题和作者挤成
  // 两个都读不全的省略号，悬停才给出完整许可文案（2026-10-21 用户要求）。
  const licenseTip=`${m.license||'查看许可'} · 可下载不代表可商用`;
- const licenseHint=`<div class="card-license"><button type="button" class="license-hint" title="${esc(licenseTip)}" aria-label="许可：${esc(licenseTip)}">${icon('help')}</button></div>`;
+ const licenseHint='';
  // 我的评分：有分才显示，备注折进 title 供悬停速览（完整编辑在标签面板）。
  const meta=userMetaFor(state,m.uid);
- const ratingMark=meta.rating?`<div class="card-rating" title="我的评分 ${meta.rating} 星${meta.note?` · ${esc(meta.note.slice(0,120))}`:''}"><span class="stars">${'★'.repeat(meta.rating)}${'☆'.repeat(5-meta.rating)}</span></div>`:'';
+ const ratingMark=meta.rating?`<div class="card-rating" title="我的评分 ${meta.rating} 星${meta.note?` · ${esc(meta.note.slice(0,120))}`:''}"><span class="stars">${Array.from({length:5},(_,i)=>`<span class="${i<meta.rating?'on':''}">${icon('star')}</span>`).join('')}</span></div>`:'';
+ const factLines=[typeText,sourceName&&m.platform!=='sketchfab'?sourceName:'',m.license||''].filter(Boolean);
+ const factsBtn=`<button type="button" class="card-facts-btn" data-card-facts title="查看信息" aria-label="查看信息">${icon('help')}</button><div class="card-facts">${factLines.map(line=>`<p>${esc(line)}</p>`).join('')}${ratingMark}</div>`;
  // 回收站视图（筛选=回收站）里给「放回模型库 / 彻底删除」一对，访客没有写身份，整块不给。
  // 正常视图下的「从模型库移除」键已按用户要求撤掉（2026-10-29）：封面上只留导出动作，
  // 移除走详情面板 / 模型库筛选页，不再占用卡片寸土。
  const trashActions=state.filter==='trash'?`<button class="remove-model restore-model" data-action="restore" data-uid="${m.uid}" title="放回模型库" aria-label="放回模型库">${icon('rotate')}</button><button class="remove-model purge-model" data-action="purge" data-uid="${m.uid}" title="彻底删除记录（不会删除已下载文件）" aria-label="彻底删除记录">${icon('close')}</button>`:'';
  // 结构统一走 card-shell：卡片的 DOM 只有一份，远端资产和本地素材包长得一样。
 // 这里只负责算出「填什么」，不再拼 article 骨架。
-return assetCard({
- keyName:'uid',
- keyValue:m.uid,
- className:[selected?'selected':'',needsFullThumb(m)?'thumb-contain':''].filter(Boolean).join(' '),
- media:m.thumbnail?cardMedia({src:esc(imageUrl(m,{gallery})),alt:esc(m.name)}):cardMedia({icon:icon('cube'),text:'暂无缩略图'}),
- // 紧凑视图不往封面上叠东西（96px 缩略图叠一层按钮就糊了），角标整体搬进右栏 controls。
- overlay:compact?controls:`<button class="preview-hit" data-action="preview" data-uid="${m.uid}" aria-label="${previewLabel} ${esc(m.name)}"><span>${icon(previewIcon)}${previewLabel}</span></button>${typeLabel}${favoriteButton}${selectLabel}${collectedBadge}${openFolder}`,
+  // UI 元素（Uiverse）没有可用的封面图（官方 CDN 在很多网络下连不上），
+  // 而且它的价值就是「会动」—— 所以封面直接是现场渲染的动效，不是静态图。
+  const isUiElement=m.assetType==='uielement'||m.platform==='uiverse';
+  const media=isUiElement?uiElementSlot(m,{esc})
+    :m.thumbnail?cardMedia({src:esc(imageUrl(m,{gallery})),alt:esc(m.name)}):cardMedia({icon:icon('cube'),text:'暂无缩略图'});
+  // UI 元素卡片的封面上不能盖热区：那层 .preview-hit 会把指针全吃掉，组件本身就点不动了。
+  // 交互留给组件自己（悬停 / 按下都有真实反馈），打开信息弹窗走这颗悬浮键 —— 只占底部一小条，
+  // 不挡组件的中部操作；标题键同样能开弹窗，键盘与触屏都有入口。
+  const uiOpen=isUiElement?`<button class="ui-element-open" data-action="preview" data-uid="${m.uid}" title="查看 UI 信息并复制代码" aria-label="查看 ${esc(m.name)} 的信息与代码">${icon('scan')}<span>查看信息 · 代码</span></button>`:'';
+  const previewHit=isUiElement?uiOpen:`<button class="preview-hit" data-action="preview" data-uid="${m.uid}" aria-label="${previewLabel} ${esc(m.name)}"><span>${icon(previewIcon)}${previewLabel}</span></button>`;
+  return assetCard({
+  keyName:'uid',
+  keyValue:m.uid,
+  className:[selected?'selected':'',needsFullThumb(m)?'thumb-contain':'',isUiElement?'ui-element-card':''].filter(Boolean).join(' '),
+  media,
+ overlay:`${previewHit}${typeLabel}${favoriteButton}${selectLabel}${factsBtn}`,
  titleAttrs:`title="${esc(m.name)}" data-action="preview" data-uid="${m.uid}"`,
  title:esc(m.name),
- byline,
- side:ratingMark+licenseHint,
- // 标签 / 材质格式 / 精度这些次要控件不再叠在封面上（6 个键糊一团），统一挪到缩略图下方常驻区。
- // 导出控件也在这行：左边是「目标软件名」下拉，右边是图标化的导出键，两步走（先选后导）。
- // 封面叠层只剩下载键；已下载的资产封面完全干净（导出在下方这行）。
- metaActions:materialResolution+exportControl,
- actions:`${downloadButton}${state.route!=='discover'&&!isVisitor?trashActions:''}`,
+ // 图片类资产常常没有作者，占位「未知作者」不如直接让位给来源平台名。
+ byline:((imageLike&&!(m.author||'').trim())?'':byline)+sourceBadge,
+ side:'',
+ // 材质格式 / 精度这些次要控件留在缩略图下方常驻区（标签键已移除，平台标签自动读取、AI 标签后台生成）。
+ // 导出控件移到卡片底部动作行、与下载键同处一行：未下载时显示「下载」，下载完成后原地变成
+ // 「软件选择 + 导出」——软件选择始终在导出键左边，底部因此不再多占一行。
+ metaActions:materialResolution,
+ // 「发送到」是库专属动作（要有本地文件才能发到 Blender 等），发现页一律不显示；发现页只留下载。
+ actions:`${state.route!=='discover'?exportControl:''}${downloadButton}${state.route!=='discover'&&!isVisitor?trashActions:''}`,
 });
 }
  return {imageUrl,card,materialResolutionSelect,materialFormatSelect};

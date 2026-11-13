@@ -2,8 +2,13 @@
 //
 // 之前只有一个 PSD 转码器，PNG/JPG 素材包在缩略图墙上拉的是原图——一个 70 张 2048 贴图的
 // 包，光是看一眼缩略图条就是几十 MB。这里把三件事收进同一层：
-//   1. 解码能力按格式分工：PSD 走自己的解码器，PNG 走内置解码器（zlib + 反滤波），
-//      其余光栅格式（jpg/webp/avif/gif/bmp/tif/tga）交给 ffmpeg，都没有就明确回退原图；
+//   1. 解码能力按格式分工，且**优先用原生插件、不 spawn 进程**：
+//        · PSD 走自己的解码器；
+//        · PNG 走内置解码器（zlib + 反滤波）；
+//        · jpg/webp/avif/gif/bmp/tiff 这批最常见的光栅格式走 **sharp**（libvips 原生插件，
+//          不派生任何子进程，彻底杜绝 Windows 上「打开图集弹出一堆命令行窗口」）；
+//        · 其余光栅 / RAW / HEIC / DDS / AI 才走 ffmpeg 兜底（已统一带 windowsHide）。
+//      所有外部命令都经过 externalProcessOptions() 包装，新增调用也不会漏掉隐藏窗口标志。
 //   2. 结果统一落在系统临时目录，key 里带「路径 + 大小 + 修改时间 + 目标宽度 + 算法版本」，
 //      源文件一变 key 就变，不存在看到旧预览的情况；
 //   3. 缓存有上限并做 LRU 淘汰：读取时 touch 修改时间，超过阈值就按最久未用删到 80%。
@@ -16,24 +21,49 @@ import crypto from 'node:crypto';
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 import {psdToPng, encodePng, downscale} from './psd-preview.mjs';
+import {FORMATS, extensionOf} from '../src/library/format-registry.js';
 
-const run = promisify(execFile);
+const execFileAsync = promisify(execFile);
+
+/**
+ * 后台服务由静默启动器以 detached + windowsHide 拉起，自己没有控制台。
+ * Windows 上再派生 ffmpeg.exe 这种控制台程序时，不加 windowsHide 系统会为每个子进程
+ * 新建一个可见命令行窗口——打开一个 222 张 jpg 的图集，缩略图墙就会闪上百个黑框。
+ * 所有外部命令统一经过这个包装，新增调用也不会漏掉这个标志。
+ */
+export function externalProcessOptions(options = {}) {
+  return { windowsHide: true, ...options };
+}
+
+const run = (bin, args, options = {}) => execFileAsync(bin, args, externalProcessOptions(options));
 
 // 测试要用独立目录，否则跑一次测试就把用户的预览缓存删了。
 const CACHE_DIR = process.env.ASSETVAULT_THUMB_DIR || path.join(os.tmpdir(), 'assetvault-thumbs');
-/** 换解码算法时 +1：老缓存凭 key 里的版本号自然失效，不用手动删目录。 */
-const CACHE_VERSION = '1';
+/** 换解码算法时 +1：老缓存凭 key 里的版本号自然失效，不用手动删目录。
+ *  v2：jpg/webp/avif/gif/bmp/tiff 从 ffmpeg 切换到 sharp（原生无进程）。 */
+const CACHE_VERSION = '3';
 const MAX_CACHE_BYTES = 512 * 1024 * 1024;
 const TRIM_RATIO = 0.8;
 const TRIM_EVERY_MS = 60_000;
 
 const PSD_EXT = /\.psd$/i;
 const PNG_EXT = /\.png$/i;
-/** 内置解码器不认、但 ffmpeg 基本都能读的格式。 */
-const FFMPEG_EXT = /\.(jpe?g|jfif|webp|avif|gif|bmp|tiff?|tga|exr|hdr)$/i;
+/** 走 ffmpeg 兜底的格式只含「sharp 不接、注册表没收」的光栅：tga / exr / hdr。
+ *  jpg/webp/avif/gif/bmp/tiff 已交给 sharp（见 SHARP_EXT），不再重复列在这里——
+ *  改 SHARP_EXT 时这里不会失同步（canThumb 会同时查 SHARP_EXT）。
+ *  注册表里 preview:'thumb' 的格式（相机 RAW / AI / HEIC / DDS）也走 ffmpeg，由 DERIVED_THUMB_EXTS 派生。 */
+export const FFMPEG_EXT = /\.(tga|exr|hdr)$/i;
+/** sharp 原生能解、且比 ffmpeg 更轻的光栅格式：jpg/webp/avif/gif/bmp/tiff。
+ *  走 sharp（纯原生插件，不 spawn 任何进程），打开图集就不再有命令行窗口；
+ *  sharp 没装或解不了时回落 ffmpeg（带 windowsHide），预览不会断。 */
+export const SHARP_EXT = /\.(jpe?g|jfif|webp|avif|gif|bmp|tiff?)$/i;
+/** 注册表里标 preview:'thumb' 的格式（相机 RAW / AI / HEIC / DDS）也走 ffmpeg 通道；
+ *  解不了时 /api/local/thumb 会回退原文件，不会让整个预览挂掉。 */
+const DERIVED_THUMB_EXTS = new Set(Object.values(FORMATS).filter(item => item.preview === 'thumb').map(item => item.ext));
 
 export function canThumb(name) {
-  return PSD_EXT.test(name) || PNG_EXT.test(name) || FFMPEG_EXT.test(name);
+  return PSD_EXT.test(name) || PNG_EXT.test(name) || SHARP_EXT.test(name)
+    || FFMPEG_EXT.test(name) || DERIVED_THUMB_EXTS.has(extensionOf(name));
 }
 
 // ---------------------------------------------------------------- PNG 解码
@@ -181,6 +211,42 @@ async function ffmpegThumb(file, width) {
   });
 }
 
+// ---------------------------------------------------------------- sharp 主路径
+
+/**
+ * sharp 是 libvips 的原生 Node 插件，**不派生任何子进程**——这是打开图集不再弹命令行窗口的关键。
+ * 懒加载 + 缓存结果：没装 sharp 时把标记置空并抛一个带码的错误，调用方据此回落 ffmpeg，
+ * 即使机器上没装 sharp，服务也能正常启动、只是图片缩略图走兜底（已带 windowsHide）。
+ */
+/**
+ * sharp 缩略图的 PNG 编码参数（配置缝：压缩档位集中在此，调优只改这一处）。
+ * 压缩级别 0–9：9 是最小文件但最慢；实测 257px 缩略图 jpg→PNG，9 约 193ms/张、6 约 32ms/张
+ * （≈6 倍提速），文件只多 26% 且画质无损（PNG 级别只影响压缩率）。c6 是速度/体积的最佳甜点，
+ * 再降（3/1/0）收益递减、文件反而明显变大，不划算。adaptiveFiltering 默认会逐行试最优滤波，
+ * 关掉几乎不影响观感却省掉一笔 CPU。
+ */
+const PNG_COMPRESSION_LEVEL = 6;
+const PNG_ADAPTIVE_FILTERING = false;
+
+let sharpModule = undefined; // undefined = 还没试过；null = 不可用
+async function getSharp() {
+  if (sharpModule === null) throw Object.assign(Error('sharp 不可用'), { code: 'SHARP_UNAVAILABLE' });
+  if (sharpModule) return sharpModule;
+  try { sharpModule = (await import('sharp')).default; }
+  catch { sharpModule = null; throw Object.assign(Error('sharp 不可用'), { code: 'SHARP_UNAVAILABLE' }); }
+  return sharpModule;
+}
+
+/** 用 sharp 把文件缩放成目标宽度以内的 PNG。直接读文件路径（libvips 流式处理，内存占用远低于先把整图读进 Buffer）。 */
+async function sharpThumb(file, width) {
+  const sharp = await getSharp();
+  return sharp(file, { limitInputPixels: false })
+    .rotate() // 按 EXIF Orientation 自动转正（相机 jpg 常见）
+    .resize(width, width, { fit: 'inside', withoutEnlargement: true })
+    .png({ compressionLevel: PNG_COMPRESSION_LEVEL, adaptiveFiltering: PNG_ADAPTIVE_FILTERING })
+    .toBuffer();
+}
+
 // ---------------------------------------------------------------- 缓存
 
 function cacheKey(file, stat, width) {
@@ -266,7 +332,16 @@ export async function thumbFor(file, { width = 512 } = {}) {
       const planes = decoded.planes.map(plane => downscale(plane, decoded.width, decoded.height, outW, outH));
       const colorType = decoded.kind === 'gray' ? 0 : decoded.kind === 'rgb' ? 2 : 6;
       buffer = encodePng(outW, outH, colorType, planes);
+    } else if (SHARP_EXT.test(name)) {
+      // 常见光栅格式走 sharp：原生插件，零子进程，不再弹命令窗。
+      // sharp 没装 / 加载失败 → 回落 ffmpeg 兜底（已带 windowsHide），预览不中断。
+      try { buffer = await sharpThumb(file, size); }
+      catch (err) {
+        if (err.code === 'SHARP_UNAVAILABLE') buffer = await ffmpegThumb(file, size);
+        else throw err;
+      }
     } else {
+      // tga/exr/hdr 与 RAW/HEIC/DDS/AI 等异类：ffmpeg 兜底（带 windowsHide）。
       buffer = await ffmpegThumb(file, size);
     }
     // 先写临时文件再 rename：半截 PNG 被写进缓存，以后每次都读到一个坏图。

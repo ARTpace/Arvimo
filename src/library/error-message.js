@@ -23,6 +23,8 @@ export function chineseError(value,{fallback=false}={}){
   [/\bHTTP\s*403\b/i,'网站拒绝访问，请检查登录状态或稍后重试'],
   [/\bHTTP\s*404\b/i,'找不到请求的资源，内容可能已删除'],
   [/\bHTTP\s*429\b/i,'请求过于频繁，请稍后重试'],
+  // 567 落在 5xx 里，但含义是「限流」而不是「服务端坏了」：报成「服务异常」会让人以为站点挂了。
+  [/\bHTTP\s*567\b/i,'图站限流（抓得太快），已放慢速度自动重试'],
   [/\bHTTP\s*5\d\d\b/i,'远端服务暂时异常，请稍后重试']
  ];
  for(const [pattern,translation] of rules)if(pattern.test(message))return translation;

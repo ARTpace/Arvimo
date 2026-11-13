@@ -3,7 +3,7 @@
 本地 3D 资产工作台：统一搜索 8 个 3D 资产平台（Sketchfab、ArtStation、Poly Haven、ambientCG、Poly Pizza、Kenney、FreeStylized、Polyfork），后台下载并转成 GLB / FBX，统一收进本地模型库；另有 13 个图站可批量抓参考图。完整清单（名称 / 简介 / 官网 / 分类）见 [`docs/platforms.md`](docs/platforms.md)。
 同时保留一个 **Tampermonkey 单文件脚本**（`dist/sketchfab-exporter.user.js`，只处理 Sketchfab）。
 
-> 自 3.4.0 起品牌由 Sketchvault 改为 **AssetVault**。旧数据目录 `.sketchvault` 首次启动会自动迁移为 `.assetvault`。
+> 自 3.4.0 起品牌由 Sketchvault 改为 **AssetVault**。运行数据默认位于 `%APPDATA%\AssetVault\`；旧工程数据使用显式迁移，见 [用户数据目录](docs/user-data-storage.md)。
 > 仅用于你自有或已获明确授权的模型，请遵守模型许可证与站点条款（署名写入输出包 `info.json`）。
 
 ## 快速开始
@@ -50,17 +50,27 @@ npm run fetch:blender          # 下载便携版 Blender（FBX 导出可选）
 
 ## 目录
 
-- `src/userscript/` — 油猴脚本
-- `src/library/`、`server/` — 独立工作台与本地服务
-- `patches/` — 上游构建时补丁
-- `dist/` — 构建产物（可直接安装）
+根目录只保留项目说明、许可证、包管理文件与 Windows 启停 / 安装入口。开发与功能文档统一从 [文档索引](docs/README.md) 查找，修改前先读 [代码地图](docs/CODEMAP.md)。
+
+- `src/`、`server/` — 前端、油猴脚本与本地服务源码
+- `test/`、`scripts/` — 自动化测试与构建 / 维护脚本
+- `sketchfab-exporter-tauri/` — 桌面端独立工程（沿用现名，避免破坏打包路径）
+- `assets/`、`design/` — 项目素材与独立设计稿
+- `docs/` — 说明、代码地图、版本记录与第三方声明
+- `patches/`、`vendor/` — 上游补丁与第三方代码 / 运行依赖
+- `dist/`、`artifacts/` — 构建产物与验证证据 / 历史日志，不提交
+- `%APPDATA%\AssetVault\` — 工程外的用户状态、缓存与下载资产，不随构建清理
+
+完整放置规则与本次清理候选见 [目录规范](docs/project-structure.md)。
+编译缓存可用 `npm run clean:build` 预览；执行方式与发布后自动清理规则见 [构建清理](docs/build-cleanup.md)。
 
 ## 版本记录
 
-历史变更与修复见 [CHANGELOG.md](CHANGELOG.md)。
+历史变更与修复见 [版本记录](docs/CHANGELOG.md)。
 
 ## License
 
 GPL-3.0-only（上游 GPL-3.0，本仓库为衍生作品，见 `LICENSE`）。
+第三方代码来源与补丁说明见 [第三方声明](docs/THIRD_PARTY.md)。
 
 平台模块：在「设置 → 平台模块」按需启用或关闭在线平台，默认全部启用。保存后页面自动刷新；关闭的平台不参与搜索、分类初始化、在线解析和新下载，已下载文件及已有任务保留。配置由主机统一保存，局域网访客刷新后同步，不能修改开关。

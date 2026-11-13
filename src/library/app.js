@@ -3,6 +3,9 @@ import {enabledPlatform,platformForFeed} from './platforms.js';
 import {createDownloadUI} from './download-ui.js';
 import {isLanVisitor} from './visitor-mode.js';
 import {createPersistentStorage} from './persistent-storage.js';
+import {createFormatFilterState} from './format-filter.js';
+import {createLibraryPaging} from './library-paging.js';
+import {hasTextSignal, metaOf} from './auto-tags.js';
 import {createArtstationUI} from './artstation-ui.js';
 import {createAmbientcgUI} from './ambientcg-ui.js';
 import {createPolyhavenUI} from './polyhaven-ui.js';
@@ -11,11 +14,12 @@ import {createPolyforkUI} from './polyfork-ui.js';
 import {createFreestylizedUI} from './freestylized-ui.js';
 
 import {CATEGORIES,searchParams,dailyTopics} from './search-options.js';
-import {PLATFORMS,ALL,DEFAULT_PLATFORM,platformById,platformLabel,routeLink,FEEDS,jobKindOf,platformsForMode,isPictureSite} from './platforms.js';
-import {createContentModes,modeTarget,activeMode} from './content-modes.js';
+import {PLATFORMS,ALL,DEFAULT_PLATFORM,platformById,platformLabel,routeLink,FEEDS,jobKindOf,isPictureSite,isVideoSite} from './platforms.js';
+import {createContentKindTabs,contentKindsOf,modeAllowsLocalKind,savedMode,rememberMode} from './content-kind-tabs.js';
+import {modePresetById,platformPoolFor,loadModePlatforms,rememberModePlatform,pickModePlatform} from './mode-presets.js';
 import {combine,statusText,subtitleText,pageInfoNote,loadMoreLabel,describeRequest,feedErrorMessage} from './discovery-view.js';
 import {galleryAvailable,galleryActive,aspectRatioStyle} from './gallery-view.js';
-import {loadLibrary,saveLibrary,mergeModels,collectModels,UID,loadDiscovery,saveDiscovery,trashModels,restoreModels,purgeModels,setUserMeta,userMetaFor} from './library-state.js';
+import {loadLibrary,saveLibrary,mergeModels,collectModels,UID,LIBRARY_LIMIT,loadDiscovery,saveDiscovery,trashModels,restoreModels,purgeModels,setUserMeta,userMetaFor} from './library-state.js';
 import {enhanceSelects} from './picker.js';
 import {findLocalJob,classifyBlenderJob} from './blender-send.js';
 import {TARGETS as SOFTWARE_TARGETS,createSendMenu,targetById,applicableTargets,exportMenuHtml,setSelectedTarget} from './export-targets.js';
@@ -23,22 +27,33 @@ import {icon} from './icon-set.js';
 import {createCardView} from './card-view.js';
 import {probeLocalBridge,importIntoLocalBlender,createLocalBlenderGuide} from './client-blender.js';
 import {openExternal} from './open-url.js';
-import {createLibraryView} from './library-view.js';
+import {openHelp} from './help-panel.js';
+import {hookDiagnostics,rememberError} from './diagnostics.js';
+import {createLibraryView,FILTER_ROWS} from './library-view.js';
 import {resetPolyforkDetails} from './polyfork-params.js';
-import {createGltfPreview} from './gltf-preview.js';
-import {createLocalFiles} from './local-files.js';
-import {createDiscoveryFeed,resetDiscoveryFeeds} from './discovery-feed.js';
+import {createLazyPreview} from './lazy-preview.js';
+import {createLocalFiles,packageImageUrl} from './local-files.js';
+import {createLocalImport} from './local-import.js';
+import {setupDropImport} from './drop-import.js';
+import {openRelinkFile} from './relink-file.js';
+import {createRangeSelect} from './range-select.js';
+import {favoriteTarget,favoriteSkipsCollect} from './favorite-targets.js';
+import {createDiscoveryFeed,resetDiscoveryFeeds,restorePictureSnapshot} from './discovery-feed.js';
 import {createImageDownloader} from './image-download.js';
 import {createBlenderBridgePanel} from './blender-bridge.js';
 import {createBrowserRuntimePanel} from './browser-runtime.js';
 import {createSetupWizard} from './setup-wizard.js';
 import {createSearchHistory} from './search-history.js';
 import {createMergedFilters,artstationCategory,feedPlan,joinQuery,kindAllows,kindType} from './merged-filters.js';
+import {fetchUiCode,uiSourceText} from './ui-element-preview.js';
 import {createFilterTrees} from './filter-tree.js';
 import {esc} from './html-esc.js';
 import {filterLocalAssets,localAssetCategories} from './local-filters.js';
 import {waitForInitialCategories} from './category-options.js';
 import {createAISettings} from './ai-settings.js';
+import {setupDragOut} from './drag-out.js';
+import {setupPictureDrag} from './picture-drag.js';
+import {setupLibraryDragWeb} from './library-drag-web.js';
 import {tagsFor,addAITags,tagPanel,addUserTag,removeUserTag,listUserTags,renameUserTag,mergeUserTag,deleteUserTag,mergeTags} from './asset-tags.js';
 import {previewActions} from './preview-actions.js';
 import {exportSettingsHtml,selectSoftwareTab} from './export-settings.js';
@@ -46,14 +61,36 @@ import {chineseError} from './error-message.js';
 import {authorButton} from './asset-author.js';
 import {createSimilarAssets} from './similar-assets.js';
 import {createSettingsPanel} from './settings-panel.js';
+import {createAutostartCard} from './desktop-settings.js';
+import {createAppearanceCard, applyAppearance, readAppearance} from './appearance.js';
+import {createCloudSyncCard} from './cloud-sync.js';
+// 外观要在首帧之前落地：等设置面板构造完再应用，用户会先看到一眼默认底色再跳到自己的壁纸。
+applyAppearance(readAppearance(window.localStorage));
+import {createBackupPanel} from './backup-panel.js';
+import {createStorePanel} from './store-panel.js';
+import {createSemanticSearch} from './semantic-search.js';
 import {initSearchMotion} from './search-motion.js';
+import {createMascotAssistant} from './mascot-assistant.js';
+import {setupMascotDeveloper} from './mascot-developer.js';
+import {createAssistantDownloads} from './assistant-downloads.js';
 import {createRelatedSearch} from './related-search.js';
 import {createLanSharingSettings} from './lan-sharing.js';
+import {createTeamSettings} from './team-settings.js';
 import {createAppUpdates} from './app-updates.js';
 import {setupSidebarCollapse} from './sidebar-collapse.js';
 import {setupFilterDrawer} from './filter-drawer.js';
-import {setupCardContextMenu,assetMenuItems,packageMenuItems,fileMenuItems} from './card-context-menu.js';
+import {setupCardContextMenu,assetMenuItems,packageMenuItems,fileMenuItems,pictureMenuItems,sequenceMenuItems,copyText} from './card-context-menu.js';
 import {bindLocalSearch,createLocalQueryParser,createThemeBrainstorm,createTagSuggester} from './search-translation.js';
+import {bindImageSearch} from './image-search.js';
+import {createAdvancedQuery} from './advanced-query.js';
+import {createLibraryEvents} from './library-events.js';
+import {applyRemoteDetails} from './remote-sync.js';
+import {createFilterDock} from './filter-dock.js';
+import {folderOf} from './filter-dimensions.js';
+import {openLocalHealth} from './local-health.js';
+import {sizeText} from './download-card.js';
+import {createAssetProbe} from './asset-probe.js';
+import {createBoardHub} from './board-hub.js';
 const $=selector=>document.querySelector(selector);
 const visitor=isLanVisitor();
 document.documentElement.dataset.lanVisitor=String(visitor);
@@ -62,7 +99,7 @@ const brainstorm=createThemeBrainstorm();
 let settingsPanel;
 const fmt=n=>n==null?'—':Number(n)>=1000?`${(Number(n)/1000).toFixed(Number(n)>=10000?0:1)}k`:String(n);
 let storage;try{storage=window.localStorage;}catch{}
-try{storage=await createPersistentStorage(storage);}catch(error){alert(`${error.message}。暂时使用页面缓存，本次修改可能无法持久保存。`);}
+try{storage=await createPersistentStorage(storage,fetch,{catalogPaged:true});}catch(error){alert(`${error.message}。暂时使用页面缓存，本次修改可能无法持久保存。`);}
 window.addEventListener('assetvault:storage-error',event=>toast(event.detail));
 // 先加载主机配置，再初始化任何在线平台；读取失败时禁止自动访问平台。
 let platformSettings;
@@ -75,7 +112,30 @@ const newFeed=()=>({rows:[],request:null,next:null,pending:[],pages:0,busy:false
 // 每个结果流都先建好骨架，骨架清单来自 platforms.js 的 FEEDS：加平台时不用回来改这里，
 // 也不会出现「平台声明了流但 state 里没有」这种一进页面就崩的错。platform 决定哪几个流
 // 共同组成网格（见 platforms.js），source 决定网格当前展示的是搜索还是某一次链接解析。
-const state={...initial,route:'discover',platform:DEFAULT_PLATFORM,source:'search',filter:'all',search:'',sort:'recent',selected:new Set(),compact:false,gallery:false,modelOnly:false,libraryMode:'',feeds:Object.fromEntries(FEEDS.map(mode=>[mode,newFeed()]))};
+// mode 是显式主状态：图标高亮、平台下拉池、结果流、布局全部由它决定，不再从 platform 反推。
+// contentKind 只是它在资产库页的「本地类型筛选」影子，避免 filtered() 里再分叉一次。
+const state={...initial,route:'discover',platform:DEFAULT_PLATFORM,source:'search',filter:'all',search:'',sort:'recent',selected:new Set(),gallery:false,modelOnly:false,libraryMode:'',mode:savedMode(),contentKind:'',modePlatforms:loadModePlatforms(storage),feeds:Object.fromEntries(FEEDS.map(mode=>[mode,newFeed()]))};
+// ADR-09：启动期已到的目录页在 cache 里（loadLibrary 已读进 state.models），后续页由
+// 持久化层增量投递。这里只做去重合并 + 重绘，绝不重建整张状态，也不改写入契约。
+storage?.setCatalogPageHandler?.(items=>{
+ const known=new Set(state.models.map(m=>m?.uid));let added=0;
+ for(const item of items){if(!item||!item.uid||known.has(item.uid))continue;known.add(item.uid);state.models.push(item);added++;}
+ if(added&&state.route==='library')try{renderGrid();}catch{}
+});
+if(state.mode)state.contentKind=modePresetById(state.mode)?.localKind||'';
+// 画板中枢在底部装配；右键菜单是运行时才触发的，这里先占位避免 TDZ。
+// 访客模式 / 装配失败时保持 null，菜单里的画板项会自动缺席。
+let boardHub=null;
+// 常驻筛选图标条（设备初始化时才建）。资产库的本地类型过滤要问它一句「标签筛选中吗」：
+// 标签是跨类型维度，选了标签就不该再被顶部模式带来的类型夹住（2026-11-11 用户反馈）。
+let filterDock=null;
+const tagFilterActive=()=>!!filterDock?.tagsActive?.();
+/** 当前真正生效的本地类型：标签筛选期间一律放开，清掉标签后原类型自动回来。 */
+const activeLocalKind=()=>tagFilterActive()?'':($('#local-kind')?.value||'');
+// 上次停在哪个平台。图站最吃这条：不记住的话每次刷新都回到「全部平台」，用户得重新点一次
+// 图站、再等一屏图，看上去就是「刷新就把图片重新加载了一遍」。
+const LAST_PLATFORM_KEY='assetvault-last-platform-v1';
+function rememberPlatform(id){try{storage?.setItem(LAST_PLATFORM_KEY,id);}catch{/* 存不了就只在本次会话生效 */}}
 // 每批翻多少页由「每次加载多少条」推出来（见 discovery-feed.js）。它属于界面节奏而不是导出参数，
 // 所以不塞进 options（那边会被设置面板整份覆盖回去），只跟 discovery 快照一起存。
 const savedDiscovery=loadDiscovery(storage);
@@ -83,8 +143,25 @@ state.pageSize=[24,48,96,192].includes(Number(savedDiscovery?.pageSize))?Number(
 if(savedDiscovery){
  state.platform=platformEnabled(savedDiscovery.platform)?platformById(savedDiscovery.platform).id:ALL;
 }
+// 恢复的模式若与上次平台不配套（换机器 / 平台被关掉），退回该模式记住的站，
+// 别让下拉出现「选中项不在池子里」的空壳，也别把图片模式恢复成 3D 平台的结果流。
+if(state.mode){
+ const preset=modePresetById(state.mode);
+ if(preset?.linkOnly){
+  // 文本 / 视频：没有站可恢复，「链接解析」就是它的平台。只拨状态，不在这里发请求。
+  state.platform='link';state.modelOnly=false;state.gallery=false;
+ }else if(preset&&!preset.localOnly){
+  const pool=platformPoolFor(preset,{enabled:platformEnabled});
+  if(!pool.some(item=>item.id===state.platform)){
+   const target=pickModePlatform(preset,state.modePlatforms[state.mode],pool);
+   if(target===ALL||platformEnabled(target)){state.platform=target;rememberPlatform(target);}
+  }
+  state.modelOnly=!!preset.modelOnly;
+  state.gallery=!!preset.gallery&&galleryAvailable(state);
+ }
+}
 const queuePulse=new Map();
-let downloads,artstation,ambientcgUI,polyhavenUI,kenneyUI,freestylizedUI,polyforkUI,blenderBridge,browserRuntime,setupWizard,contentModes,searchHistory,filterTrees,mergedFilters,filterTimer,persistTimer,toastTimer,searchTimer;
+let downloads,artstation,ambientcgUI,polyhavenUI,kenneyUI,freestylizedUI,polyforkUI,blenderBridge,browserRuntime,setupWizard,contentModes,searchHistory,filterTrees,mergedFilters,filterTimer,persistTimer,toastTimer,searchTimer,liveEvents;
 // 「本次会话里用户主动检索过」的痕迹。它只是 searchStillActive 的补充判据：
 // 首次打开页面时框本来就是空的，不能把「框为空」当成一次删除（详见 clearSearchIfEmptied）。
 let hadQuery=false;
@@ -125,7 +202,7 @@ function restoreDiscoveryFilters(){
  if($('#online-animated'))$('#online-animated').checked=!!filters.animated;
  if($('#online-staffpicked'))$('#online-staffpicked').checked=!!filters.staffpicked;
 }
-function toast(message){$('#toast').textContent=chineseError(message);$('#toast').classList.add('show');clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('#toast').classList.remove('show'),4200);}
+function toast(message){const text=chineseError(message);if(/失败|错误|不可用|超时/.test(text))rememberError(text);$('#toast').textContent=text;$('#toast').classList.add('show');clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('#toast').classList.remove('show'),4200);}
 // 「下载高清图」的按钮生成与批量入队都在 image-download.js：卡片要显示哪些资产的按钮、多选栏点下去
 // 发什么样的任务，答案必须只有一个，所以两边都问这一个对象。
 const imageDownload=createImageDownloader({icon,toast,downloads:()=>downloads,findModel,refresh:()=>{renderGrid();counts();}});
@@ -133,63 +210,187 @@ const imageDownload=createImageDownloader({icon,toast,downloads:()=>downloads,fi
 const cardView=createCardView({icon,esc,fmt,state,queuePulse,imageDownload,sendControl,classifyBlenderJob,platformLabel,artstationUI:()=>artstation,downloadsUI:()=>downloads,isVisitor:visitor});
 // 状态行、网格、筛选行摆放、预览弹窗的画法都住在 library-view.js；这里解构出同名函数，
 // 所以其余代码读起来还是只有 renderGrid() / counts() 这层语义。
-const gltfPreview=createGltfPreview();
+const gltfPreview=createLazyPreview({onError:error=>toast('无法加载 3D 预览：'+error.message)});
+// 格式筛选状态是唯一实例：高级检索面板写它，本地文件网格读它（localStorage 跨重启保留）。
+// 用 window.localStorage 而不是 persistentStorage —— 后者是资产库主状态，UI 偏好不能污染它。
+const formatFilter=createFormatFilterState();
 // 资产库文件夹里没登记成下载任务的文件（用户自己拷进去的素材）：扫描 + 通用预览。
-const localFiles=createLocalFiles({$,icon,esc,gltfPreview,notify:message=>toast(message),onChanged:()=>scanLibraryFiles(true)});
+const localFiles=createLocalFiles({$,icon,esc,gltfPreview,storage,notify:message=>toast(message),onChanged:()=>scanLibraryFiles(true),onFetchPackage:fetchRemoteBoard,favorites:()=>state.favorites});
 // 资产包/文件都不是 state.models 的成员（那份数据要求 32 位 hex uid），只在绘制层接在网格后面，
 // 搜索词与类型筛选跟着资产库工具条走。已有下载任务或已在库里的资产不再从磁盘重复出一张卡。
 function extraCards(){
  if(state.filter==='trash')return [];
  const query=state.search||'';
- const kind=$('#local-kind')?.value||'';
+ const kind=activeLocalKind();
+ // 图标模式选了「文本 / 视频」这类下拉里没有的类型时，kind 是空的 —— 额外卡片得自己再对一次类型，
+ // 否则会出现「计数 0 条、卡片却铺满一屏」的割裂（这些卡不属于 state.models，不走 contentKindsOf）。
+ const modeKind=tagFilterActive()?'':(state.contentKind||'');
+ const formats=formatFilter.matcher();
  // 只让「已经完成下载」的包出卡：排队中/下载中/失败的目录是半成品，磁盘上也已经有下载任务卡了。
  // 例外是图片包：它是边下边写进最终文件夹的（fileExists 一有就有），所以下载中也要出卡。
  const known=new Set([...state.models.map(model=>model.uid),...(downloads?.jobs||[]).filter(job=>job.state!=='saved'&&!job.fileExists).map(job=>job.uid)].filter(Boolean));
+ // 目录维度只在本地生效：选中的目录按「包相对根的第一段」比对，空数组 = 不筛。
+ const folders=Array.isArray(state.folders)?state.folders:[];
+ const inFolders=pkg=>!folders.length||folders.includes(folderOf(pkg.rel));
  const packages=localFiles.packages()
+  .filter(inFolders)
   .filter(pkg=>!state.localCategory||localAssetCategories(pkg).includes(state.localCategory))
+  .filter(pkg=>modeAllowsLocalKind(modeKind,'packages',pkg.category))
   .filter(pkg=>!pkg.uid||!known.has(pkg.uid))
-  .filter(pkg=>localFiles.matchesPackage(pkg,{query,kind}))
+  .filter(pkg=>localFiles.matchesPackage(pkg,{query,kind,formats}))
   .map(pkg=>({key:`pkg|${pkg.root}|${pkg.rel}`,mtime:Number(pkg.mtime)||0,name:String(pkg.title||pkg.name||pkg.rel||''),html:localFiles.packageCard(pkg)}));
+ const members=localFiles.sequenceMembers();
  const rest=localFiles.entries()
+  // 已折叠成序列的帧不再单独出卡，否则一条 60 帧序列会把整屏占满。
+  .filter(file=>!members.has(`${file.root}|${file.rel}`))
+  .filter(inFolders)
   .filter(file=>!state.localCategory||localAssetCategories(file).includes(state.localCategory))
-  .filter(file=>localFiles.matches(file,{query,kind}))
+  .filter(file=>modeAllowsLocalKind(modeKind,'files',file.kind))
+  .filter(file=>localFiles.matches(file,{query,kind,formats}))
   .map(file=>({key:`${file.root}|${file.rel}`,mtime:Number(file.mtime)||0,name:String(file.name||file.rel||''),html:localFiles.card(file)}));
+ // 序列卡走同一套筛选：拿首帧当代表，格式/类型看的是图片本身。
+ const seqCards=localFiles.sequences()
+  .map(seq=>({seq,file:{root:seq.root,rel:seq.cover.rel,name:seq.label,ext:seq.ext,kind:'image',bytes:seq.bytes,mtime:seq.mtime}}))
+  .filter(({file})=>inFolders(file))
+  .filter(({file})=>!state.localCategory||localAssetCategories(file).includes(state.localCategory))
+  .filter(({file})=>modeAllowsLocalKind(modeKind,'files',file.kind))
+  .filter(({file})=>localFiles.matches(file,{query,kind,formats}))
+  .map(({seq})=>({key:`seq|${seq.key}`,mtime:Number(seq.mtime)||0,name:seq.label,html:localFiles.sequenceCard(seq)}));
+ const localCards=[...rest,...seqCards];
  // 「最近入库」按磁盘更新时间倒序，paintGrid 再把这批本地卡片和模型的 addedAt 按同一条时间线混排；
  // 名称排序时跟着名字走；其余排序保持扫描顺序（追加在模型后面）。
  const order=state.sort==='recent'?(a,b)=>b.mtime-a.mtime:state.sort==='name'?(a,b)=>a.name.localeCompare(b.name,'zh'):null;
- return [...(order?packages.sort(order):packages),...(order?rest.sort(order):rest)];
+ return [...(order?packages.sort(order):packages),...(order?localCards.sort(order):localCards)];
+}
+/** 远程收藏卡上的「下载原图」：把平台原图抓回本机。
+ *  服务端按 uid 找到这张卡所在的目录并原地接管（见 resumeRemoteBoard），
+ *  所以下载目录里不会多出一个「(1)」，资产库里也不会同一个画板出两张卡。 */
+async function fetchRemoteBoard(pkg,button){
+  if(!pkg?.uid||!pkg?.sourceUrl){toast('这张卡没有来源链接，补不了下载；回原站重新粘一次链接即可。');return;}
+  if(!downloads?.enqueue){toast('后台服务未连接，无法下载图片。');return;}
+  const saved=button?.innerHTML;
+  if(button){button.disabled=true;button.innerHTML='正在加入队列…';}
+  try{
+    const result=await downloads.enqueue([{uid:pkg.uid,platform:pkg.platform,name:pkg.title,author:pkg.author,url:pkg.sourceUrl}],{output:'folder'},false,undefined,'images');
+    toast(result.added.length?'已加入图片下载任务，接着补原图（已下好的不会重下）':'这个画板已在队列里或已经下载过');
+  }catch(e){toast(e.message);}
+  finally{if(button){button.disabled=false;button.innerHTML=saved;}}
+  await scanLibraryFiles(true);
 }
 /** 扫一遍资产库文件夹：下载落盘的资产包 + 用户自己拷进去的素材，只有这条路能看见。 */
 async function scanLibraryFiles(manual=false){
  const status=$('#local-file-status');
- if(manual&&status)status.textContent='正在扫描…';
+ // 命令条只放「图标 + 数字」，整句说明进 title —— 一行里塞「磁盘上另有 11 个资产包、2 个零散文件」
+ // 会把排序、动作图标全挤到右边变成一堵墙，也是这一轮要求精简掉的长文字。
+ const paint=(iconName,text,title='')=>{
+  if(!status)return;
+  status.hidden=!text;
+  status.classList.toggle('is-scanning',iconName==='rotate');
+  status.innerHTML=text?`${icon(iconName)}<b>${esc(text)}</b>`:'';
+  status.title=title||'';
+ };
+ if(manual)paint('rotate','扫描中','正在扫描资产库文件夹…');
  try{
-  const result=await localFiles.scan();
+  const result=await localFiles.scan({force:manual});
   if(!result)return;
   const count=result.packages.length,loose=result.files.length;
-  if(status)status.textContent=count||loose
-   ?`磁盘上另有 ${count} 个资产包${loose?`、${loose} 个零散文件`:''}${result.truncated?'（数量过多已截断）':''}`
-   :'';
+  const total=count+loose;
+  paint('archive',total?String(total):'',
+   total?`磁盘上另有 ${count} 个资产包${loose?`、${loose} 个零散文件`:''}${result.truncated?'（数量过多已截断）':''}`:'');
   if(state.route!=='discover')renderGrid();
  }catch(error){
-  if(status)status.textContent='扫描失败';
+  paint('help','失败',`扫描资产库文件夹失败：${error.message}`);
   if(manual)toast?.(`扫描资产库文件夹失败：${error.message}`);
  }
 }
-const view=createLibraryView({$,icon,esc,fmt,localTags:model=>tagsFor(state,model),localPackages:()=>localFiles.packages(),localEntries:()=>localFiles.entries(),openImageGallery:options=>localFiles.openImageGallery(options),state,queuePulse,cardView,composite,filtered,activeModes,galleryActive,categories:CATEGORIES,describeArt:request=>artstation.describe(request),artstationUI:()=>artstation,downloadsUI:()=>downloads,filterTreesUI:()=>filterTrees,mergedFiltersUI:()=>mergedFilters,findModel,sendControl,isVisitor:visitor,imageDownload,gltfPreview,extraCards,toast,openPictureBoard:board=>feed.openPictureBoard(board),openPictureAuthor:(url,platform)=>feed.openPictureAuthor(url,platform),backToPictureBoards:()=>feed.backToPictureBoards()});
-// 图片包是边下边写的，资产库得跟着磁盘一起长：有图片包正在下载时，每 20 秒重扫一次本地文件，
-// 全部结束后自然停下（不请求就不再扫描，不给磁盘添无谓负担）。
-setInterval(async()=>{
- if(state.route==='discover'||document.hidden)return;
+// 阶段 3：本地库大批量资产只在绘制层分页，state.models 仍保持全量（写入契约不能裁）。
+// 阶段 4：高级检索激活时「加载更多」改走服务端按页取数，回调由 advanced-query.js 挂到 state 上。
+const paging=createLibraryPaging({$,state,onMore:()=>renderGrid(),onRemoteMore:()=>state.onRemoteMore?.(),icon});
+const view=createLibraryView({$,icon,esc,fmt,pageRows:paging.slice,localTags:model=>tagsFor(state,model),localPackages:()=>localFiles.packages(),localEntries:()=>localFiles.entries(),openImageGallery:options=>localFiles.openImageGallery(options),state,queuePulse,cardView,composite,filtered,activeModes,galleryActive,categories:CATEGORIES,describeArt:request=>artstation.describe(request),artstationUI:()=>artstation,downloadsUI:()=>downloads,filterTreesUI:()=>filterTrees,mergedFiltersUI:()=>mergedFilters,findModel,sendControl,isVisitor:visitor,imageDownload,gltfPreview,extraCards,toast,openPictureBoard:board=>feed.openPictureBoard(board),openPictureAuthor:(url,platform)=>feed.openPictureAuthor(url,platform),backToPictureBoards:()=>feed.backToPictureBoards(),reloadPictureSite:()=>feed.reloadPictureSite(),openPictureUrl:url=>feed.openPictureUrl(url),refreshAssets:()=>scanLibraryFiles(true)});
+// 画板视图：Artflow 完整应用以 iframe 装载（见 artflow-embed.js）。
+// 这里只负责「资产 → 画布」的解析与工具条动作；画布上的选择、框选、吸附、编队、
+// 撤销、便签/文字/形状/绘制等全部由 Artflow 自己提供，交互行为与它独立运行时一致。
+let boardCanvas=null;
+function canvasKindOf(model){
+ if(!model)return 'image';
+ const platform=String(model.platform||''),type=String(model.assetType||'');
+ if(platform==='uiverse')return 'ui';
+ if(type==='textures')return 'material';
+ if(type==='hdris')return 'hdri';
+ if(type==='models'||platform==='sketchfab')return 'model';
+ if(isVideoSite(platform)&&type==='videos')return 'video';
+ if(/\.(mp4|webm|mov)(\?|$)/i.test(String(model.thumbnail||'')))return 'video';
+ return 'image';
+}
+/** 把 uid 解析成画布要的三件事：图、类型、名字。查不到 = 资产已从库里删掉，返回 null 让卡片显示失效。 */
+function resolveCanvasAsset(uid){
+ if(!uid)return null;
+ if(uid.startsWith('local:')){
+  const [root,...rest]=uid.slice(6).split('|');
+  const rel=rest.join('|');
+  return {src:`/api/local/thumb?root=${encodeURIComponent(root)}&rel=${encodeURIComponent(rel)}&w=512`,kind:'image',name:rel.split('/').pop()||'本地文件'};
+ }
+ // 本地图片序列：封面用首帧缩略图，画布把它当一张图铺进去（序列本身是资产，画板是容器）。
+ if(uid.startsWith('seq:')){
+  const seq=localFiles.findSequence(uid);
+  if(!seq)return null;
+  const cover=seq.cover||seq.frames[0];
+  if(!cover)return null;
+  return {src:`/api/local/thumb?root=${encodeURIComponent(cover.root||seq.root)}&rel=${encodeURIComponent(cover.rel)}&w=512`,kind:'image',name:seq.label||'图片序列'};
+ }
+ const model=findModel(uid);
+ if(!model)return null;
+ const raw=model.thumbnail||model.thumb||'';
+ return {src:raw?`/api/image?url=${encodeURIComponent(raw)}`:'',kind:canvasKindOf(model),name:model.name||model.title||'未命名'};
+}
+async function enterCanvas(){
+ const host=$('#cv-host');
+ if(!host)return;
+ if(!boardCanvas){
+  const {mountArtflow}=await import('./artflow-embed.js');
+  boardCanvas=mountArtflow(host,{
+   resolve:resolveCanvasAsset,
+   onCount:(count)=>{const el=$('#cv-count');if(el)el.textContent=String(count);},
+   onStatus:(text)=>{if(text)toast?.(text);},
+  });
+  // 暴露给调试与外部脚本。
+  window.__avCanvas=boardCanvas;
+ }
+}
+// 画板动作（铺开 / 整理 / 适应）统一交给画布自己的快捷键，侧边栏不再放动作组。
+// 图片包是边下边写的，资产库得跟着磁盘一起长：新任务一露头就强制重扫一次（绕过扫描缓存），
+// 第一张图落盘后就能出正式卡。之后进入「稳态轮询」——把频率从每 5 秒降到每 15 秒：
+// 单张图落盘晚一二十秒被画廊捕获对用户无感，却能大幅削减后台对全部根目录的持续签名扫描开销
+// （rootsSignature 每次都要对所有下载根做 stat + readdir，历史任务越多越亏）。
+// 发现页也照扫（只是不重绘），这样切回资产库时 route() 的 renderGrid 用的是最新包索引。
+let liveImageKey='';
+let pollSteady=false;   // 当前这批活动图片任务已稳定（key 不再变）→ 切低频
+let pollRunning=false;  // 防止上轮 await 未完成时定时器重入
+let pollTimer=null;
+function schedulePoll(){
+ if(pollTimer)return;
+ pollTimer=setTimeout(runPoll,pollSteady?15000:5000);
+}
+async function runPoll(){
+ if(pollRunning){schedulePoll();return;}
+ pollRunning=true;pollTimer=null;
  try{
+  if(document.hidden)return; // 隐藏页不扫，下一轮照常排期
   const response=await fetch('/api/downloads',{cache:'no-store'});
   if(!response.ok)return;
   const snapshot=await response.json();
-  const live=(snapshot.jobs||[]).some(job=>job.kind==='images'&&!['saved','failed','cancelled','interrupted'].includes(job.state)&&job.fileExists);
-  if(live)await scanLibraryFiles();
+  const live=(snapshot.jobs||[]).filter(job=>job.kind==='images'&&!['saved','failed','cancelled','interrupted'].includes(job.state)&&job.fileExists);
+  const key=live.map(job=>job.id).join('|');
+  if(!key){liveImageKey='';pollSteady=false;return;}
+  if(key!==liveImageKey){liveImageKey=key;pollSteady=false;await scanLibraryFiles(true);}
+  else {pollSteady=true;await scanLibraryFiles();}
  }catch{}
-},20000);
-const {counts,renderStatus,renderGrid,placeFilters,preview:previewAsset,syncStickyOffset}=view;
+ finally{pollRunning=false;schedulePoll();}
+}
+schedulePoll();
+const {counts,renderStatus,renderGrid:drawGrid,placeFilters,preview:previewAsset,syncStickyOffset}=view;
+// 每次重绘顺带刷新图标轨：新收藏了一条音频 / 文档，对应的 tab 要当场长出来（计数有长度缓存）。
+const renderGrid=()=>{drawGrid();contentModes?.render();};
 const similarAssets=createSimilarAssets({dialog:$('#preview-dialog'),state,
  candidates:()=>[...state.models,...Object.values(state.feeds).flatMap(feed=>feed.rows)],
  imageUrl:model=>cardView.imageUrl(model),onPreview:uid=>preview(uid)});
@@ -220,12 +421,19 @@ function preview(uid){
 const feed=createDiscoveryFeed({$,toast,state,persist,renderGrid,mergeModels,describeArt:request=>artstation.describe(request),activeModes,showsFeed,feedEnabled,adoptPlatform,searchHistoryUI:()=>searchHistory,resolveArtworkLink:url=>resolveArtworkLink(url),routeTo:route,readRequest:mode=>readRequest(mode),clearSearchTimer:()=>clearTimeout(searchTimer),feedError:feedErrorMessage,markQueryActive:()=>{hadQuery=true;}});
 const {requestFeed,startSearch:runSearch,submitLink}=feed;
 let searchMotionToken=0;
+let localSearch,assistant,imageSearch,semanticSearch;
+const assistantDownloads=createAssistantDownloads(event=>assistant?.notify(event));
 async function startSearch(options){
+ if(state.route==='library'){localSearch?.search();return;}
  const token=++searchMotionToken,panel=$('#search-panel');
  updateRelatedTopics($('#asset-query').value.trim());
  panel?.dispatchEvent(new CustomEvent('search-motion-state',{detail:{busy:true}}));
- try{const result=await runSearch(options);if(token===searchMotionToken)panel?.dispatchEvent(new CustomEvent('search-motion-state',{detail:{busy:false,ok:!activeModes().some(mode=>state.feeds[mode]?.error)&&!state.pictureSite?.error}}));return result;}
- catch(error){if(token===searchMotionToken)panel?.dispatchEvent(new CustomEvent('search-motion-state',{detail:{busy:false,ok:false}}));throw error;}
+ try{const result=await runSearch(options);if(token===searchMotionToken&&state.route==='discover'){
+  const ok=!activeModes().some(mode=>state.feeds[mode]?.error)&&!state.pictureSite?.error;
+  panel?.dispatchEvent(new CustomEvent('search-motion-state',{detail:{busy:false,ok}}));
+  if(ok&&$('#asset-query').value.trim()&&!state.pictureSite&&!composite().rows.length)assistant?.notify({type:'empty'});
+ }return result;}
+ catch(error){if(token===searchMotionToken&&state.route==='discover')panel?.dispatchEvent(new CustomEvent('search-motion-state',{detail:{busy:false,ok:false}}));throw error;}
 }
 function fillIcons(){document.querySelectorAll('[data-icon]').forEach(el=>{el.innerHTML=icon(el.dataset.icon).replace(/^<i>|<\/i>$/g,'');});}
 
@@ -239,43 +447,113 @@ function composite(){
 function showsFeed(mode){return mode==='web'||activeModes().includes(mode);}
 // 每个在线结果流都要查：ArtStation 结果只存在于 feeds.art，漏掉它会让预览与下载
 // 在全平台结果里“点了没反应”（findModel 返回 undefined 后静默 return）。
-function findModel(uid){return FEEDS.reduce((hit,mode)=>hit||state.feeds[mode].rows.find(m=>m.uid===uid),null)||state.models.find(m=>m.uid===uid)||similarAssets.find(uid)||downloads?.jobs.findLast(m=>m.uid===uid)||state.tasks.findLast(m=>m.uid===uid);}
+function findModel(uid){return FEEDS.reduce((hit,mode)=>hit||state.feeds[mode].rows.find(m=>m.uid===uid),null)||state.models.find(m=>m.uid===uid)||similarAssets.find(uid)||downloads?.jobs.findLast(m=>m.uid===uid)||state.tasks.findLast(m=>m.uid===uid)||favoriteTarget(uid);}
 
 /** 右键菜单的内容：按被右击的卡片类型分别组装。
  *  远端资产卡看卡片上已渲染的三个节点（下载键 / .export-control / .open-folder）来判断
  *  「能不能下载、能不能导出、能不能打开文件夹」——菜单与卡片显示的状态天然一致，
  *  不在这里另判一套（另判迟早会和卡片分叉）。 */
+async function deleteLibraryAsset(payload){
+ try{
+  const uid=payload.uid||'';
+  const model=uid?findModel(uid)||(state.trashed||[]).find(item=>item.uid===uid):null;
+  const response=await fetch('/api/library/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...payload,thumbnail:model?.thumbnail||''})});
+  const data=await response.json().catch(()=>({}));
+  if(!response.ok)throw Error(data.error||'删除失败');
+  if(uid){
+   state.models=state.models.filter(item=>item.uid!==uid);
+   if(state.trashed)state.trashed=state.trashed.filter(item=>item.uid!==uid);
+   state.favorites?.delete(uid);
+   state.selected?.delete(uid);
+   if(state.userMeta)delete state.userMeta[uid];
+   if(state.userTags)delete state.userTags[uid];
+   if(state.aiTags)delete state.aiTags[uid];
+   persistNow();
+  }
+  await downloads?.refresh?.();
+  await scanLibraryFiles(true);
+  renderGrid();
+  toast('已删除');
+ }catch(error){toast(error.message||'删除失败');}
+}
+function sendToCanvas(uids){
+ // 画布（Artflow iframe）以资产 URL 为图片源铺图，不解码、不内嵌 —— 画布成为资产库的活视图。
+ // 当前不在画布路由时画布未挂载，先切过去等 mount 再发。
+ const api=window.__avArtflow;
+ if(api&&api.addAssets){api.addAssets(uids);toast('已发送到画布');return;}
+ route('canvas');
+ const start=Date.now();
+ const wait=()=>{
+  const a=window.__avArtflow;
+  if(a&&a.addAssets){a.addAssets(uids);toast('已发送到画布');}
+  else if(Date.now()-start<3000)requestAnimationFrame(wait);
+  else toast('画布尚未就绪，请稍后重试');
+ };
+ requestAnimationFrame(wait);
+}
 function cardContextItems(card){
+ // 本地图片序列卡：data-uid 形如 seq:root|dir|prefix|ext，data-sequence 是原始分组键。
+ // 序列是资产，画板是容器——右键给「播放 / 加入画板 / 复制路径」，与模型卡同源。
+ const seqUid=card.dataset.uid&&card.dataset.uid.startsWith('seq:')?card.dataset.uid:null;
+ if(seqUid){
+  const seq=localFiles.findSequence(seqUid);
+  if(!seq)return null;
+  const path=`${seq.dir?seq.dir+'/':''}${seq.prefix}*`;
+  return sequenceMenuItems({
+   seq,uid:seqUid,notify:toast,
+   onOpen:uid=>localFiles.openSequenceByUid(uid),
+   onSendToCanvas:sendToCanvas,
+   onBoardPicker:state.route==='library'&&!visitor&&boardHub?(uids,options)=>boardHub.pickBoards(uids,options):null,
+   onCopyPath:()=>copyText(path).then(ok=>toast(ok?'路径已复制':'复制失败，请手动复制')),
+  });
+ }
  const uid=card.dataset.uid;
  if(uid){
   // 回收站里的卡片，模型已经不在 state.models 里（挪到 state.trashed），findModel 找不到，
   // 这里补一次查找 —— 否则回收站里的卡片右键会没有菜单。
   const model=findModel(uid)||(state.trashed||[]).find(m=>m.uid===uid);
   if(!model)return null;
+  // 「打开下载文件夹」按钮已从卡片收进右键，revealId 直接由任务表算，别再读 DOM 节点。
+  const savedJob=(downloads?.jobs||[]).findLast(j=>j.uid===uid&&j.state==='saved'&&j.fileExists!==false&&j.id);
+  const revealId=savedJob?.id||'';
+  // 同一张卡在「发现」与「资产库」两种视图下右键菜单功能不同：发现页只给「看 / 抓 / 存进库」，
+  // 资产库页才追加本地管理（打开文件夹 / 发送给 / 画板 / 重新定位 / 移除 / 删除）。realm 直接由 route 决定。
   return assetMenuItems({
-   card,model,uid,notify:toast,
+   card,model,uid,notify:toast,realm:state.route==='library'?'library':'discover',
    canDownload:!!card.querySelector('[data-action="download"]'),
-   revealId:card.querySelector('.open-folder')?.dataset.id||'',
+   revealId,
    canExport:!!card.querySelector('.export-control'),
    favorite:state.favorites.has(uid),
    inLibrary:state.models.some(m=>m.uid===uid),
    isTrash:state.filter==='trash',
    isVisitor:visitor,
+   onDelete:state.route==='library'&&!visitor?()=>deleteLibraryAsset({jobId:revealId,uid}):null,
+   onBoardPicker:state.route==='library'&&!visitor&&boardHub?(uids,options)=>boardHub.pickBoards(uids,options):null,
+   onSimilar:state.route==='library'&&!visitor&&semanticSearch?uid=>semanticSearch.similar(uid):null,
+   onSendToCanvas:sendToCanvas,
+   canRelink:state.route==='library'&&state.filter!=='trash'&&!visitor&&model.storageMode==='linked',
+   onRelink:()=>openRelinkFile({model,toast,onChanged:()=>scanLibraryFiles(true)}),
   });
+ }
+ // 图站图片卡：没有 uid，动作全从缩略图的 data-* 和卡片里的按钮来（预览 / 原图 / 作者 / 找相似）。
+ // 只在图站结果里成立：本地图片库的卡片结构不同，不能靠「有没有 img[data-url]」去猜。
+ if(state.pictureSite&&state.route==='discover'&&card.classList.contains('model-card')){
+  const img=card.querySelector('img[data-url],video[data-url]');
+  if(img)return pictureMenuItems({card,img,notify:toast,onBookmark:state.pictureSite?.platform==='xiaohongshu'&&state.pictureSite?.mode!=='boards'?()=>view.bookmarkCurrentPicture().catch(error=>toast(error.message)):null});
  }
  // 本地素材包卡：key 是「根目录|相对路径」，回列表里找回对象才能拿到标题与路径。
  const pkgKey=card.dataset.package;
  if(pkgKey){
   const pkg=(localFiles.packages()||[]).find(p=>`${p.root}|${p.rel}`===pkgKey);
   if(!pkg)return null;
-  return packageMenuItems({card,pkg,notify:toast,canRegister:pkg.type==='folder'&&!pkg.hasMeta});
+  return packageMenuItems({card,pkg,notify:toast,canRegister:pkg.type==='folder'&&!pkg.hasMeta,onPackageAction:(key,action)=>localFiles.packageAction(key,action),onDelete:state.route==='library'&&!visitor?()=>deleteLibraryAsset({root:pkg.root,rel:pkg.rel,uid:pkg.uid}):null});
  }
  // 资产库里没登记成任务的文件（用户自己拷进来的素材）。
  const fileKey=card.dataset.file;
  if(fileKey){
   const file=(localFiles.entries()||[]).find(f=>`${f.root}|${f.rel}`===fileKey);
   if(!file)return null;
-  return fileMenuItems({card,file,notify:toast});
+  return fileMenuItems({card,file,notify:toast,onDelete:state.route==='library'&&!visitor?()=>deleteLibraryAsset({root:file.root,rel:file.rel}):null});
  }
  return null;
 }
@@ -286,15 +564,39 @@ function filtered(){
   if(state.platform===ALL&&$('#unified-sort').value==='name')return [...rows].sort((a,b)=>String(a.name||'').localeCompare(String(b.name||''),'zh'));
   return rows;
  }
- // 回收站：走 state.trashed 而不是 models。userTags 已随记录搬进 trashed 里，搜索要拼回去。
- if(state.filter==='trash'){
-  return filterLocalAssets((state.trashed||[]).map(m=>({...m,tags:mergeTags(m.tags||[],m.userTags||[])})),{kind:$('#local-kind').value,category:state.localCategory||'',search:state.search,english:state.searchEnglish||''},null);
- }
+  // 高级检索（阶段 2）：面板把命中 uid 集合写进 state.queryUids，这里只做一次集合过滤，
+  // 排序 / 卡片渲染 / 右键菜单仍全部沿用原来的路径，不需要第二套渲染逻辑。
+  const restrict=rows=>{
+   if(!state.queryUids)return rows;
+   const hit=rows.filter(m=>state.queryUids.has(m.uid));
+   if(!state.queryOrder)return hit;
+   // 阶段 3：服务端返回的 uids 已按所选排序排好（含合集手动顺序），网格据此显示。
+   const rank=new Map(state.queryOrder.map((uid,index)=>[uid,index]));
+   return hit.sort((a,b)=>(rank.get(a.uid)??Infinity)-(rank.get(b.uid)??Infinity));
+  };
+  // 语义模式（ADR-15）：命中集合来自向量，关键词再筛一遍会把「能骑的坐骑」这类
+  // 不含资产名字面的查询全部清掉 —— 所以此时关键词让位，只保留分类 / 类型 / 状态这些
+  // 用户显式点出来的筛选维度。
+  const keyword=state.semanticMode?'':state.search;
+  // 回收站：走 state.trashed 而不是 models。userTags 已随记录搬进 trashed 里，搜索要拼回去。
+  if(state.filter==='trash'){
+   const trashed=(state.trashed||[]).map(m=>({...m,tags:mergeTags(m.tags||[],m.userTags||[])}));
+   return restrict(filterLocalAssets(trashed,{kind:activeLocalKind(),category:state.localCategory||'',search:keyword,english:state.searchEnglish||'',imageTerms:state.imageTerms||[]},null));
+  }
  let models=state.models.filter(m=>state.filter!=='favorites'||state.favorites.has(m.uid));
+ // 顶部模式轨选中的类型（文本 / 视频这类没有 #local-kind 选项的走这里）。
+ if(state.contentKind&&!tagFilterActive())models=models.filter(model=>contentKindsOf(model).includes(state.contentKind));
  if(state.filter==='downloadable')models=models.filter(m=>m.downloadable);if(state.filter==='animated')models=models.filter(m=>m.animations>0);
- models=filterLocalAssets(models.map(m=>({...m,tags:tagsFor(state,m)})),{kind:$('#local-kind').value,category:state.localCategory||'',status:$('#local-status').value,search:state.search,english:state.searchEnglish||''},downloads?.connected?downloads.jobs:null);
+ models=filterLocalAssets(models.map(m=>({...m,tags:tagsFor(state,m)})),{kind:activeLocalKind(),category:state.localCategory||'',status:$('#local-status').value,search:keyword,english:state.searchEnglish||'',imageTerms:state.imageTerms||[]},downloads?.connected?downloads.jobs:null);
  const byRating=(a,b)=>userMetaFor(state,b.uid).rating-userMetaFor(state,a.uid).rating||(b.addedAt||0)-(a.addedAt||0);
- return [...models].sort(state.sort==='popular'?(a,b)=>b.likes-a.likes:state.sort==='name'?(a,b)=>a.name.localeCompare(b.name):state.sort==='rating'?byRating:(a,b)=>(b.addedAt||0)-(a.addedAt||0));
+ // 图搜结果按关键词命中权重排，用户选的排序方式让位给相似度。
+ if(state.imageTerms&&state.imageTerms.length)return restrict([...models].sort((a,b)=>(b._imgHits||0)-(a._imgHits||0)||(b.addedAt||0)-(a.addedAt||0)));
+ return restrict([...models].sort(state.sort==='popular'?(a,b)=>b.likes-a.likes:state.sort==='name'?(a,b)=>a.name.localeCompare(b.name):state.sort==='rating'?byRating:(a,b)=>(b.addedAt||0)-(a.addedAt||0)));
+}
+
+/** 点浮层里任一推荐词（今日主题 / 相近词 / AI 拆出来的词）：等同用户手输后回车，记进最近检索。 */
+function pickTerm(term){
+ $('#asset-query').value=term;refreshTopicStrip();startSearch({record:true});
 }
 
 /** 点最近检索里的一条：搜索记录重放那次检索，链接记录回到解析通道。 */
@@ -311,26 +613,69 @@ function applyHistory(entry){
 // 浏览器把窗口滚动量夹到顶部；再切回来就停在顶部了（2026-10-16 用户反馈的「切回发现页滚动复位」）。
 // 所以要赶在隐藏之前读一次 window.scrollY 存起来，回来时再放回去。
 const routeScroll=new Map();
+const routeQueries=new Map();
+let routeScrollFrame=0;
+function cancelRouteScroll(){cancelAnimationFrame(routeScrollFrame);routeScrollFrame=0;}
+window.addEventListener('wheel',cancelRouteScroll,{passive:true});
+window.addEventListener('touchstart',cancelRouteScroll,{passive:true});
 function restoreRouteScroll(top){
  // 两帧：第一帧让这次的显隐与重绘落盘，第二帧页面高度已经稳定，再放回去。
  // 高度不够时 scrollTo 自己会夹住，不需要另外算（比如下载页刚开始还没内容）。
- requestAnimationFrame(()=>requestAnimationFrame(()=>window.scrollTo(0,Math.max(0,top))));
+ cancelRouteScroll();
+ routeScrollFrame=requestAnimationFrame(()=>{routeScrollFrame=requestAnimationFrame(()=>{routeScrollFrame=0;window.scrollTo({top:Math.max(0,top),behavior:'instant'});});});
 }
 function route(name){
  if(name==='favorites'){name='library';state.filter='favorites';$('#local-feature').value='favorites';}
  // 先读、后动显隐：这一读拿到的还是切走前用户看到的位置。
  const leaving=state.route;
+ if(leaving!==name){
+  searchMotionToken++;
+  $('#search-panel').dispatchEvent(new CustomEvent('search-motion-state',{detail:{reset:true,busy:false}}));
+  routeQueries.set(leaving,$('#asset-query').value);
+  $('#asset-query').value=routeQueries.get(name)||'';
+  if(leaving==='library')localSearch?.reset();
+  imageSearch?.reset();
+  $('#theme-results').hidden=true;
+ }
  if(leaving&&leaving!==name)routeScroll.set(leaving,window.scrollY);
  state.route=name;state.selected.clear();
  document.body.dataset.route=name;
  // 画廊只画在线 A 站结果，本地库与收藏里混着两个平台，离开发现页就退出画廊。
- if(name!=='discover'){state.gallery=false;state.pictureSite=null;searchHistory?.close();}
- document.querySelectorAll('aside nav button[data-route]').forEach(b=>b.classList.toggle('active',b.dataset.route===name));
+ // 图站结果不在这里丢掉：切去下载页 / 资产库再切回来，要直接回到刚才那屏（缓存命中，不重新抓）。
+ if(name==='downloads')state.gallery=false;
+ if(name!=='discover')searchHistory?.close();
+  document.querySelectorAll('aside nav button[data-route]').forEach(b=>b.classList.toggle('active',b.dataset.route===name));
+  // 选中项配一条会滑动的强调条：和平台模块 Tab 同一套手感，跟着高亮项上下移动。
+  const navIndicator=document.querySelector('#sidebar nav .nav-indicator');
+  if(navIndicator){const navActive=document.querySelector('#sidebar nav button[data-route].active');if(navActive&&navActive.offsetHeight){navIndicator.style.top=`${navActive.offsetTop}px`;navIndicator.style.height=`${navActive.offsetHeight}px`;navIndicator.classList.add('on');}}
  // 顶部面包屑（工作空间 / 当前页）已按用户要求撤掉：侧边栏的高亮项本身就说明了在哪一页。
- $('#library-view').hidden=name==='downloads';
- $('#downloads-view').hidden=name!=='downloads';$('#search-panel').hidden=name!=='discover';
+$('#library-view').hidden=name==='downloads'||name==='canvas';
+$('#canvas-view').hidden=name!=='canvas';
+// 侧边栏不再有画板动作组，进画板只需要把 iframe 拉起来。
+if(name==='canvas')enterCanvas();
+$('#downloads-view').hidden=name!=='downloads';$('#search-panel').hidden=name==='downloads'||name==='canvas';
+ // 模式是显式主状态：在资产库里点了「文本 / 视频」再切回发现页时，平台要跟着回到对应来源。
+ // 不纠正就会出现「高亮说文本、下拉说 Sketchfab」——一按搜索还真去搜模型，等于模式被悄悄冲掉。
+ if(name==='discover'&&state.mode){
+  const preset=modePresetById(state.mode);
+  if(preset?.linkOnly&&state.platform!=='link'){
+   state.platform='link';state.source='search';renderPlatform();
+  }else if(preset?.platformKind==='video'&&!isVideoSite(state.platform)){
+   state.platform=preset.defaultPlatform||ALL;state.source='search';renderPlatform();
+  }
+ }
+ $('#asset-query').placeholder=name==='library'?'搜索本地资产名称、作者、标签…':platformById(state.platform).placeholder;
+ // 语义搜索开启时占位文案与按钮高亮都跟着路由变：切到发现页它不生效，样子就不该像开着。
+ semanticSearch?.repaint?.();
+ $('#asset-query').setAttribute('aria-label',name==='library'?'搜索本地资产':'搜索在线资产');
+ $('#search-button').innerHTML=`${icon('search')} ${name==='library'?'搜索资产库':'搜索 / 解析'}`;
+ $('#search-clear').hidden=!$('#asset-query').value;
+ $('#search-clear').classList.toggle('visible',!!$('#asset-query').value);
+ $('#search-panel').classList.toggle('has-search-text',!!$('#asset-query').value);
+ refreshTopicStrip();
  if(name==='downloads'){downloads?.render();downloads?.refresh();}
  else renderGrid();renderStatus();counts();
+ if(name==='library'&&leaving!==name)localSearch?.search();
  // 只在真的换页时恢复：首次进入（leaving 与 name 相同）保持浏览器自己的行为，
  // 否则每次刷新页面都会被强制拉回顶部。
  if(leaving&&leaving!==name)restoreRouteScroll(routeScroll.get(name)||0);
@@ -347,19 +692,27 @@ function route(name){
 function renderPlatformOptions(){
  const select=$('#search-platform');
  const current=platformById(state.platform);
- // data-hint 是下拉菜单里的第二行小字：自绘菜单读它，不用在 UI 里再写一份平台说明。
- // 选项按当前内容模式给：模型模式只列 3D 平台，图片模式只列能出图的平台 + 各图站。
- const pool=platformsForMode(activeMode(state));
+ const preset=modePresetById(state.mode);
+ // 模式是主状态：点「模型」下拉只列 3D 平台，点「图片」只列图站与能出图的平台，
+ // 没激活模式就列全量。文本 / 视频没有在线采集源，给一枚本地占位，不假装能切站。
+ const localOnly=!!preset?.localOnly;
+ // linkOnly（文本 / 视频）已经不是「本地资产库」那一面了：platformPoolFor 会给它「链接解析」一枚，
+ // 所以「本地资产库」占位只留给真正没有在线面的模式。
+ const pool=preset?.linkOnly
+  ? platformPoolFor(preset,{enabled:platformEnabled})
+  : localOnly
+   ? [{id:'library',label:'本地资产库',hint:'本地文档 / 视频资产，暂无在线采集平台'}]
+   : platformPoolFor(preset,{enabled:platformEnabled});
  // 粘链接识别出来的平台可能不在当前模式的池子里（比如模型模式下粘了 Pixiv 的作品页）：
- // 补进池子，否则 select.value 落空，左边会显示成第一项「全部平台」，和真正解析它的平台对不上。
- if(current.id!==ALL&&!pool.some(item=>item.id===current.id))pool.splice(Math.min(1,pool.length),0,current);
- select.innerHTML=pool.filter(item=>item.id===ALL||platformEnabled(item.id)).map(item=>`<option value="${item.id}"${item.hint?` data-hint="${esc(item.hint)}"`:''}>${esc(item.label)}</option>`).join('');
- select.value=current.id;
+ // 补进池子，否则 select.value 落空，左边会显示成第一项，和真正解析它的平台对不上。
+ if(!localOnly&&current.id!==ALL&&!pool.some(item=>item.id===current.id))pool.splice(Math.min(1,pool.length),0,current);
+ select.innerHTML=pool.filter(item=>item.id===ALL||item.id==='library'||platformEnabled(item.id)).map(item=>`<option value="${item.id}"${item.hint?` data-hint="${esc(item.hint)}"`:''}>${esc(item.label)}</option>`).join('');
+ select.value=pool.some(item=>item.id===current.id)?current.id:(pool[0]?.id||'');
 }
 function renderPlatform(){
  const platform=platformById(state.platform);
  renderPlatformOptions();
- $('#asset-query').placeholder=platform.placeholder;
+ $('#asset-query').placeholder=state.route==='library'?'搜索本地资产名称、作者、标签…':platform.placeholder;
  $('#filters-all').textContent=platform.note||'';
  renderFilters(platform);
  const all=state.platform===ALL;
@@ -372,8 +725,12 @@ function renderPlatform(){
 function adoptPlatform(id){
  const next=platformById(id).id;
  if(!next||next===ALL||next===state.platform)return;
+ // 文本 / 视频（链接解析）不认站：粘任何链接都留在这一面。
+ // 拨到 Sketchfab 只会让下拉与状态行谎报「这个链接归 Sketchfab 管」，也把人从视频 / 文档那一面拽走。
+ if(state.platform==='link')return;
  if(!platformEnabled(next))return;                    // 关掉的平台别拨过去，拨了也只有空结果
  state.platform=next;
+ rememberPlatform(next);
  if(isPictureSite(next))state.modelOnly=false;         // 图站没有关键词检索流，别留着「只要 3D」的残留状态
  renderPlatform();
 }
@@ -381,6 +738,7 @@ function adoptPlatform(id){
  *  识别用的是 routeLink —— 和「粘链接直接解析」同一份规则，所以下拉显示的平台与真正处理
  *  这个链接的平台永远一致。只拨下拉，不触发检索、不跳页，用户仍按回车或「搜索 / 解析」决定下一步。 */
 function syncPlatformFromLink(raw){
+ if(state.route!=='discover')return;
  const value=String(raw||'').trim();
  if(!/^https?:\/\//i.test(value))return;
  const route=routeLink(value);
@@ -395,20 +753,18 @@ function renderFilters(platform){
  const unified=state.platform===ALL;
  $('#filters-merged').hidden=!unified;
  if(unified){
-  $('#filters-sketchfab').hidden=true;$('#filters-artstation').hidden=true;$('#filters-ambientcg').hidden=true;$('#filters-polyhaven').hidden=true;$('#filters-polypizza').hidden=true;$('#filters-kenney').hidden=true;$('#filters-freestylized').hidden=true;$('#filters-polyfork').hidden=true;$('#filters-all').hidden=true;
+  // 必须用 '#id'：FILTER_ROWS 存的是裸 id，$ 是 querySelector，传裸 id 会被当成标签名返回 null，
+  // 在「全部平台」分支里直接抛 "Cannot set properties of null (setting 'hidden')"，整个界面初始化失败。
+  for(const row of FILTER_ROWS){const node=$('#'+row);if(node)node.hidden=true;}
+  const allNote=$('#filters-all');if(allNote)allNote.hidden=true;
   mergedFilters?.refresh();
   return;
  }
  const filterRows=Array.isArray(platform.filters)?platform.filters:platform.filters?[platform.filters]:[];
  mergedFilters?.release();                         // R5：离开全部平台，把类型 / 艺术家插回 #filters-artstation
- $('#filters-sketchfab').hidden=!filterRows.includes('filters-sketchfab');
- $('#filters-artstation').hidden=!filterRows.includes('filters-artstation');
- $('#filters-ambientcg').hidden=!filterRows.includes('filters-ambientcg');
- $('#filters-polyhaven').hidden=!filterRows.includes('filters-polyhaven');
- $('#filters-polypizza').hidden=!filterRows.includes('filters-polypizza');
- $('#filters-kenney').hidden=!filterRows.includes('filters-kenney');
- $('#filters-freestylized').hidden=!filterRows.includes('filters-freestylized');
- $('#filters-polyfork').hidden=!filterRows.includes('filters-polyfork');
+ // 平台自己的筛选行：按注册表逐行显隐，不为每个平台手写一条赋值 ——
+ // 加平台时只要在 platforms.js 写好 filters 字段，这里不用回来改。
+ for(const row of FILTER_ROWS){const node=$('#'+row);if(node)node.hidden=!filterRows.includes(row);}
  $('#filters-all').hidden=filterRows.length>0;
 }
 /** 切平台只重搜「还没被检索过的」源；已经有结果的源直接复用，避免每次切换都闪一下。 */
@@ -421,51 +777,114 @@ function setPlatform(id,{autostart=true,gallery=state.gallery}={}){
  // 一个检索都不发，界面停在「已停止检索」加一张空网格。
  activeModes().forEach(mode=>{const f=state.feeds[mode];if(f.controller){f.controller.abort();f.busy=false;}});
  state.platform=next;state.source='search';state.selected.clear();state.pictureSite=null;
- // 模型模式只在「全部平台」下成立：手动切到单平台就当作退出。
- if(next!==ALL)state.modelOnly=false;
+ rememberPlatform(next);
+ // modelOnly 由当前模式决定：手动在下拉里换站只是模式内的子选择，不该把模式冲掉。
+ state.modelOnly=!!modePresetById(state.mode)?.modelOnly;
  // 图片平台之间保留展示选择；离开图片平台时退出瀑布流。
  state.gallery=gallery&&galleryAvailable(state);
  renderPlatform();
  if(state.route!=='discover')route('discover');else renderGrid();
+ // 图站没有关键词检索流：切过去先拉一屏首页推荐，结果区直接有图可看，
+ // 而不是一块「请把链接粘到上方搜索框」的说明书（用户 2026-11-03 反馈）。
+ if(autostart&&isPictureSite(next))return feed.openPictureHome?.(next);
  if(autostart)return Promise.all(activeModes().map(mode=>requestFeed(mode,readRequest(mode),{reuse:true})));
 }
-/** 模型模式 / 图片模式被点了一下：切到哪个平台、要不要瀑布流都由 content-modes 算好，
- *  这里只负责把「平台」这件事交给 setPlatform（它管重搜冷源、并顺手同步按键高亮）。
- *  再点一次当前模式＝退出回全部平台，所以两个键的语义是「模型 / 图片 / 都不是」三态。 */
+/** A 站的「类型」随模式走：模型模式锁 Marmoset（可转 3D），图片模式放开全部作品图。
+ *  退出模式时还原进入前的选择，别把用户自己调的筛选吃掉。 */
 let artTypeBeforeModel='';
-function applyContentMode(id){
- if(state.route==='library'){                            // 资产库内：模型/图片切换键改为筛本地资产，不跳到发现页
-  const next=state.libraryMode===id?'':id;
-  state.libraryMode=next;
-  const kind=next==='model'?'models':next==='image'?'images':'';
-  const sel=$('#local-kind');
-  if(sel){sel.value=kind;sel.dispatchEvent(new Event('change',{bubbles:true}));}
-  else{state.selected.clear();renderGrid();}
-  contentModes?.render();
+function setArtTypeForMode(preset){
+ const node=$('#art-type');if(!node)return;
+ if(preset?.modelOnly){
+  if(node.value!=='marmoset'){artTypeBeforeModel=node.value||'';node.value='marmoset';}
+ }else if(artTypeBeforeModel){node.value=artTypeBeforeModel;artTypeBeforeModel='';}
+ if(preset?.id==='images')node.value='';
+}
+/** 模式的本地类型落到资产库页：#local-kind 有的类型交给下拉（权威），
+ *  下拉里没有的（文本 / 视频）才走 state.contentKind + contentKindsOf，避免两套判定打架。 */
+function applyLocalKind(preset){
+ const kind=preset?.localKind||'';
+ const select=$('#local-kind');
+ const has=!!select&&[...select.options].some(option=>option.value===kind);
+ state.contentKind=has?'':kind;
+ state.libraryMode=preset?.legacyMode||'';
+ if(select)select.value=has?kind:'';
+}
+/** 展示区立刻换数据源：图站拉首页推荐图，3D 平台用当前关键词（空词＝公开资产）重搜。
+ *  startSearch 会 resetDiscoveryFeeds 清掉上一模式的结果流，不会残留别种类型的卡片。 */
+function loadModeResults(target){
+ if(isPictureSite(target)){renderGrid();return feed.openPictureHome?.(target);}
+ return startSearch();
+}
+/** 顶部模式轨的落点：一个图标 = 平台下拉池 + 默认站点 + 结果流 + 布局 + 本地类型，整套一起切。
+ *  模式是显式主状态，手动在下拉里换站只是模式内的子选择，不会再偷偷退出模式。
+ *
+ *  但在「资产库」页里，图标只筛本地资产类型：那里没有在线结果流可换，
+ *  跳去发现页等于把用户从他正在整理的这一库文件里踢走 —— 原地重画网格即可。 */
+function applyModeTab(entry){
+ const preset=modePresetById(entry?.id);
+ if(!preset)return;
+ state.mode=preset.id;rememberMode(preset.id);
+ state.selected.clear();
+ if(state.route==='library'){
+  state.modelOnly=false;state.gallery=false;state.pictureSite=null;
+  applyLocalKind(preset);                             // 类型落到 #local-kind（或 state.contentKind）
+  renderGrid();persist();
   return;
  }
- const target=modeTarget(id,state);
- if(!target)return;
- if(target.platform!==ALL&&!platformEnabled(target.platform)){toast('该平台已关闭，请在设置 → 平台模块中开启');return;}
- if(state.route!=='discover')route('discover');     // 在模型库页点这个键，先回到发现页再说
- const prev=state.modelOnly;
- state.modelOnly=!!target.modelOnly;
- if(state.modelOnly!==prev){
-  // 模式切换会改 A 站请求的形状：进入时把「类型」拨到 Marmoset（可转 3D），退出时还原用户的选择；
-  // 旧结果作废，让下面（或 setPlatform 的冷源重搜）用新形状重新检索。
-  if(state.modelOnly){artTypeBeforeModel=$('#art-type').value||'marmoset';$('#art-type').value='marmoset';}
-  else if(artTypeBeforeModel){$('#art-type').value=artTypeBeforeModel;artTypeBeforeModel='';}
+ state.modelOnly=!!preset.modelOnly;
+ /** 文本 / 视频：留在发现页，不把人踢去资产库（2026-11-12 用户反馈）。
+  *  这一模式没有可搜关键词的在线源，平台换成「链接解析」：粘视频页 / 文档页 / 直链就出卡片。
+  *  关键词框里的旧词要清掉 —— 它不认关键词，留着只会让人以为「搜了却没结果」。 */
+ if(preset.linkOnly){
+  state.gallery=false;state.pictureSite=null;
+  resetDiscoveryFeeds(state);                         // 上一模式的卡片不能留在「链接解析」这一面
+  applyLocalKind(preset);                             // 资产库那一面仍按类型筛，切回库时生效
+  $('#asset-query').value='';
+  $('#search-clear').hidden=true;$('#search-clear').classList.remove('visible');
+  $('#search-panel').classList.remove('has-search-text');
+  // autostart:false：链接解析没有「先搜一屏」这回事，等用户粘东西。
+  setPlatform('link',{autostart:false});
+  // setPlatform 在已经是 link 时会早退，这两步不能省：模式高亮与空状态都得跟着换。
+  if(state.route!=='discover')route('discover');
+  renderPlatform();renderGrid();persist();
+  return;
  }
- if(id==='image'&&target.platform==='artstation')$('#art-type').value='';
- renderFilters(platformById(state.platform));        // 统一树 ↔ 两棵平台树的显隐立刻切
- if(target.platform===state.platform){
-  // 平台没变（例如全部平台下点模型模式）：setPlatform 会直接 return，这里得自己收尾。
-  state.gallery=target.gallery;contentModes?.render();
-  renderPlatformOptions();                            // 平台没变但模式变了，下拉池照样要跟着换
-  if(state.modelOnly!==prev||!state.feeds.art.request)return requestFeed('art',readRequest('art'),{reuse:true});
-  renderGrid();return;
+ // UI 平台进来就是看首页元素流：关键词残留会让它拿一个 Uiverse 压根没有的词去搜，结果只剩一张空网格。
+ if(preset.platformKind==='ui'&&$('#asset-query').value){
+  $('#asset-query').value='';
+  $('#search-clear').hidden=true;$('#search-clear').classList.remove('visible');
+  $('#search-panel').classList.remove('has-search-text');
  }
- setPlatform(target.platform,{gallery:target.gallery});
+ setArtTypeForMode(preset);
+ applyLocalKind(preset);
+ state.pictureSite=null;
+ const pool=platformPoolFor(preset,{enabled:platformEnabled});
+ const target=pickModePlatform(preset,state.modePlatforms[preset.id],pool);
+ state.modePlatforms[preset.id]=target;
+ rememberModePlatform(storage,preset.id,target);
+ if(state.route!=='discover')route('discover');
+ // autostart:false：setPlatform 只拨平台，统一由 loadModeResults 发一次请求，避免重复检索。
+ if(target!==state.platform)setPlatform(target,{gallery:!!preset.gallery,autostart:false});
+ else state.gallery=!!preset.gallery&&galleryAvailable(state);
+ renderPlatform();                                   // 重建下拉池 + 筛选行 + 图标高亮
+ loadModeResults(target);                            // 展示区立即换成该模式的卡片
+ persist();
+}
+/** 再点当前图标 / Esc：回到无模式，下拉恢复全量池，展示区按当前平台重新取流。
+ *  资产库页只清本地类型筛选，不碰在线平台池与结果流。 */
+function exitContentMode(){
+ state.mode='';rememberMode('');
+ state.modelOnly=false;state.libraryMode='';state.contentKind='';
+ const kind=$('#local-kind');if(kind)kind.value='';
+ if(artTypeBeforeModel){const node=$('#art-type');if(node)node.value=artTypeBeforeModel;artTypeBeforeModel='';}
+ if(state.route==='library'){renderGrid();persist();return;}
+ state.pictureSite=null;state.gallery=false;
+ // 「链接解析」不是真平台、视频站也不在全量池里：退出模式要回到全量平台，
+ // 否则下拉停在「只有视频模式才有意义」的站上，而它 feeds 为空，关键词检索连一路流都发不出去。
+ if(state.platform==='link'||isVideoSite(state.platform)){state.platform=ALL;state.source='search';rememberPlatform(ALL);resetDiscoveryFeeds(state);}
+ renderPlatform();
+ if(state.route==='discover')startSearch();else renderGrid();
+ persist();
 }
 /** R1：统一树的组头一键筛选把整组的 slug 串写进隐藏容器（多值），它非空时优先于单值叶子。 */
 function readCategory(){
@@ -492,7 +911,11 @@ function skipFeed(mode,reason){
   const refuse=(type,reason)=>{if(picked.length&&!kindAllows(picked,mode,type)){skipFeed(mode,reason||'当前范围不包含这个资产类型');return true;}return false;};
   // Polyfork 没有「题材映射表」这一层：它的 9 个 class 与统一树的题材不是一回事，
   // 所以「全部平台」下就按同一个关键词原样搜，不走 plan 的分类对齐。
+  if(mode==='simready'){if(refuse())return null;return {q:baseQ.slice(0,200)};}
   if(mode==='polyfork')return {q:baseQ.slice(0,200),assetClass:'',sort:''};
+  // UI 元素：类型与主题是站点自己的维度（按钮 / 加载动画 / 开关…，浅色 / 深色），
+  // 与 3D 资产的统一题材树不是一回事，所以不走 plan 的分类对齐，按站点语义原样传。
+  if(mode==='uiverse')return {q:baseQ.slice(0,200),type:$('#uiverse-type')?.value||'',theme:$('#uiverse-theme')?.value||''};
   if(plan){
    const target=mode==='search'?plan.sketchfab:mode==='art'?plan.art:plan[mode];
    if(!target){skipFeed(mode,'这个题材在该站没有对应分类');return null;}
@@ -576,25 +999,22 @@ function updateRelatedTopics(query){
  const version=++relatedVersion;relatedQuery=query;relatedTerms=[];relatedNote='正在推荐相近词…';refreshTopicStrip();
  relatedSearch(query).then(result=>{if(version!==relatedVersion)return;relatedTerms=result.terms;relatedNote=result.reason;refreshTopicStrip();});
 }
-/** Empty queries show daily topics; submitted queries show related search terms. */
-function refreshTopicStrip(){
- const strip=$('#topic-strip');if(!strip)return;
+/**
+ * 主题带已经收进检索浮层：这里只负责把「今日主题 / 相近词」按当前输入框整理成一份数据，
+ * 再通知浮层重画。名字沿用旧调用点，免得十几个触发位置各写一遍刷新。
+ */
+function termSources(){
  const query=$('#asset-query').value.trim();
- strip.hidden=/^https?:\/\//i.test(query);
- if(strip.hidden)return;
- if(query){
-  delete strip.dataset.day;
-  const current=query===relatedQuery;
-  strip.innerHTML='<span class="topic-lead">相近词</span>'+(current&&relatedTerms.length?relatedTerms.map(term=>`<button type="button" class="topic-chip" data-topic="${esc(term)}" title="搜索相近词：${esc(term)}">${esc(term)}</button>`).join(''):`<span class="related-topic-note" role="status">${esc(current?relatedNote:'提交搜索后推荐相近词')}</span>`);
-  return;
- }
- const today=new Date().toDateString();          // 跨天或从睡眠里醒来时重画一次，平时不动
- if(strip.dataset.day===today&&strip.childElementCount)return;
- strip.dataset.day=today;
- strip.innerHTML='<span class="topic-lead">今日主题</span>'+dailyTopics().map(topic=>
-  `<button type="button" class="topic-chip${topic.today?' today':''}" data-topic="${topic.en}" title="${topic.today?'今天的主题':'试试这个主题'}">${topic.en}</button>`).join('');
+ const current=!!query&&query===relatedQuery;
+ return {
+  daily:dailyTopics().map(topic=>({term:topic.en,label:topic.en,today:!!topic.today,badge:topic.today?'今日':'',title:topic.today?'今天的主题':'试试这个主题'})),
+  related:current?relatedTerms.map(term=>({term,label:term,title:`搜索相近词：${term}`})):[],
+  relatedNote:current?(relatedNote||''):'',
+ };
 }
+function refreshTopicStrip(){searchHistory?.refresh();}
 function clearSearchIfEmptied(){
+ if(state.route!=='discover')return;
  if($('#asset-query').value.trim())return;      // 还有字：正在打字或只删了几个字，不打断检索
  if(!searchStillActive()&&!hadQuery)return;     // 结果区本来就是浏览态，没什么可清
  hadQuery=false;
@@ -608,12 +1028,41 @@ function clearSearchIfEmptied(){
 
 function collect(ids,{quiet=false}={}){
  const result=collectModels(state.models,ids.map(findModel).filter(Boolean));state.models=result.models;persist();renderGrid();
- if(!quiet)toast(result.refused?`已加入 ${result.added} 个；模型库已达 1000 个，请先整理。`:result.added?`已加入 ${result.added} 个模型`:'这些模型已在模型库中');
+ if(!quiet)toast(result.refused?`已加入 ${result.added} 个；模型库已达 ${LIBRARY_LIMIT} 个，请先整理。`:result.added?`已加入 ${result.added} 个模型`:'这些模型已在模型库中');
  return result;
+}
+/**
+ * 复制 UI 元素的代码。
+ *
+ * mode：all（默认，单文件形态）/ html / css —— 详情弹窗的页签切换会把它一起换掉，
+ * 复制什么由当前页签决定，不让「复制的是哪一份」变成一道猜谜。
+ *
+ * 列表来源的记录里没有代码（只有元素 id），所以现取一份；
+ * 取代码走的是那条轻通道（只回 html/css，不回头部元数据）。
+ */
+async function copyUiCode(uid,mode='all'){
+ const model=findModel(uid);
+ if(!model){toast('未找到这个 UI 元素');return;}
+ try{
+  const code=await fetchUiCode(model)||{};
+  const text=mode==='html'?String(code.html||model.html||''):mode==='css'?String(code.css||model.css||''):uiSourceText(model,code);
+  if(!text){toast('这个元素没有可复制的代码');return;}
+  const ok=await copyText(text);
+  const what=mode==='html'?'HTML':mode==='css'?'CSS':'HTML + CSS';
+  toast(ok?`已复制 ${what} 到剪贴板`:'复制失败，请检查浏览器剪贴板权限');
+ }catch(e){toast(`复制失败：${e.message}`);}
 }
 function toggleFavorite(uid){
  if(state.favorites.has(uid))state.favorites.delete(uid);
- else{const r=collect([uid],{quiet:true});if(r.refused){toast('模型库已满，请先移除一些模型再收藏。');return;}state.favorites.add(uid);}
+ else{
+  // 图站图片 / 模型平台：收藏同时把记录留在资产库里（既有语义）。本地素材包本来就在库里，
+  // 跳过 collect，否则 state.models 里多出一份，反而会把磁盘索引画的那张素材包卡顶掉。
+  if(!favoriteSkipsCollect(uid)){
+   const r=collect([uid],{quiet:true});
+   if(r.refused){toast('模型库已满，请先移除一些模型再收藏。');return;}
+  }
+  state.favorites.add(uid);
+ }
  persist();renderGrid();
 }
 
@@ -626,7 +1075,8 @@ async function enqueueImmediate(picked,{force=false}={}){
   if(kind==='artstation'?picked.length>artstation.maxBatch:picked.length>50){toast(`每批最多 ${kind==='artstation'?artstation.maxBatch:50} 个${kind==='artstation'?' ArtStation 作品':'模型'}，请减少选择数量。`);return;}
   if(!picked.length){toast('未找到模型记录，请重新检索。');return;}
   // 材质没有 FBX 转换这一说，Blender 缺席的提醒只对模型任务有意义。
-  if(kind!=='ambientcg'&&!polyMaterial&&!polyHdri&&kind!=='polypizza'&&kind!=='kenney'&&kind!=='freestylized'&&kind!=='polyfork'&&downloads?.blenderAvailable===false)toast('默认会导出 GLB + FBX；未检测到 Blender 时 FBX 转换会失败，请先安装 Blender 或设置 SFX_BLENDER。');
+  // UI 元素落的是代码文件，同样没有 GLB/FBX 这一说。
+  if(kind!=='ambientcg'&&!polyMaterial&&!polyHdri&&kind!=='polypizza'&&kind!=='kenney'&&kind!=='freestylized'&&kind!=='polyfork'&&kind!=='simready'&&kind!=='uielement'&&downloads?.blenderAvailable===false)toast('默认会导出 GLB + FBX；未检测到 Blender 时 FBX 转换会失败，请先安装 Blender 或设置 SFX_BLENDER。');
   state.selected.clear();
   for(const model of picked)queuePulse.set(model.uid,Date.now());
   renderGrid();counts();
@@ -635,13 +1085,13 @@ async function enqueueImmediate(picked,{force=false}={}){
    // 输出固定为解压文件夹——材质没有 GLB/FBX 选项，也不再给压缩包与文件夹的二选一。
    const materialResolution=/^[1248]K$/.test(picked[0]?.materialResolution||'')?picked[0].materialResolution:'2K';
    const ambientFormat=picked[0]?.sourceType==='substance'?'SBSAR':picked[0]?.materialFormat==='PNG'||picked[0]?.materialFormat==='SBSAR'?picked[0].materialFormat:'JPG';
-   const downloadOptions=kind==='ambientcg'?{output:'folder',resolution:materialResolution,textureFormat:ambientFormat}:polyMaterial?{output:'folder',resolution:materialResolution,textureFormat:'JPG'}:polyHdri?{output:'folder',resolution:materialResolution,textureFormat:'HDR'}:kind==='freestylized'?{output:'folder',format:'glb',resolution:materialResolution}:kind==='polypizza'||kind==='kenney'||kind==='polyfork'?{output:'folder',format:'glb'}:{...state.options,output:'folder',format:'fbx',downloadTextures:true,pngOnly:true,fastZip:true};
+   const downloadOptions=kind==='simready'?{output:'folder',format:'usd'}:kind==='uielement'?{output:'folder'}:kind==='ambientcg'?{output:'folder',resolution:materialResolution,textureFormat:ambientFormat}:polyMaterial?{output:'folder',resolution:materialResolution,textureFormat:'JPG'}:polyHdri?{output:'folder',resolution:materialResolution,textureFormat:'HDR'}:kind==='freestylized'?{output:'folder',format:'glb',resolution:materialResolution}:kind==='polypizza'||kind==='kenney'||kind==='polyfork'?{output:'folder',format:'glb'}:{...state.options,output:'folder',format:'fbx',downloadTextures:true,pngOnly:true,fastZip:true};
   // kind 已在函数顶部由 jobKindOf(picked) 判定，覆盖 Poly Haven 等新平台，不再写死 sketchfab
   const result=await downloads.enqueue(picked,downloadOptions,force,undefined,kind);
   const libraryResult=collectModels(state.models,picked);state.models=libraryResult.models;persist();
   for(const model of picked)queuePulse.delete(model.uid);
   renderGrid();counts();
-  const noun=kind==='artstation'?' ArtStation 转换任务':polyHdri?' Poly Haven HDRI':polyMaterial?' Poly Haven 材质':kind==='polyhaven'?' Poly Haven 模型':kind==='ambientcg'?' ambientCG 材质':kind==='polypizza'?' Poly Pizza 模型':kind==='kenney'?' Kenney 资源包':kind==='polyfork'?' Polyfork 模型':kind==='freestylized'?' FreeStylized 资产':'后台任务';
+  const noun=kind==='artstation'?' ArtStation 转换任务':kind==='uielement'?' UI 元素':polyHdri?' Poly Haven HDRI':polyMaterial?' Poly Haven 材质':kind==='polyhaven'?' Poly Haven 模型':kind==='ambientcg'?' ambientCG 材质':kind==='polypizza'?' Poly Pizza 模型':kind==='kenney'?' Kenney 资源包':kind==='polyfork'?' Polyfork 模型':kind==='freestylized'?' FreeStylized 资产':'后台任务';
   // 这条消息是入队结果唯一的出口：先前会有一条「已识别某作品」的上下文提示，
   // 粘贴链接改成只出卡片、不自动入队之后，那个上下文已无处可挂，删掉免得留下死参数。
   const message=result.added.length?`已加入 ${result.added.length} 个${noun}${result.duplicates.length?`，跳过 ${result.duplicates.length} 个重复任务`:''}`:result.duplicates.length?'这些任务已在队列或已完成。':'没有任务加入';
@@ -813,6 +1263,10 @@ async function renderExportTargets({preserve=true,targets,refresh=false}={}){
   fillIcons();
  }catch(e){list.innerHTML='<p class="compact-note">读取导出目标失败</p>';}
 }
+// 备份面板实例：设置弹窗可能在初始化早期被打开，这里先占位，setup 时再赋值。
+let backupPanel=null;
+// 资源库面板（多库登记与切换）同样占位。
+let storePanel=null;
 function openSettings(){
  if(visitor)return;
  $('#pack-mode').value=state.options.packMode;$('#texture-size').value=state.options.maxTextureEdge;$('#scan-limit').value=state.options.scanLimit;
@@ -829,17 +1283,45 @@ async function browseFolderInto(inputId,errorId){
  const input=$(inputId),error=errorId?$(errorId):null;if(!input)return;
  if(!downloads?.pickFolder){toast('后台服务未连接，暂时不能打开文件夹选择器。');return;}
  if(error)error.textContent='';
- try{const folder=await downloads.pickFolder(input.value.trim());if(folder)input.value=folder;}catch(e){if(error)error.textContent=e.message;toast(e.message);}
+ try{const folder=await downloads.pickFolder(input.value.trim());if(folder){input.value=folder;input.dispatchEvent(new Event('change',{bubbles:true}));}}catch(e){if(error)error.textContent=e.message;toast(e.message);}
 }
 async function setup(){
+ // 回到上次待的平台，并把那一屏图从缓存直接铺进 state —— 都赶在第一帧渲染之前做完，
+ // 刷新页面后画面就是离开前那一屏，不会再「先空一下、图再一张张回来」。
+ try{
+  // ?platform=xxx 优先：深链（书签 / 从别处跳进来）要能直接落到某个平台，也方便排查。
+  const requested=new URLSearchParams(location.search).get('platform')||'';
+  const saved=requested||storage?.getItem(LAST_PLATFORM_KEY);
+  if(saved&&saved!==state.platform&&platformById(saved).id===saved&&platformEnabled(saved))state.platform=saved;
+  // 深链只用一次：读完就把参数从地址栏抹掉，之后切平台靠记住的那份，不会再被 URL 钉回原站。
+  if(requested){const u=new URL(location.href);u.searchParams.delete('platform');history.replaceState(null,'',u.pathname+u.search+u.hash);}
+ }catch{}
+ if(isPictureSite(state.platform)){const snapshot=restorePictureSnapshot(state.platform);if(snapshot)state.pictureSite=snapshot;}
  setupSidebarCollapse();
  setupFilterDrawer();
  setupCardContextMenu({icon,notify:toast,buildItems:cardContextItems});
  restoreDiscoveryFilters();
  refreshTopicStrip();
- downloads=createDownloadUI({$,icon,esc,toast,legacy:()=>state.tasks,requestLegacy:uid=>requestDownload([uid]),isVisible:()=>state.route==='downloads',onUpdate:changed=>{counts();if(changed&&state.route!=='downloads')renderGrid();}});downloads.setup();
+ downloads=createDownloadUI({$,icon,esc,toast,legacy:()=>state.tasks,requestLegacy:uid=>requestDownload([uid]),isVisible:()=>state.route==='downloads',onUpdate:changed=>{assistantDownloads(downloads.jobs);counts();if(changed&&state.route!=='downloads')renderGrid();}});downloads.setup();
+ // 桌面版：卡片可以直接拖到别的软件里（浏览器版这里会自己跳过，什么都不挂）。
+ setupDragOut({toast,jobs:()=>downloads.jobs,download:uid=>downloads.saveToClient(uid),send:sendToTarget,targetById,packages:()=>localFiles.packages()});
+ // 网页版兜底：缩略图拖出去只能得到小图，改挂原图地址。桌面版由上面的原生拖放接管，这里自动跳过。
+ setupPictureDrag();
+ // 网页版兜底：资产库图片卡拖出去给原文件（预取字节塞进 HTML5 拖拽）。桌面版同样自动跳过。
+ setupLibraryDragWeb();
  if(visitor)localBlenderGuide=createLocalBlenderGuide({toast});
  localFiles.setup();
+// 导入文件夹：加/删根目录后强制重扫一次，让新目录里的资产包立刻出现在网格里。
+createLocalImport({$,esc,toast,visitor,onChanged:()=>scanLibraryFiles(true)}).setup();
+// 备份与迁移：设置里那块卡片（备份列表 / 导出整库 / 导入快照）。
+backupPanel=createBackupPanel({$,esc,toast,isVisitor:visitor});
+backupPanel.setup();
+// 多资源库：切库改注册表再重启，卡片自己管状态（见 store-panel.js）。
+storePanel=createStorePanel({esc,toast,isVisitor:visitor});
+storePanel.setup();
+ // 网格框选 / Shift 连选：只加高亮 class，pointerup 才提交 state.selected，拖动中不重绘卡片。
+ const rangeSelect=createRangeSelect({grid:$('#grid'),state,renderGrid});
+ rangeSelect.setup();
  $('#local-rescan')?.addEventListener('click',()=>scanLibraryFiles(true));
  artstation=createArtstationUI({enabled:()=>platformEnabled('artstation'),$,icon,esc,toast,state,requestFeed});const artFilters=artstation.setup();
  // ambientCG 侧栏（分类 / 精度 / 输出方式）：分类清单开页就拉一次，静态 facets 不常变。
@@ -866,14 +1348,25 @@ async function setup(){
  const categoryGroup=$('#online-category-group');
  filterTrees=createFilterTrees({$,icon});                        // 筛选行改画成树状分类：字段是根分支，分类下面按主题分组
  if(categoryGroup&&!categoryGroup.isConnected)$('#filters-sketchfab').append(categoryGroup);
- enhanceSelects('#search-panel select:not(.ftree-native), #filter-rows select:not(.ftree-native)');   // 原生下拉的系统弹出层改不了样式，这里统一换成自绘的；树里的控件另有显示层，跳过
- contentModes=createContentModes({state,onPick:applyContentMode,buttons:document.querySelectorAll('[data-content-mode]')});   // 两个快捷入口：模型模式＝只看 Sketchfab，图片模式＝只看 A 站并排瀑布流
+ enhanceSelects('#search-panel select:not(.ftree-native), #filter-rows select:not(.ftree-native), #discovery-controls select:not(.ftree-native)');   // 原生下拉的系统弹出层改不了样式，这里统一换成自绘的；顶部功能栏的「每批条数」也在范围内，否则深色界面里会弹出浅色系统菜单；树里的控件另有显示层，跳过
+ contentModes=createContentKindTabs({host:$('#content-kind-tabs'),state,esc,readKind:()=>$('#local-kind')?.value||'',onPick:applyModeTab,onExit:exitContentMode});   // 顶部模式轨：每个模式一枚常驻图标，不显示数量 / 平台，再点当前模式或 Esc 退回全部
+ contentModes.render();
  placeFilters();                                                // 宽屏把筛选行搬进左侧栏，窄屏搬回搜索卡片
- window.addEventListener('resize',()=>{clearTimeout(filterTimer);filterTimer=setTimeout(()=>{placeFilters();syncStickyOffset();},120);});
- fillIcons();$('#online-category').innerHTML=CATEGORIES.map(([value,label])=>`<option value="${value}">${label}</option>`).join('');filterTrees.refresh();/* 分类选项填进去了，树可以画叶子了 */searchHistory=createSearchHistory({$,icon,state,persist,toast,onPick:applyHistory});searchHistory.setup();renderPlatform();route('discover');const initialScan=scanLibraryFiles();
+  window.addEventListener('resize',()=>{clearTimeout(filterTimer);filterTimer=setTimeout(()=>{placeFilters();syncStickyOffset();},120);const navIndicator=document.querySelector('#sidebar nav .nav-indicator');if(navIndicator){const navActive=document.querySelector('#sidebar nav button[data-route].active');if(navActive&&navActive.offsetHeight){navIndicator.style.top=`${navActive.offsetTop}px`;navIndicator.style.height=`${navActive.offsetHeight}px`;}}});
+ fillIcons();$('#online-category').innerHTML=CATEGORIES.map(([value,label])=>`<option value="${value}">${label}</option>`).join('');filterTrees.refresh();/* 分类选项填进去了，树可以画叶子了 */searchHistory=createSearchHistory({$,icon,state,persist,toast,onPick:applyHistory,onTerm:pickTerm,sources:termSources});searchHistory.setup();renderPlatform();route('discover');const initialScan=scanLibraryFiles();
  if(initial.migrated||initial.warning){$('#migration-note').hidden=false;$('#migration-note span').textContent=initial.warning||`已兼容旧版：保留 ${state.models.length} 个模型及收藏、任务记录。新的在线结果不会再自动入库。`;persistNow();}
  $('#dismiss-migration').onclick=()=>{$('#migration-note').hidden=true;};
  document.addEventListener('click',e=>{
+  const factsBtn=e.target.closest('[data-card-facts]');
+  if(factsBtn){
+   e.preventDefault();e.stopPropagation();
+   const card=factsBtn.closest('.model-card');
+   const open=card?.classList.contains('show-facts');
+   document.querySelectorAll('.model-card.show-facts').forEach(node=>node.classList.remove('show-facts'));
+   if(card&&!open)card.classList.add('show-facts');
+   return;
+  }
+  if(!e.target.closest('.card-facts'))document.querySelectorAll('.model-card.show-facts').forEach(node=>node.classList.remove('show-facts'));
   // 装成桌面应用后，WebView 不会把 target="_blank" 交给系统浏览器 —— 点了没反应。
   // 详情面板里所有「打开官方页面」都是这类链接，统一在这里接走，交给系统默认浏览器。
   const external=e.target.closest('a[target="_blank"]');
@@ -882,15 +1375,15 @@ async function setup(){
   const close=e.target.closest('[data-close]');if(close)$('#'+close.dataset.close).close();
   // 点到「发送到」弹层/按钮以外的地方就收起它；点在弹层内部（含按钮与菜单项）则不收。
   if(!e.target.closest('.export-menu')&&!e.target.closest('.export-toggle'))closeExportMenus();
-  const action=e.target.closest('[data-action]');if(action){const {uid}=action.dataset;switch(action.dataset.action){case 'preview':preview(uid);break;case 'download':requestDownload([uid]);break;case 'download-images':imageDownload.requestImages([uid]);break;case 'export-toggle':toggleExportMenu(action);break;case 'export-pick':pickExportTarget(action,action.dataset.target,action.dataset.id);break;case 'export-go':{const target=action.dataset.target,id=action.dataset.id;if(target)sendToTarget(target,id);break;}case 'favorite':toggleFavorite(uid);break;case 'ai-tags':aiTagThis(uid);break;case 'collect':collect([uid]);break;case 'reveal-download':downloads?.reveal(action.dataset.id).catch(e=>toast(e.message));break;case 'remove':trashModels(state,[uid]);persist();renderGrid();counts();toast('已移入回收站 · 资产筛选里选「回收站」可恢复');break;case 'restore':{const r=restoreModels(state,[uid]);persist();renderGrid();counts();toast(r.refused?'模型库已满（1000 个），先清理再恢复':'已放回模型库');break;}case 'purge':if(confirm('彻底删除这条记录？不可恢复（不会删除已下载的文件）。')){purgeModels(state,[uid]);persist();renderGrid();counts();}break;case 'add-user-tag':addUserTagFromDialog(uid);break;}}
+  const action=e.target.closest('[data-action]');if(action){const {uid}=action.dataset;switch(action.dataset.action){case 'preview':preview(uid);break;case 'download':requestDownload([uid]);break;case 'download-images':imageDownload.requestImages([uid]);break;case 'export-toggle':toggleExportMenu(action);break;case 'export-pick':pickExportTarget(action,action.dataset.target,action.dataset.id);break;case 'export-go':{const target=action.dataset.target,id=action.dataset.id;if(target)sendToTarget(target,id);break;}case 'favorite':toggleFavorite(uid);break;case 'ai-tags':aiTagThis(uid);break;case 'collect':collect([uid]);break;case 'reveal-download':downloads?.reveal(action.dataset.id).catch(e=>toast(e.message));break;case 'remove':trashModels(state,[uid]);persist();renderGrid();counts();toast('已移入回收站 · 资产筛选里选「回收站」可恢复');break;case 'restore':{const r=restoreModels(state,[uid]);persist();renderGrid();counts();toast(r.refused?`模型库已满（${LIBRARY_LIMIT} 个），先清理再恢复`:'已放回模型库');break;}case 'purge':if(confirm('彻底删除这条记录？不可恢复（不会删除已下载的文件）。')){purgeModels(state,[uid]);persist();renderGrid();counts();}break;case 'add-user-tag':addUserTagFromDialog(uid);break;case 'copy-ui-code':copyUiCode(uid,action.dataset.copyMode||'all');break;}}
   // 评分与「我的标签」× 删除：都长在标签面板里，先于 data-tag 搜索拦截，不然点星会顺带发起检索。
   const rate=e.target.closest('[data-rate]');if(rate){setUserMeta(state,rate.dataset.uid,{rating:Number(rate.dataset.rate)});persist();renderTagDialog(rate.dataset.uid);renderGrid();patchMetaFor(rate.dataset.uid);return;}
   const rmTag=e.target.closest('[data-remove-tag]');if(rmTag){const box=rmTag.closest('[data-asset-tags]'),model=box?.dataset.assetTags?findModel(box.dataset.assetTags):null;if(model){removeUserTag(state,model,rmTag.dataset.removeTag);persist();renderTagDialog(model.uid);renderGrid();}return;}
   const filter=e.target.closest('[data-filter]');if(filter){state.filter=filter.dataset.filter;state.selected.clear();document.querySelectorAll('[data-filter]').forEach(b=>b.classList.toggle('active',b===filter));renderGrid();}
-  const tag=e.target.closest('[data-tag]');if(tag){$('#preview-dialog').close();writeSearch({q:tag.dataset.tag});startSearch();}
+  const tag=e.target.closest('[data-tag]');if(tag){$('#preview-dialog').close();if(state.route==='library')$('#asset-query').value=tag.dataset.tag;else writeSearch({q:tag.dataset.tag});startSearch();}
   
  });
- $('#grid').addEventListener('change',e=>{const id=e.target.dataset.select;if(!id)return;e.target.checked?state.selected.add(id):state.selected.delete(id);renderGrid();});
+ $('#grid').addEventListener('change',e=>rangeSelect.onCheckboxChange(e));
  // 材质精度选择（卡片下载键左边、预览面板各一份）：写回模型对象，重渲染时按它回填，
  // 下载时也从同一个字段读——不复制第二份状态，就不存在两处显示不一致。
  // 写回后必须重渲染：下载键的「已下载」按精度判定，不刷新的话切了精度按钮还停在旧档位的状态。
@@ -905,8 +1398,29 @@ async function setup(){
  });
  // 只有「手动在搜索框里敲关键词并提交」才写进最近检索：分类 / 排序 / 复选这些筛选动作
  // 也会重发检索，但它们是筛选不是检索词，混进历史里只会把真正的关键词挤掉（2026-10-16 用户要求）。
- initSearchMotion($('#search-panel'));
- $('#asset-search-form').addEventListener('submit',e=>{e.preventDefault();startSearch({record:true});});
+ const canManageUpdates=!visitor&&!!window.__TAURI__?.core?.invoke;
+ let appUpdates;
+ const categoryIds=['online-category','unified-category','online-category-group','art-category','polyhaven-category','ambientcg-category','kenney-category','freestylized-category'];
+ assistant=createMascotAssistant({panel:$('#search-panel'),canManageUpdates,onCheckUpdates:()=>appUpdates?.check(),onInstallUpdate:()=>appUpdates?.update(),onViewDownloads:()=>route('downloads'),onClearFilters:()=>{
+  if(state.route==='library')$('#reset-local-filters').click();
+  else{for(const id of categoryIds)if($('#'+id))$('#'+id).value='';resetMergedFilters();}
+ }});
+ // 复用筛选控件的真实操作，不让初始化或后台渲染触发助手提示。
+ document.addEventListener('change',event=>{
+  if(!event.isTrusted&&!event.bubbles)return;
+  if(!categoryIds.includes(event.target.id))return;
+  const label=event.target.selectedOptions?.[0]?.textContent;
+  if(label)assistant.notify({type:'category',label});
+ });
+ document.addEventListener('click',event=>{
+  const button=event.target.closest('[data-local-category],[data-local-kind]');
+  if(button&&state.route==='library')assistant.notify({type:'category',label:button.querySelector('.ftree-leaf-label')?.textContent||button.textContent});
+ });
+ initSearchMotion($('#search-panel'),{notify:assistant.notify});
+ const disposeMascotDeveloper=setupMascotDeveloper({panel:$('#search-panel'),assistant,enabled:!visitor});
+ window.addEventListener('pagehide',disposeMascotDeveloper,{once:true});
+ window.addEventListener('pagehide',assistant.dispose,{once:true});
+ $('#asset-search-form').addEventListener('submit',e=>{e.preventDefault();if(imageSearch?.submit())return;startSearch({record:true});});
  // 删字也算一次检索：只清空时才触发（见 clearSearchIfEmptied），
  // 否则每敲一个字都发请求，既吵又慢。
  $('#asset-query').addEventListener('input',clearSearchIfEmptied);
@@ -915,11 +1429,7 @@ async function setup(){
  // 部分浏览器 paste 之后的 input 会晚一帧，这里用 setTimeout 让值先落地，两条路径幂等。
  $('#asset-query').addEventListener('input',event=>syncPlatformFromLink(event.target.value));
  $('#asset-query').addEventListener('paste',event=>{const text=event.clipboardData?.getData('text');if(text)setTimeout(()=>syncPlatformFromLink(text),0);});
- // 主题胶囊：写进搜索框再走一次正常检索。赋值不会触发 input 事件，所以顺手自己刷新推荐带。
- $('#topic-strip').addEventListener('click',event=>{
-  const chip=event.target.closest('[data-topic]');if(!chip)return;
-  $('#asset-query').value=chip.dataset.topic;refreshTopicStrip();startSearch({record:true});
- });
+// 主题 / 相近词胶囊已经搬进检索浮层，统一走 createSearchHistory 的 onTerm 回调（见 pickTerm）。
  // 主题拆包助手（A3）：一句话主题 → AI 拆成一组搜索词，点一下即检索。
  const themeInput=$('#asset-query'),themeResults=$('#theme-results');
  themeInput.title='多个搜索词用逗号分隔，例如：house, tree, cart；AI 可将主题拆解成搜索词';
@@ -927,10 +1437,13 @@ async function setup(){
  themeInput.addEventListener('input',()=>{themeToken++;});
  $('#theme-breakdown-btn').onclick=async()=>{
   const theme=themeInput.value.trim();if(!theme){themeInput.focus();return;}
-  const token=++themeToken,button=$('#theme-breakdown-btn');button.disabled=true;button.textContent='拆解中…';
-  themeResults.hidden=false;themeResults.innerHTML='<span class="theme-loading">正在拆解主题…</span>';
-  const data=await brainstorm(theme);
-  button.disabled=false;button.innerHTML='<span class="sparkle-icon">✦</span> AI 拆解';
+ const token=++themeToken,button=$('#theme-breakdown-btn');
+ // 现在它是输入框内的一颗纯图标键：不能往里写「拆解中…」文字，否则 30px 的键会被撑开。
+ // 加载态交给 .is-busy 的旋转动画 + title，拆解完把 title 换回来即可，图标节点始终不动。
+ button.disabled=true;button.classList.add('is-busy');button.title='正在拆解主题…';
+ themeResults.hidden=false;themeResults.innerHTML='<span class="theme-loading">正在拆解主题…</span>';
+ const data=await brainstorm(theme);
+ button.disabled=false;button.classList.remove('is-busy');button.title='AI 拆解：把搜索栏里的主题拆成多个搜索词';
   if(token!==themeToken){themeResults.hidden=true;return;}
   if(!data.brainstormed){themeResults.innerHTML=`<span class="theme-empty">${esc(data.reason||'未能拆解，请换个说法')}</span>`;return;}
   const terms=[...new Set(data.terms.filter(t=>typeof t==='string').map(t=>t.trim()).filter(Boolean))].slice(0,8);
@@ -938,12 +1451,14 @@ async function setup(){
   themeInput.value=terms.join(', ');refreshTopicStrip();persist();
   themeResults.innerHTML='<span>已填入搜索栏，点击搜索可同时检索；也可点击单个词：</span>'+terms.map(t=>`<button type="button" class="theme-chip" data-term="${esc(t)}">${esc(t)}</button>`).join('');
  };
- themeResults.addEventListener('click',event=>{
-  const chip=event.target.closest('[data-term]');if(!chip)return;
-  $('#asset-query').value=chip.dataset.term;refreshTopicStrip();startSearch({record:true});
- });
+themeResults.addEventListener('click',event=>{
+ const chip=event.target.closest('[data-term]');if(!chip)return;
+ pickTerm(chip.dataset.term);
+});
   // 两个分类容器都要监听：统一树点叶子写 #online-category、点组头写 #online-category-group，改哪个都重搜。
- for(const id of ['online-category','unified-category','online-category-group','online-sort','online-downloadable','online-animated','online-staffpicked'])$('#'+id).onchange=()=>restartSearch();
+  for(const id of ['online-category','unified-category','online-category-group','online-sort','online-downloadable','online-animated','online-staffpicked'])if($('#'+id))$('#'+id).onchange=()=>restartSearch();
+  // Uiverse 的类型与主题：站点只认路径段过滤类型，所以这两个直接重发检索流。
+  for(const id of ['uiverse-type','uiverse-theme'])if($('#'+id))$('#'+id).onchange=()=>{if(state.platform==='uiverse')requestFeed('uiverse',readRequest('uiverse'));};
  $('#unified-sort').onchange=()=>{
   const next=$('#unified-sort').value;
   if(next==='name'){renderGrid();return;}
@@ -952,9 +1467,23 @@ async function setup(){
  $('#unified-kind').onchange=()=>startSearch();
  mergedFilters=createMergedFilters({$,icon,state,onReset:resetMergedFilters,onSearch:()=>startSearch()});   // 全部平台的统一筛选树
 $('#reset-search-filters').onclick=()=>{writeSearch({q:$('#asset-query').value});startSearch();};
-$('#search-platform').onchange=e=>setPlatform(e.target.value);
-$('#empty-explore').onclick=()=>{writeSearch({sort:'popular'});refreshTopicStrip();startSearch();};
- const localSearch=bindLocalSearch({$,state,renderGrid,parse:parseLocal});
+$('#search-platform').onchange=e=>{
+ const id=e.target.value;
+ if(id==='library')return;                        // 文本 / 视频的占位项不是在线平台
+ const preset=modePresetById(state.mode);       // 换站只是模式内的选择，模式本身保持点亮
+ if(preset&&!preset.localOnly){state.modePlatforms[preset.id]=id;rememberModePlatform(storage,preset.id,id);}
+ setPlatform(id);
+};
+$('#empty-explore').onclick=()=>{if(state.route!=='discover')route('discover');writeSearch({sort:'popular'});refreshTopicStrip();startSearch();};
+ localSearch=bindLocalSearch({$,state,renderGrid,parse:parseLocal,inputSelector:'#asset-query',enabled:()=>state.route==='library',onState:detail=>{
+  $('#search-panel').dispatchEvent(new CustomEvent('search-motion-state',{detail}));
+  if(detail.ok&&state.route==='library'&&state.search.trim()&&!filtered().length&&!extraCards().length)assistant.notify({type:'empty'});
+ }});
+ imageSearch=bindImageSearch({$,state,renderGrid,writeSearch,startSearch,inputSelector:'#asset-query',onState:detail=>{
+  $('#search-panel').dispatchEvent(new CustomEvent('search-motion-state',{detail}));
+ }});
+ semanticSearch=createSemanticSearch({$,state,renderGrid,toast:message=>toast(message)});
+ semanticSearch.setup();
 const tagSuggester=createTagSuggester();
  let activeTagUid='';
  const tagging=new Set();
@@ -990,13 +1519,16 @@ const tagSuggester=createTagSuggester();
   if(event.target.closest('#asset-tags-dialog [data-tag]'))$('#asset-tags-dialog').close();
  });
  $('#sort').onchange=e=>{state.sort=e.target.value;renderGrid();};
- $('#local-kind').onchange=()=>{state.selected.clear();const v=$('#local-kind').value;state.libraryMode=v==='models'?'model':v==='images'?'image':'';contentModes?.render();renderGrid();};
+ $('#local-kind').onchange=()=>{state.selected.clear();state.contentKind='';state.mode='';state.modelOnly=false;rememberMode('');const v=$('#local-kind').value;state.libraryMode=v==='models'?'model':v==='images'?'image':'';renderPlatform();renderGrid();};
  $('#local-status').onchange=()=>{state.selected.clear();renderGrid();};
  $('#local-feature').onchange=e=>{state.filter=e.target.value;state.selected.clear();renderGrid();};
- $('#reset-local-filters').onclick=()=>{
-  localSearch.reset();
+$('#reset-local-filters').onclick=()=>{
+ localSearch.reset();
+ semanticSearch?.clear();
+ imageSearch?.clear({silent:true});
+  $('#search-panel').dispatchEvent(new CustomEvent('search-motion-state',{detail:{reset:true,busy:false}}));
   state.search='';state.filter='all';state.localCategory='';state.selected.clear();
-  $('#model-search').value='';$('#local-kind').value='';$('#local-status').value='';$('#local-feature').value='all';state.libraryMode='';contentModes?.render();
+  $('#asset-query').value='';$('#search-clear').hidden=true;$('#search-clear').classList.remove('visible');$('#search-panel').classList.remove('has-search-text');$('#local-kind').value='';$('#local-status').value='';$('#local-feature').value='all';state.libraryMode='';state.contentKind='';state.mode='';state.modelOnly=false;rememberMode('');renderPlatform();
   renderGrid();
  };
  $('#tag-all').onclick=tagAllAssets;
@@ -1037,6 +1569,10 @@ function renderTagManage(){
  $('#tag-manage-count').textContent=tags.length?`共 ${tags.length} 个标签 · ${tags.reduce((sum,t)=>sum+t.count,0)} 次引用`:'';
 }
 function openTagManage(){renderTagManage();const dialog=$('#tag-manage-dialog');if(!dialog.open)dialog.showModal();}
+// 本地库体检：面板里那颗盾牌只喊一声，数据与删除动作在这里接（同一条 deleteLibraryAsset）。
+window.addEventListener('assetvault:local-health',()=>{
+ openLocalHealth({packages:localFiles.packages(),fmtBytes:sizeText,esc,onDelete:deleteLibraryAsset});
+});
 $('#tag-manage').onclick=openTagManage;
 document.addEventListener('click',e=>{
  const op=e.target.closest('[data-tm]');if(!op)return;
@@ -1069,12 +1605,15 @@ $('#tm-clear-ai').onclick=()=>{
  state.aiTags={};persist();renderTagManage();renderGrid();toast('已清除全部 AI 标签');
 };
  let tagBusy=false,tagAbort=false;
- async function aiTagThis(uid){
+  // 打标入参统一在这里拼：meta 是采集时的来源信息（画板 / 类目 / 出处 / 话题），
+  // probe 是封面采样出的颜色与构图。老资产两者都没有，服务端提示词与旧版一致。
+  const tagInputOf=model=>({name:model.name,author:model.author,kind:model.assetType||model.kind,existing:tagsFor(state,model),meta:metaOf(model),probe:state.assetProbe?.[model.uid]});
+  async function aiTagThis(uid){
   const model=findModel(uid);if(!model)return;
   if(tagging.has(uid))return;
   tagging.add(uid);openTags(uid);
   try{
-   const data=await tagSuggester({name:model.name,author:model.author,kind:model.assetType||model.kind,existing:tagsFor(state,model)});
+   const data=await tagSuggester(tagInputOf(model));
    if(!data.tagged||!data.tags.length){toast(data.reason||'未能生成标签');if(activeTagUid===uid)$('#asset-tags-status').textContent=data.reason||'未能生成标签，可重试。';return;}
    const added=addAITags(state,model,data.tags);
    persistNow();patchMetaFor(uid);renderGrid();refreshPreviewTags(uid);
@@ -1088,9 +1627,13 @@ $('#tm-clear-ai').onclick=()=>{
  }
  async function tagAllAssets(){
   if(tagBusy){tagAbort=true;toast('已请求停止整理');return;}
-  const candidates=state.models.filter(m=>tagsFor(state,m).length<2);
-  if(!candidates.length){toast('没有需要整理标签的资产');return;}
-  if(!confirm(`将为 ${candidates.length} 个标签偏少的本地资产补充 AI 标签，可能较慢，继续？`))return;
+  const lowTags=state.models.filter(m=>tagsFor(state,m).length<2);
+  // 名称没有任何文本信号时调 LLM 只会得到瞎猜的标签，白烧调用还要人工清理。
+  // 客观标签（画板 / 来源 / 颜色）已在 tagsFor 里自动补过，这类资产不需要再猜内容。
+  const candidates=lowTags.filter(m=>hasTextSignal(m.name));
+  const skipped=lowTags.length-candidates.length;
+  if(!candidates.length){toast(skipped?`${skipped} 个资产名称无有效信息，已跳过；没有需要整理标签的资产`:'没有需要整理标签的资产');return;}
+  if(!confirm(`将为 ${candidates.length} 个标签偏少的库内资产补充 AI 标签${skipped?`，另自动跳过 ${skipped} 个名称无有效信息的资产`:''}，可能较慢，继续？`))return;
   tagBusy=true;tagAbort=false;let done=0;
   try{
    for(const m of candidates){
@@ -1098,7 +1641,7 @@ $('#tm-clear-ai').onclick=()=>{
     if(tagging.has(m.uid))continue;
     tagging.add(m.uid);
     try{
-     const data=await tagSuggester({name:m.name,author:m.author,kind:m.assetType||m.kind,existing:tagsFor(state,m)});
+     const data=await tagSuggester(tagInputOf(m));
      if(data.tagged&&data.tags.length){addAITags(state,m,data.tags);persistNow();patchMetaFor(m.uid);}
     }catch{}finally{tagging.delete(m.uid);}
     done++;
@@ -1109,12 +1652,39 @@ $('#tm-clear-ai').onclick=()=>{
   if(activeTagUid){renderTagDialog(activeTagUid);refreshPreviewTags(activeTagUid);}
   toast(tagAbort?`已停止，整理 ${done} 个资产`:`完成，共为 ${done} 个资产补充标签`);
  }
- // 三种展示共用一个切换入口；按钮高亮由 renderGrid 从 state 推出，不在点击处理里各改一遍。
- const setDisplay=view=>{state.compact=view==='compact';state.gallery=view==='gallery';contentModes?.render();renderPlatformOptions();renderGrid();};
- $('#grid-view').onclick=()=>setDisplay('grid');$('#list-view').onclick=()=>setDisplay('compact');$('#gallery-view').onclick=()=>setDisplay('gallery');
+ // 展示只有网格 / 瀑布流两种（紧凑列表视图已移除）；按钮高亮由 renderGrid 从 state 推出。
+ const setDisplay=view=>{state.gallery=view==='gallery'&&galleryAvailable(state);contentModes?.render();renderPlatformOptions();renderGrid();};
+ const displayMode=$('#display-mode');
+ if(displayMode)displayMode.onclick=()=>{if(!galleryAvailable(state))return;setDisplay(state.gallery?'grid':'gallery');};
+ const cardSize=$('#card-size');
+ if(cardSize){
+  const saved=Number(localStorage.getItem('assetvault-card-size'));
+  if(saved>=140&&saved<=340)cardSize.value=String(saved);
+  const paintSize=()=>{
+   const size=Math.max(140,Math.min(340,Number(cardSize.value)||190));
+   const style=document.documentElement.style;
+   style.setProperty('--lib-col-min',`${size}px`);
+   style.setProperty('--lib-gap-x',`${Math.round(size*.045)}px`);
+   style.setProperty('--lib-gap-y',`${Math.round(size*.05)}px`);
+  };
+  paintSize();
+  cardSize.addEventListener('input',()=>{
+   paintSize();
+   window.dispatchEvent(new Event('resize'));
+   localStorage.setItem('assetvault-card-size',cardSize.value);
+  });
+ }
  // 「继续检索」推进当前平台的每个源；链接解析结果只有 web 一个源。
 const more=options=>{if(state.source==='link')return requestFeed('web',state.feeds.web.request,options);return activeModes().map(mode=>requestFeed(mode,state.feeds[mode].request,options));};
 $('#load-more').onclick=()=>more({more:true});$('#load-all').onclick=()=>more({more:true,all:true});
+ // 批量入库：一次收完当前筛选结果。走的是和卡片收藏同一条 collect()，只写库记录、不触发下载。
+ $('#collect-visible').onclick=()=>{
+  const collected=new Set(state.models.map(model=>model.uid));
+  const pick=filtered().filter(model=>!collected.has(model.uid));
+  if(!pick.length){toast('当前结果都已在模型库中');return;}
+  if(!confirm(`把当前 ${pick.length} 个结果加入模型库？只保存记录，不下载文件。`))return;
+  collect(pick.map(model=>model.uid));
+ };
  // 每批加载条数：写在 state 上并持久化，翻页批次按它算（见 discovery-feed.js 的 batchPages）。
  const pageSizeSelect=$('#page-size');
  if(pageSizeSelect){
@@ -1136,7 +1706,19 @@ $('#load-more').onclick=()=>more({more:true});$('#load-all').onclick=()=>more({m
   Promise.all([more({more:true})]).catch(()=>{}).finally(()=>{autoLoadBusy=false;});
  },{rootMargin:'320px 0px'});
  autoLoad.observe($('#pagination'));
- $('#select-all').onclick=()=>{filtered().forEach(m=>state.selected.add(m.uid));renderGrid();};$('#deselect').onclick=()=>{state.selected.clear();renderGrid();};$('#collect-selected').onclick=()=>collect([...state.selected]);$('#download-selected').onclick=()=>requestDownload([...state.selected]);$('#download-images-selected').onclick=()=>imageDownload.requestImages([...state.selected]);
+ // ADR-09：按页启动后浏览器可能只持有一部分目录，先等补齐，再向服务端要全量 uid
+ // 集合与本地筛选结果求交 —— 大库下 uid 只有 32 字节，比 model payload 轻两个数量级。
+ $('#select-all').onclick=async()=>{
+  try{await storage?.catalogReady;}catch{}
+  const visible=new Set(filtered().map(m=>m.uid));let serverUids=null;
+  try{
+   const r=await fetch('/api/library/catalog/uids',{headers:{'X-SFX-Local':'1'}});
+   if(r.ok){const data=await r.json();if(Array.isArray(data.uids))serverUids=data.uids;}
+  }catch{}
+  (serverUids?serverUids.filter(uid=>visible.has(uid)):[...visible]).forEach(uid=>state.selected.add(uid));
+  renderGrid();
+ };
+ $('#deselect').onclick=()=>{state.selected.clear();renderGrid();};$('#collect-selected').onclick=()=>collect([...state.selected]);$('#download-selected').onclick=()=>requestDownload([...state.selected]);$('#download-images-selected').onclick=()=>imageDownload.requestImages([...state.selected]);
 
 // 关弹窗要停掉 three.js 的渲染循环并释放 GPU 资源 —— 只清iframe 的 src 的话，Poly Haven
 // 的 canvas 会继续每帧渲染，白烧 CPU/GPU 直到页面刷新。
@@ -1156,43 +1738,100 @@ $('#preview-dialog').addEventListener('close',()=>{
   gltfPreview.close();
 });
  document.querySelectorAll('dialog').forEach(d=>d.addEventListener('click',e=>{if(e.target===d){const r=d.getBoundingClientRect();if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom)d.close();}}));
- $('#settings-button').onclick=$('#download-settings').onclick=openSettings;$('#help').onclick=()=>$('#help-dialog').showModal();
+ $('#settings-button').onclick=$('#download-settings').onclick=openSettings;$('#help').onclick=()=>openHelp();
+ hookDiagnostics();
  const aiSettings=createAISettings({$,toast});
- const appUpdates=createAppUpdates({hasActiveTasks:()=>downloads.activeCount()>0,onState:detail=>window.dispatchEvent(new CustomEvent('assetvault:update-state',{detail}))});
- window.addEventListener('assetvault:check-updates',()=>appUpdates.check());
- window.addEventListener('assetvault:install-update',()=>appUpdates.update());
+ appUpdates=createAppUpdates({hasActiveTasks:()=>downloads.activeCount()>0,onState:detail=>assistant.notify({type:'update',detail})});
  const sharing=createLanSharingSettings({toast});
- settingsPanel=createSettingsPanel({$,loadAI:()=>aiSettings.load(),updateCard:appUpdates.card,sharing,platformCard:createPlatformSettingsCard({settings:platformSettings,toast})});
+ // 成员 / 备份的管理入口只挂在主机：LAN 访客的设置面板整体是隐藏的（见 settings-panel.js），
+ // 那里既读不到本机目录也不该改别人的权限。权限本身由服务端按会话判定，与这里是否显示无关。
+const team=visitor?null:createTeamSettings({toast});
+// 开机自启只在桌面版存在：浏览器里打开资产库拿不到原生桥，卡片直接不出现（返回 null）。
+const autostart=visitor?null:createAutostartCard({toast});
+const appearance=createAppearanceCard({toast});
+// 云同步是主机级配置（凭据 + 整库快照），访客不该看到，也不该能触发同步。
+const cloudSync=visitor?null:createCloudSyncCard({toast});
+settingsPanel=createSettingsPanel({$,loadAI:()=>aiSettings.load(),updateCard:appUpdates.card,sharing,team,migrate:backupPanel?.card,stores:storePanel?.card,desktop:autostart,appearance,sync:cloudSync,platformCard:createPlatformSettingsCard({settings:platformSettings,toast}),autoSave:commitSettings});
+ // 高级检索 / 合集：面板自建 DOM，只把命中集合注入 state.queryUids（见 filtered()）。
+ // 局域网访客不挂本地库专用入口，避免出现点了却被服务端拒绝的死按钮。
+ if(!visitor){
+  const query=createAdvancedQuery({$,state,renderGrid,toast,esc,icon,resetPaging:paging.reset,formatFilter});
+  // 封面探测：颜色 / 宽高比所需的主色与尺寸缓存。同源缩略图用 canvas 采样，
+  // 结果写进 state.assetProbe 走既有差量写入通道；扫描进度只发事件，不反向依赖 UI。
+  const probe=createAssetProbe({state,save:persistNow,
+   onProgress:()=>window.dispatchEvent(new CustomEvent('assetvault:probe-progress'))});
+  // 常驻筛选图标条：与高级检索共用同一份控件与状态，点击图标展开对应维度面板。
+  filterDock=createFilterDock({$,state,esc,toast,controls:query.controls,probe,packages:()=>localFiles.packages()});
+  // 画板中枢：右键/批量加入画板 + 智能收集规则面板 + 待合并队列合并。
+  // 自建 DOM，不改 index.html；纯文件模式下画板路由 503，中枢只提示不崩。
+  boardHub=createBoardHub({$,state,esc,icon,toast,storage,persistNow,renderGrid,controls:query.controls});
+  // 画板卡片区挂在主网格上方：每帧 renderGrid 顺带重画它（路由切换 / 画板集合变化都要跟）。
+  view.setBoardDeck(boardHub.deck);
+  // 外部文件 / 文件夹拖入：弹面板选画板后上传入库。挂在画板中枢之后，直接复用它的 store。
+  setupDropImport({toast,visitor,store:boardHub.store,onImported:()=>scanLibraryFiles(true)});
+ }
  if(!visitor)renderExportTargets({preserve:false});
+ // S3-c：订阅服务端的变更广播。别人改了标签 / 评分 / 收藏，这边的卡片跟着更新，
+ // 不用整页刷新（50 万资产下整页刷新是不可接受的）。
+ // 只拉「变了的那几个 uid」的用户可变部分，不搬整行模型。
+ liveEvents=createLibraryEvents({
+  url:'/api/library/events',
+  onChange:async change=>{
+   // 文件夹实时监控：磁盘上的资产根变了（拖进一个包 / 删掉一个文件），立刻按增量重扫。
+   // 不传 force —— 服务端缓存层已经知道哪些路径变了，全量重扫在几十万资产下会卡住主线程。
+   if(change.local)scanLibraryFiles(false);
+   if(change.all){state.onRemoteRefresh?.();return;}
+   if(!change.uids.length)return;
+   try{
+    const response=await fetch('/api/library/assets/detail',{method:'POST',headers:{'X-SFX-Local':'1','Content-Type':'application/json'},body:JSON.stringify({uids:change.uids})});
+    if(!response.ok)return;
+    const {details=[]}=await response.json();
+    // 覆盖后**不落盘**：落盘会写回服务端，等于把别人的改动再广播一遍，形成回环。
+    const result=applyRemoteDetails(state,details);
+    if(result.changed){renderGrid();counts();}
+   }catch{}
+  },
+ });
+ liveEvents.start();
  // 只有「分享真的挂了（端口冲突）」才自动掀开设置页；仅端口变更提示不打断启动。
  if(!visitor)sharing.check().then(data=>{if(data.portConflict)settingsPanel.open('sharing');}).catch(error=>toast(error.message));
- if(!visitor){window.addEventListener('assetvault:open-updates',()=>appUpdates.open());appUpdates.start();}
+ if(canManageUpdates){window.addEventListener('assetvault:open-updates',()=>appUpdates.open());appUpdates.start();}
  $('#open-setup-wizard').onclick=()=>{$('#settings-dialog').close();setupWizard?.open();};
- $('#reset-folder').onclick=()=>{$('#backend-folder').value=downloads.defaultFolder||downloads.settings?.folder||'';};
+ $('#reset-folder').onclick=()=>{$('#backend-folder').value=downloads.defaultFolder||downloads.settings?.folder||'';settingsPanel?.saveNow();};
  $('#browse-backend-folder').onclick=()=>browseFolderInto('#backend-folder');
- $('#save-settings').onclick=async()=>{const button=$('#save-settings');button.disabled=true;try{await downloads.saveSettings({folder:$('#backend-folder').value.trim(),concurrency:Number($('#backend-concurrency').value),retryLimit:Number($('#backend-retries').value)});state.options={packMode:$('#pack-mode').value,maxTextureEdge:Number($('#texture-size').value),output:'folder',format:'fbx',downloadTextures:true,pngOnly:true,fastZip:true,scanLimit:Number($('#scan-limit').value),optionsVersion:3};
-  // 导出目标路径：逐个回写后端配置（空值表示清除）。
-  for(const t of exportTargetsCache){if(t.kind!=='dir')continue;const inp=$(`[data-export-path="${t.id}"]`);if(!inp)continue;try{await fetch('/api/exports/configure',{method:'POST',headers:{'Content-Type':'application/json','X-SFX-Local':'1'},body:JSON.stringify({targetId:t.id,path:inp.value.trim()})});}catch{}}
-  persist();$('#settings-dialog').close();toast('后台设置已保存；新任务将以文件夹形式保存 GLB + FBX');}catch(e){toast(e.message);}finally{button.disabled=false;}};
+ // 偏好设置自动保存：改完即写，没有保存键。写不进去就先出声（toast），再把错抛给设置面板标「保存失败」。
+ async function commitSettings(){
+  try{
+   await downloads.saveSettings({folder:$('#backend-folder').value.trim(),concurrency:Number($('#backend-concurrency').value),retryLimit:Number($('#backend-retries').value)});
+   state.options={packMode:$('#pack-mode').value,maxTextureEdge:Number($('#texture-size').value),output:'folder',format:'fbx',downloadTextures:true,pngOnly:true,fastZip:true,scanLimit:Number($('#scan-limit').value),optionsVersion:3};
+   // 导出目标路径：逐个回写后端配置（空值表示清除）。
+   for(const t of exportTargetsCache){if(t.kind!=='dir')continue;const inp=$(`[data-export-path="${t.id}"]`);if(!inp)continue;try{await fetch('/api/exports/configure',{method:'POST',headers:{'Content-Type':'application/json','X-SFX-Local':'1'},body:JSON.stringify({targetId:t.id,path:inp.value.trim()})});}catch{}}
+   persist();
+  }catch(error){toast(`设置没写进去：${error.message}`);throw error;}
+ }
  $('#clear-library').onclick=()=>{if(confirm('清空本地模型库与收藏？在线结果、下载记录和已下载文件不会被删除。')){state.models=[];state.favorites.clear();state.selected.clear();persistNow();renderGrid();}};
  window.addEventListener('pagehide',persistNow);
   // 顶部那条状态栏（连接指示灯 + 头像）已撤掉，所以这里不再往元素里写状态：
  // 连上了就安静地做「首次进入自动检索」，连不上才出声（状态行 + 一条提示）。
- let startupTimeout;
- try{
-  await Promise.race([
-   Promise.allSettled([waitForInitialCategories(),artFilters,initialScan,document.fonts.ready]),
-   new Promise(resolve=>{startupTimeout=setTimeout(()=>{toast('部分数据准备较慢，将继续在后台加载');resolve();},15000);}),
-  ]);
- }finally{clearTimeout(startupTimeout);}
+ // Online categories, font loading and disk validation must not gate the local interface.
+ Promise.allSettled([waitForInitialCategories(),artFilters]).then(()=>{
+  filterTrees.refresh();mergedFilters?.refresh();renderPlatform();
+ });
  filterTrees.refresh();mergedFilters?.refresh();renderPlatform();renderGrid();fillIcons();
  $('#search-panel').setAttribute('data-search-ready','');
  await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
  syncStickyOffset();
  document.documentElement.dataset.uiReady='true';
  window.dispatchEvent(new Event('assetvault:ui-ready'));
- fetch('/api/health').then(r=>{if(!r.ok)throw Error();return r.json();}).then(()=>{
-  if(!activeModes().length){$('#asset-query').placeholder='所有平台已关闭，可在设置 → 平台模块中开启';return;}
+ fetch('/api/health').then(r=>{if(!r.ok)throw Error();return r.json();}).then(async()=>{
+  await Promise.allSettled([waitForInitialCategories(),artFilters]);
+  if(!activeModes().length){
+   // 图站没有检索流：刷新页面后仍停在这个平台时，也先铺一屏首页推荐，
+   // 否则恢复出来的是一大片空白（用户 2026-11-03 反馈「选了平台却只有说明文字」）。
+   if(state.route==='discover'&&isPictureSite(state.platform)){if(!state.pictureSite)feed.openPictureHome?.(state.platform);}
+   else if(state.route==='discover')$('#asset-query').placeholder='所有平台已关闭，可在设置 → 平台模块中开启';
+   return;
+  }
   try{const warm=activeModes().some(mode=>state.feeds[mode].rows.length);if(!warm&&activeModes().every(mode=>!state.feeds[mode].request&&!state.feeds[mode].busy&&!state.feeds[mode].rows.length)&&state.route==='discover'&&!$('#asset-query').value.trim())startSearch();}
   catch(error){const feed=state.feeds[activeModes()[0]||'search'];feed.status=`初始化搜索失败：${error.message}`;feed.error=true;renderStatus();toast(feed.status);}
  },()=>{state.feeds[activeModes()[0]||'search'].status='本地服务未连接，请重新启动 AssetVault。';state.feeds[activeModes()[0]||'search'].error=true;renderStatus();toast('本地服务未连接：卡片动作都依赖本地服务');});

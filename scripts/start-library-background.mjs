@@ -1,5 +1,5 @@
 import fs from 'node:fs';
-import os from 'node:os';
+import {resolveUserPaths} from '../server/data-dir.mjs';
 import path from 'node:path';
 import {spawn,execFile,execFileSync} from 'node:child_process';
 import {libraryOwnerPorts,replaceLibraryOwner} from '../server/process-lock.mjs';
@@ -10,17 +10,19 @@ const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 
 // 让开发模式与编译后的安装包共用同一份「数据与下载目录」。
 // 安装包由 Tauri 把 SFX_DATA_DIR / SFX_DOWNLOAD_DIR 指到
-// %APPDATA%\com.assetvault.desktop\{data,downloads}；这里在没显式设置时补上同样的
+// %APPDATA%\AssetVault\{data,downloads}；旧 com.assetvault.desktop 路径兼容；
+// 这里在没显式设置时补上同样的
 // 位置，避免「开发版看得见、安装版看不见」的资产分叉。
 // 注意：两边不能同时运行（tasks.json 由 manager.lock 互斥，同时起会有一方报锁冲突）。
-if(!process.env.SFX_DATA_DIR||!process.env.SFX_DOWNLOAD_DIR){
-  const appData=process.env.APPDATA||path.join(os.homedir(),'AppData','Roaming');
-  const base=path.join(appData,'com.assetvault.desktop');
-  if(!process.env.SFX_DATA_DIR)process.env.SFX_DATA_DIR=path.join(base,'data');
-  if(!process.env.SFX_DOWNLOAD_DIR)process.env.SFX_DOWNLOAD_DIR=path.join(base,'downloads');
-}
+const userPaths=resolveUserPaths();
+process.env.SFX_DATA_DIR=userPaths.dataDir;
+process.env.SFX_DOWNLOAD_DIR=userPaths.downloadDir;
+// 这里一旦把 SFX_DATA_DIR 显式写进环境，子进程会认为「数据目录是人为指定的」，
+// 从而把账号目录算成 <dataDir>/accounts —— 切库就又把账号弄丢了。
+// 所以必须把账号目录一并钉死（它是库外共享的，不随切库变化）。
+process.env.SFX_ACCOUNTS_DIR=userPaths.accountsDir;
 
-const stateDir=path.join(root,'.assetvault');
+const stateDir=userPaths.dataDir;
 const logPath=path.join(stateDir,'library-server.log');
 const pidPath=path.join(stateDir,'library-server.pid');
 let port=Number(process.env.SFX_PORT||4179);
@@ -28,6 +30,22 @@ let base=`http://127.0.0.1:${port}`;
 fs.mkdirSync(stateDir,{recursive:true});
 
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+
+// 启动器是「本机工具」，不是浏览器：站点上锁后 /api/downloads、/api/downloads/capabilities
+// 一律 401，探活拿不到 jobs 就会误报「无法确认旧后台任务状态」而拒绝启动。
+// 这里带上数据目录里的机器令牌（与 server/ai-client.mjs 同一套 x-av-token），
+// 令牌读不到时（首次安装、还没生成）就只带 X-SFX-Local，行为退回上锁前。
+function localHeaders(){
+ const headers={'X-SFX-Local':'1'};
+ // ADR-13：令牌跟着账号住在库外面；数据目录里那份是升级前的退路。
+ for(const file of [path.join(userPaths.accountsDir,'auth-token'),path.join(stateDir,'auth-token')]){
+  try{
+   const token=fs.readFileSync(file,'utf8').trim();
+   if(token){headers['x-av-token']=token;break;}
+  }catch{}
+ }
+ return headers;
+}
 async function capabilities(readSaved=true){
  if(readSaved)try{
   const saved=JSON.parse(fs.readFileSync(path.join(process.env.SFX_DATA_DIR,'server-port.json'),'utf8')).port;
@@ -35,7 +53,7 @@ async function capabilities(readSaved=true){
  }catch{}
  try{
   const controller=new AbortController();const timeout=setTimeout(()=>controller.abort(),1200);
-  const res=await fetch(base+'/api/downloads/capabilities',{headers:{'X-SFX-Local':'1'},cache:'no-store',signal:controller.signal});
+  const res=await fetch(base+'/api/downloads/capabilities',{headers:localHeaders(),cache:'no-store',signal:controller.signal});
   clearTimeout(timeout);
   if(!res.ok)return null;
   return await res.json();
@@ -56,7 +74,8 @@ async function discoverOwner(){
 }
 function psJson(command){
  if(process.platform!=='win32')return null;
- try{return execFileSync('powershell.exe',['-NoProfile','-ExecutionPolicy','Bypass','-Command',command],{encoding:'utf8',stdio:['ignore','pipe','ignore']}).trim();}catch{return null;}
+ // VBS 静默启动的启动器本身没有控制台；不隐藏的话这条 PowerShell 会闪一个命令行窗口。
+ try{return execFileSync('powershell.exe',['-NoProfile','-ExecutionPolicy','Bypass','-Command',command],{encoding:'utf8',stdio:['ignore','pipe','ignore'],windowsHide:true}).trim();}catch{return null;}
 }
 function projectServerPids(){
  if(process.platform!=='win32')return [];
@@ -69,7 +88,7 @@ function killPids(pids){
  const unique=[...new Set(pids.map(Number).filter(pid=>pid&&pid!==process.pid))];
  for(const pid of unique){
   try{
-   if(process.platform==='win32')execFileSync('taskkill',['/PID',String(pid),'/T','/F'],{stdio:'ignore'});
+   if(process.platform==='win32')execFileSync('taskkill',['/PID',String(pid),'/T','/F'],{stdio:'ignore',windowsHide:true});
    else process.kill(pid,'SIGTERM');
    console.log(`已停止旧后台服务 PID ${pid}`);
   }catch{}
@@ -80,9 +99,15 @@ async function stopOldIfNeeded(){
  const cap=await capabilities(!owner);
  if(serverIsCurrent(cap))return true;
  if(owner){
-  const response=await fetch(base+'/api/downloads',{headers:{'X-SFX-Local':'1'},signal:AbortSignal.timeout(3000)});
-  const snapshot=response.ok?await response.json():null;
-  if(!Array.isArray(snapshot?.jobs))throw Error('无法确认旧后台任务状态，请从托盘完全退出安装版后重试。');
+  const response=await fetch(base+'/api/downloads',{headers:localHeaders(),signal:AbortSignal.timeout(3000)});
+  const snapshot=response.ok?await response.json().catch(()=>null):null;
+  if(!Array.isArray(snapshot?.jobs)){
+   // 401/403 是被站点登录闸门挡住的形态：令牌没读到、或者旧服务还不认识令牌。
+   // 这时别把锅甩给「安装版托盘」，直接告诉人该按哪个键。
+   if(response.status===401||response.status===403)
+    throw Error(`旧后台服务拒绝了启动器的自检（HTTP ${response.status}）。请先双击 Stop-Library.cmd 停掉旧后台，再重新启动。`);
+   throw Error('无法确认旧后台任务状态，请从托盘完全退出安装版后重试。');
+  }
   const active=new Set(['running','transferring','validating','saving','cancelling','queued','retry_wait']);
   if(snapshot.jobs.some(job=>active.has(job.state)))throw Error('旧后台有下载任务，请等待任务完成或暂停队列后，再启动开发模式。');
   if(!replaceLibraryOwner(owner))throw Error('旧后台仍占用数据目录，请从托盘完全退出安装版后重试。');

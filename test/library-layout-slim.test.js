@@ -27,8 +27,9 @@ test('the search bar and result heading stay pinned; only the card area scrolls'
  // 钉到尽头就跟着滚走了。
  assert.equal(html.includes('id="discovery-panel"'),false,'去掉只包住面板的那层 section');
  assert.equal(/id="search-panel"/.test(html),true,'搜索面板本身要保留');
- // 面板自己 overflow:hidden（裁渐变装饰）且 ::before 已被占用，钉子与遮罩只能在外层
- assert.match(html,/class="search-sticky">\s*<section class="search-panel"/,'搜索面板要包进 .search-sticky');
+ // 面板自己 overflow:hidden（裁渐变装饰）且 ::before 已被占用，钉子与遮罩只能在外层。
+ // 模式图标轨也挂在同一层、排在面板之前，所以中间允许恰好一个 nav，别的一律不许夹。
+ assert.match(html,/class="search-sticky">(?:\s*<nav[^>]*><\/nav>)?\s*<section class="search-panel"/,'搜索面板要包进 .search-sticky');
  assert.ok(/\.search-sticky::before\{[^}]*position:absolute/.test(css),
   '面板上方那条缝要盖住，否则滚动中的卡片从缝里透过去');
  assert.ok(css.includes('.search-sticky:has(#search-panel[hidden]){display:none}'),'非发现页整块收起');
@@ -70,6 +71,20 @@ test('the pinned search block is opaque and its mask spans the full main width',
  const stickyEnd=html.indexOf('migration-note');
  assert.ok(scanAt>stickyStart&&scanAt<stickyEnd,'扫描状态行要放进 .search-sticky 里，跟搜索栏一起钉住');
  assert.ok(view.includes('new ResizeObserver'),'搜索区高度还会被筛选行搬移 / 状态行文案改动，用 RO 兜住偏移量');
+});
+
+// 2026-11-10 命令条的作用域：它只服务资产库本地资产，发现页一律收起。
+// 过去 `#local-toolbar.hidden=online` 写在 renderGrid() 中段，而图站视图在函数开头就 return 了 ——
+// 那一屏会带着上一屏的可见状态留在发现页。修法：外壳归属挪到任何早退之前，HTML 默认也收起。
+test('本地命令条只在资产库出现，发现页（含图站视图）一律收起',()=>{
+ assert.match(html,/id="local-toolbar"[^>]*\shidden(\s|>)/,'HTML 默认收起，首帧 / 任何早退路径都不会漏出命令条');
+ const head=view.slice(view.indexOf('function renderGrid(){'),view.indexOf('if(state.pictureSite'));
+ assert.ok(head.includes("$('#local-toolbar').hidden=online"),
+  '命令条的可见性必须在图站早退分支之前就定下来');
+ assert.ok(head.includes("heading.hidden=!online"),
+  '标题行（含视图切换键）同样先定归属，图站视图不该继承资产库的隐藏状态');
+ const after=view.slice(view.indexOf('if(state.pictureSite'));
+ assert.equal(after.includes("$('#local-toolbar').hidden=online"),false,'旧的中段赋值要删掉，避免两处各写一遍');
 });
 
 test('the download center is slimmed down and the task list owns the page',()=>{

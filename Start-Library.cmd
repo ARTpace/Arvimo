@@ -22,7 +22,7 @@ if /i "%~1"=="--foreground" goto foreground
 
 rem Hand off to the silent launcher (Start-Library-Silent.vbs) so that no
 rem console window stays open. The library keeps running in the background;
-rem see .assetvault\library-server.log for its output.
+rem see the user data folder (AssetVault\data\library-server.log) for output.
 if not exist "scripts\start-library-background.mjs" (
   echo Missing scripts\start-library-background.mjs.
   pause

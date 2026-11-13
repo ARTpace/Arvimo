@@ -19,7 +19,7 @@ const attr=value=>String(value).replace(/&/g,'&amp;').replace(/"/g,'&quot;').rep
 const loginPage=(error='',username='')=>`<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>AssetVault · 局域网访问</title><style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#101820;color:#dce5ee;font:15px system-ui}main{width:min(340px,80vw);padding:32px;border:1px solid #30414f;border-radius:18px;background:#17222c}h1{font-size:25px;margin:0 0 8px}p{color:#9badbc;line-height:1.7}input,button{box-sizing:border-box;width:100%;padding:13px;border-radius:9px;border:1px solid #394e5f;font:inherit}input{background:#101820;color:#eee;margin:8px 0 14px}button{background:#c9f581;color:#192613;cursor:pointer}.error{color:#edaa89}</style><main><h1>AssetVault</h1><p>填写你的名字和主机设置的共享密码，访问同一资产库。</p>${error?`<p class="error">${error}</p>`:''}<form method="post" action="/api/lan/login"><label for="username">你的名字</label><input id="username" name="username" type="text" autocomplete="nickname" required autofocus maxlength="24" value="${attr(username)}"><label for="password">访问密码</label><input id="password" name="password" type="password" autocomplete="current-password" required maxlength="128"><button type="submit">进入资产库</button></form></main></html>`;
 
 export function createLanSharing({file,interfaces=()=>os.networkInterfaces(),now=Date.now}){ let config={enabled:false,salt:'',hash:''},configError='';
- let listener=null;
+ let listener=null,memberDirectory=null;
  try{
   const saved=JSON.parse(fs.readFileSync(file,'utf8'));
   if(typeof saved.enabled!=='boolean'||!/^([a-f0-9]{32}|)$/.test(saved.salt)||!/^([a-f0-9]{64}|)$/.test(saved.hash)||saved.enabled&&(!saved.hash||!saved.salt))throw Error('配置无效');
@@ -103,9 +103,26 @@ export function createLanSharing({file,interfaces=()=>os.networkInterfaces(),now
   // Opening a LAN link from localhost is a cross-site navigation, not an API request.
   const entryNavigation=req.method==='GET'&&['/','/splash.html'].includes(pathname)&&req.headers['sec-fetch-mode']==='navigate'&&req.headers['sec-fetch-dest']==='document';
   if(origin&&origin!==`http://${host}`||req.headers['sec-fetch-site']==='cross-site'&&!entryNavigation)return reply(res,403,{error:'禁止跨站请求'});
-  if(pathname==='/api/lan/settings'||pathname==='/api/lan/clients'){
+  if(pathname==='/api/lan/settings'||pathname==='/api/lan/clients'||pathname==='/api/lan/sessions'){
    if(!local)return reply(res,403,{error:'共享设置只能在主机本地修改'});
    if(req.headers['x-sfx-local']!=='1')return reply(res,403,{error:'缺少本地请求标识'});
+   // 只暴露独立审批 ID，绝不把会话 cookie/token 交给列表调用方。
+   // 绑定以当前会话为单位；退出、重登、改密码或重启均须重新批准。
+   if(pathname==='/api/lan/sessions'){
+    const active=()=>[...sessions.values()].filter(item=>item.expires>now()).map(({id,username,memberId,expires})=>({id,username,member_id:memberId||'',expires}));
+    if(req.method==='GET')return reply(res,200,{sessions:active(),migration:'共享密码仅获得只读权限；请由主机核对当前会话后绑定成员，重登后须重新批准。'});
+    if(req.method!=='POST')return reply(res,405,{error:'请求方法不支持'});
+    const input=JSON.parse(await readBody(req));
+    const session=[...sessions.values()].find(item=>item.id===input.id&&item.expires>now());
+    if(!session)return reply(res,404,{error:'会话不存在或已过期'});
+    const memberId=String(input.member_id||'');
+    if(memberId){
+     const member=(await memberDirectory?.list({fresh:true}))?.get(memberId);
+     if(!member||member.disabled)return reply(res,400,{error:'成员不存在或已禁用'});
+    }
+    session.memberId=memberId;
+    return reply(res,200,{sessions:active()});
+   }
    if(pathname==='/api/lan/clients'){
     if(req.method==='GET')return reply(res,200,clientStatus());
     if(req.method!=='POST')return reply(res,405,{error:'请求方法不支持'});
@@ -143,7 +160,7 @@ export function createLanSharing({file,interfaces=()=>os.networkInterfaces(),now
    }
    for(const [key,value] of sessions)if(value.expires<=time)sessions.delete(key);
    if(sessions.size>=256)sessions.delete(sessions.keys().next().value);
-   const token=randomBytes(32).toString('hex');sessions.set(token,{expires:time+SESSION_MS,ip,username});
+   const token=randomBytes(32).toString('hex');sessions.set(token,{id:randomBytes(16).toString('hex'),expires:time+SESSION_MS,ip,username,memberId:''});
    res.writeHead(303,{'Location':'/','Set-Cookie':`assetvault_lan=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${SESSION_MS/1000}`});res.end();return true;
   }
   const token=(req.headers.cookie||'').split(';').map(value=>value.trim()).find(value=>value.startsWith('assetvault_lan='))?.slice(15);
@@ -153,6 +170,9 @@ export function createLanSharing({file,interfaces=()=>os.networkInterfaces(),now
    return req.method==='GET'&&(pathname==='/'||pathname==='/splash.html')?html(res):reply(res,401,{error:'请刷新页面并输入共享密码'});
   }
   req.lanVisitor=true;
+  // 名字仅用于展示，权限只来自主机批准的会话绑定，永不从客户端 header 导入。
+  req.lanUser=session.username;
+  req.lanMemberId=session.memberId||'';
   // A shared session can use AI without reading the host's saved API secret.
   if(pathname==='/api/ai/key')return reply(res,403,{error:'仅主机本地可以查看 API 密钥'});
   const hostSettings=['/api/ai/settings','/api/ai/test','/api/downloads/settings','/api/downloads/pick-folder','/api/downloads/browse-folders','/api/downloads/reveal'];
@@ -162,5 +182,5 @@ export function createLanSharing({file,interfaces=()=>os.networkInterfaces(),now
   }
   return false;
  }
- return {handle,status,startupPort,networkAddresses:addresses,attachListener(value){listener=value;}};
+ return {handle,status,startupPort,networkAddresses:addresses,attachListener(value){listener=value;},attachMembers(value){memberDirectory=value;}};
 }

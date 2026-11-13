@@ -23,11 +23,11 @@ export const UNIFIED_CATEGORIES=[
 ];
 
 export const UNIFIED_GROUPS=[
- {id:'nature',icon:'🌿',label:'自然',color:'#8fe0a8',values:['terrain','rock','plants','sky','animals']},
- {id:'scene',icon:'🏛️',label:'场景',color:'#8fbbf0',values:['architecture','furniture','city','walls']},
- {id:'character',icon:'🧍',label:'角色',color:'#f0ab8a',values:['people','creatures']},
- {id:'build',icon:'⚙️',label:'造物',color:'#c3a4f0',values:['weapons','vehicles','tools','wood-metal']},
- {id:'culture',icon:'🎨',label:'人文',color:'#eed892',values:['history-scifi']},
+ {id:'nature',icon:'globe',label:'自然',color:'#8fe0a8',values:['terrain','rock','plants','sky','animals']},
+ {id:'scene',icon:'grid',label:'场景',color:'#8fbbf0',values:['architecture','furniture','city','walls']},
+ {id:'character',icon:'user',label:'角色',color:'#f0ab8a',values:['people','creatures']},
+ {id:'build',icon:'settings',label:'造物',color:'#c3a4f0',values:['weapons','vehicles','tools','wood-metal']},
+ {id:'culture',icon:'image',label:'人文',color:'#eed892',values:['history-scifi']},
 ];
 
 const SITE_NAME={sketchfab:'Sketchfab',art:'ArtStation',polyhaven:'Poly Haven',ambientcg:'ambientCG',freestylized:'FreeStylized',polypizza:'Poly Pizza',kenney:'Kenney'};
@@ -161,7 +161,7 @@ export const UNIFIED_SORTS=[
 ];
 /** 全部平台的范围按资产类型收，不复用 Sketchfab 的「可下载 / 有动画 / 精选」。空选 = 不限类型。 */
 export const ASSET_KINDS=[
- {id:'models',label:'模型',feeds:['search','art','polypizza','ambientcg'],ambientcg:'3d-model,terrain',polyhaven:'models',freestylized:'models'},
+ {id:'models',label:'模型',feeds:['search','art','polypizza','ambientcg','simready'],ambientcg:'3d-model,terrain',polyhaven:'models',freestylized:'models'},
  {id:'textures',label:'材质',feeds:['ambientcg'],ambientcg:'material,substance',polyhaven:'textures',freestylized:'textures'},
  {id:'hdris',label:'HDRI',feeds:['ambientcg'],ambientcg:'hdri,hdri-element',polyhaven:'hdris',freestylized:'skybox'},
  {id:'packs',label:'资源包',feeds:['kenney'],polyhaven:'',freestylized:'packs'},

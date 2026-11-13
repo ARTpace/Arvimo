@@ -12,6 +12,7 @@
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import {createHash} from 'node:crypto';
+import {formatOf} from '../src/library/format-registry.js';
 
 export const META_SCHEMA = 1;
 export const META_FILE = 'info.json';
@@ -19,7 +20,11 @@ export const META_FILE = 'info.json';
 const HEAD_BYTES = 1024 * 1024;
 /** 与平台 uid（32 位 hex）区分开：资产库按 uid 去重，撞号会把本地包当成下载任务卡藏起来。 */
 const UID_PREFIX = 'local-';
-const IMAGE_EXT = /\.(png|jpe?g|jfif|gif|webp|avif|bmp|svg|tga|tiff?|psd|exr|hdr)$/i;
+/** 包内图片数量按注册表算：图像组 + 环境贴图（EXR/HDR）。RAW 与 ICO 现在也算图片。 */
+const isImageEntry = name => {
+  const entry = formatOf(name);
+  return !!entry && (entry.group === 'image' || entry.kind === 'env');
+};
 
 /** 读目录里的 info.json。没有、读不动、JSON 坏了都返回 null（调用方按「没登记」处理）。 */
 export async function readMeta(dir) {
@@ -61,7 +66,7 @@ export async function deriveUid(dir, pack = {}) {
 }
 
 function imageCount(pack) {
-  return (pack.entries || []).filter(item => IMAGE_EXT.test(item.name || '')).length;
+  return (pack.entries || []).filter(item => isImageEntry(item.name || '')).length;
 }
 
 /** 组装 schema v1。字段名对齐 local-assets 的 describe() 读法：title / kind / resolution / format。 */

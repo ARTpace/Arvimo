@@ -1,14 +1,13 @@
-// 扫描结果缓存：同一组根目录的重复扫描直接读缓存，不再每请求全量重建目录树。
-//
-// 失效策略（三层，均可通过环境变量调整或关闭）：
-//   1. 签名探针：根目录自身的 mtimeMs+size + 顶层条目名清单。顶层增删/改名资产立即失效，
-//      成本只有每根一次 stat + 一次 readdir（NTFS 上目录 mtime 只随直接子项增删变化）；
-//   2. TTL 兜底：嵌套变化（往既有包里加文件）签名探不到，在 TTL 内可能短暂陈旧，
-//      默认 15s，SFX_SCAN_CACHE_TTL_MS 可调，设 0 等价关闭缓存；
-//   3. 显式失效：登记/元信息补写等会改包内容的写操作完成后调用 invalidateScanCache()。
+// Recursive watchers identify changed packages. A full scan every five minutes
+// bounds missed events; unsupported watchers retain the 15-second TTL fallback.
+// Explicit invalidation/manual scan always rebuilds; TTL=0 disables reuse.
 import fsp from 'node:fs/promises';
+import {watch} from 'node:fs';
+import path from 'node:path';
 
-const TTL_MS = Math.max(0, Number(process.env.SFX_SCAN_CACHE_TTL_MS) || 15000);
+const configured=Number(process.env.SFX_SCAN_CACHE_TTL_MS);
+const TTL_MS=Number.isFinite(configured)?Math.max(0,configured):15000;
+const FULL_SCAN_MS=5*60*1000;
 const MAX_ENTRIES = 4; // 只留最近几组根目录的缓存，避免超大资产库把内存吃爆。
 
 const cache = new Map(); // key -> { signature, value, at }
@@ -30,27 +29,96 @@ async function rootsSignature(roots) {
 }
 
 /** 写操作（登记 / 补写元信息 / 删除资产）之后调用：清空全部扫描缓存。 */
-export function invalidateScanCache() {
-  cache.clear();
+function discard(key,entry){for(const watcher of entry.watchers)watcher.close();cache.delete(key);}
+export function invalidateScanCache(){for(const [key,entry] of cache)discard(key,entry);}
+
+/**
+ * 与资产无关的写入不该触发重扫。命中这些模式就当成「噪音」，连 generation 都不动。
+ *
+ * 之所以必须过滤：典型用户会把资产库放在同步盘里（微力同步 / OneDrive / Dropbox），
+ * 同步器每写一个文件就产生 .sync-conflict-* / .tmp / .crdownload 一串事件；不过滤的话
+ * 索引会被反复作废，前端收到的「有新文件」通知也全是假的。
+ */
+const NOISE = /(^|[\\/])\.(?!well-known$)|\.sync-conflict-|\.tmp$|\.temp$|\.part$|\.partial$|\.crdownload$|\.download$|\.swp$|\.lock$|\.db-wal$|\.db-shm$|^~\$/i;
+export function isNoisePath(name){
+ if(!name)return false;
+ const value=String(name);
+ return NOISE.test(value)||/(^|[\\/])(node_modules|__pycache__|\.git)([\\/]|$)/i.test(value);
+}
+
+/**
+ * 磁盘变化通知：缓存层只负责说「哪个根变了」，广播与 UI 刷新由上层决定。
+ * 返回退订函数，测试与热重载可以干净摘掉。
+ */
+const changeListeners=new Set();
+/** 合并窗口：一次复制 200 个文件会来几百条事件，攒成一次通知。 */
+export const CHANGE_DEBOUNCE_MS=800;
+let notifyTimer=null;
+const pendingRoots=new Set();
+function scheduleChange(root){
+ pendingRoots.add(root);
+ if(notifyTimer)return;
+ notifyTimer=setTimeout(()=>{
+  notifyTimer=null;
+  const roots=[...pendingRoots];pendingRoots.clear();
+  for(const listener of changeListeners){try{listener({roots});}catch{}}
+ },CHANGE_DEBOUNCE_MS);
+ notifyTimer.unref?.();
+}
+export function onScanChange(listener){
+ if(typeof listener!=='function')return()=>{};
+ changeListeners.add(listener);
+ return()=>{changeListeners.delete(listener);};
+}
+
+function createEntry(roots){
+ const entry={watchers:[],watching:true,dirty:new Set(),generation:0,packages:new Map(),at:0,fullAt:0,value:null,pending:null};
+ for(const root of roots){
+  try{
+   const watcher=watch(root,{recursive:true,persistent:false},(_event,name)=>{
+    if(isNoisePath(name))return; // 临时文件 / 同步冲突件：不参与索引，也不惊动前端
+    entry.generation++;
+    scheduleChange(root);
+    if(name&&entry.dirty.size<10000)entry.dirty.add(path.resolve(root,String(name)));else entry.watching=false;
+   });
+   watcher.on('error',()=>{entry.watching=false;entry.generation++;});
+   entry.watchers.push(watcher);
+  }catch{entry.watching=false;}
+ }
+ return entry;
 }
 
 /**
  * 带失效的缓存读取。key 需已含 roots 的完整区分度（调用方用 JSON 串）；
- * 命中且 TTL 内 → 复核签名，一致才返回缓存；否则 compute() 重算并回填（回填签名取扫描后的，
- * 覆盖扫描期间发生的顶层变化）。
+ * 合并在途请求；监听有效时按变化路径复用包索引，否则按 TTL 全扫。
+ * 扫描期间收到变化事件时不发布缓存，下次请求重新校验。
  */
-export async function cachedScan(key, { roots, compute }) {
-  if (!TTL_MS) return compute();
-  const hit = cache.get(key);
-  if (hit && Date.now() - hit.at < TTL_MS) {
-    const signature = await rootsSignature(roots);
-    if (signature === hit.signature) return hit.value;
+export async function cachedScan(key,{roots,compute,force=false}){
+ if(!TTL_MS)return compute({});
+ let entry=cache.get(key);
+ if(!entry){
+  if(cache.size>=MAX_ENTRIES){const oldest=cache.entries().next().value;discard(...oldest);}
+  entry=createEntry(roots);cache.set(key,entry);
+ }
+ if(entry.pending){
+  if(!force)return entry.pending;
+  try{await entry.pending;}catch{}
+  return cachedScan(key,{roots,compute,force});
+ }
+ const task=(async()=>{
+  const generation=entry.generation,signature=await rootsSignature(roots);
+  const full=force||!entry.value||!entry.watching||Date.now()-entry.fullAt>=FULL_SCAN_MS||(signature!==entry.signature&&!entry.dirty.size);
+  if(!force&&entry.value&&!entry.dirty.size&&generation===entry.generation&&signature===entry.signature&&
+    (entry.watching?Date.now()-entry.fullAt<FULL_SCAN_MS:Date.now()-entry.at<TTL_MS))return entry.value;
+  const packages=new Map(entry.packages);
+  const value=await compute({packageCache:packages,changedPaths:full?null:[...entry.dirty]});
+  if(cache.get(key)===entry&&generation===entry.generation){
+   entry.value=value;entry.packages=packages;entry.signature=signature;entry.at=Date.now();
+   if(full)entry.fullAt=entry.at;
+   entry.dirty.clear();
   }
-  const value = await compute();
-  if (cache.size >= MAX_ENTRIES) {
-    const oldest = [...cache.entries()].sort((a, b) => a[1].at - b[1].at)[0];
-    if (oldest) cache.delete(oldest[0]);
-  }
-  cache.set(key, { signature: await rootsSignature(roots), value, at: Date.now() });
   return value;
+ })();
+ entry.pending=task;
+ try{return await task;}finally{if(entry.pending===task)entry.pending=null;}
 }

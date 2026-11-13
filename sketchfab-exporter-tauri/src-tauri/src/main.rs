@@ -5,6 +5,7 @@ mod licensing;
 mod updates;
 mod data_path;
 mod process_group;
+mod dragout;
 
 use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
@@ -68,6 +69,8 @@ struct Backend {
     entry: PathBuf,
     static_root: PathBuf,
     data_dir: PathBuf,
+    /// 账号与机器令牌（多个资源库共用一套，所以放在 data_dir 外面）
+    accounts_dir: PathBuf,
     download_dir: PathBuf,
     browser_exe: PathBuf,
     browser_root: PathBuf,
@@ -170,6 +173,94 @@ struct LicenseStatus {
     gate: bool,
 }
 
+// ── 开机自启 ────────────────────────────────────────────────────────────────
+//
+// 直接写 HKCU\...\Run，而不是引入 tauri-plugin-autostart：那条路要多一个 cargo 依赖、
+// 一份 capability 配置和一次插件初始化；而 Windows 上的「开机自启」本质就是一个注册表
+// 字符串值，用已有的 winreg 写一行就够，少一个安装失败点。
+//
+// 值里带 --autostart：开机拉起时只把服务留在托盘，不弹主窗口（见 setup 末尾）。
+// 用户主动双击不会带这个参数，行为和以前完全一致。
+const AUTOSTART_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
+const AUTOSTART_VALUE: &str = "AssetVault";
+const AUTOSTART_FLAG: &str = "--autostart";
+
+#[derive(serde::Serialize)]
+struct AutostartStatus {
+    /// 当前平台能不能设。非 Windows 一律 false，界面据此隐藏开关。
+    supported: bool,
+    enabled: bool,
+    /// 注册表里记的启动命令：程序被搬走时，界面能据此提示「它指向的还是旧位置」。
+    command: Option<String>,
+}
+
+#[cfg(windows)]
+fn autostart_command() -> Result<String, String> {
+    let exe = std::env::current_exe().map_err(|error| format!("拿不到程序路径：{error}"))?;
+    // 引号必须有：Program Files 下的路径带空格，不加会被拆成「程序」+「参数」两截。
+    Ok(format!("\"{}\" {}", exe.display(), AUTOSTART_FLAG))
+}
+
+#[cfg(windows)]
+fn read_autostart() -> AutostartStatus {
+    use winreg::enums::{HKEY_CURRENT_USER, KEY_READ};
+    use winreg::RegKey;
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    let key = match hkcu.open_subkey_with_flags(AUTOSTART_KEY, KEY_READ) {
+        Ok(key) => key,
+        Err(_) => return AutostartStatus { supported: true, enabled: false, command: None },
+    };
+    match key.get_value::<String, _>(AUTOSTART_VALUE) {
+        Ok(command) if !command.trim().is_empty() => {
+            AutostartStatus { supported: true, enabled: true, command: Some(command) }
+        }
+        _ => AutostartStatus { supported: true, enabled: false, command: None },
+    }
+}
+
+#[tauri::command]
+fn autostart_status() -> AutostartStatus {
+    #[cfg(windows)]
+    {
+        read_autostart()
+    }
+    #[cfg(not(windows))]
+    {
+        AutostartStatus { supported: false, enabled: false, command: None }
+    }
+}
+
+#[tauri::command]
+fn autostart_set(enabled: bool) -> Result<AutostartStatus, String> {
+    #[cfg(windows)]
+    {
+        use winreg::enums::HKEY_CURRENT_USER;
+        use winreg::RegKey;
+        let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+        let (key, _) = hkcu
+            .create_subkey(AUTOSTART_KEY)
+            .map_err(|error| format!("打开启动项注册表失败：{error}"))?;
+        if enabled {
+            let command = autostart_command()?;
+            key.set_value(AUTOSTART_VALUE, &command)
+                .map_err(|error| format!("写入启动项失败：{error}"))?;
+        } else {
+            // 本来就没有这一项时 delete_value 会给 NotFound，那不是错误。
+            match key.delete_value(AUTOSTART_VALUE) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(format!("移除启动项失败：{error}")),
+            }
+        }
+        Ok(read_autostart())
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = enabled;
+        Err("当前平台不支持开机自启".to_string())
+    }
+}
+
 /// 界面启动时主动来问（不用事件推送：setup 阶段窗口可能还没加载完，推了会丢）。
 #[tauri::command]
 fn license_info(app: AppHandle) -> LicenseStatus {
@@ -226,6 +317,7 @@ fn start_backend(app: &AppHandle) -> Result<(), String> {
     cmd.arg(&backend.entry)
         .env("SFX_STATIC_ROOT", &backend.static_root)
         .env("SFX_DATA_DIR", &backend.data_dir)
+        .env("SFX_ACCOUNTS_DIR", &backend.accounts_dir)
         .env("SFX_REPLACE_LIBRARY_OWNER", "1")
         .env("SFX_DOWNLOAD_DIR", &backend.download_dir)
         .env("SFX_BROWSER", &backend.browser_exe)
@@ -324,6 +416,10 @@ fn main() {
             let download_dir = app_data.join("downloads");
             let _ = std::fs::create_dir_all(&data_dir);
             let _ = std::fs::create_dir_all(&download_dir);
+            // 账号不能跟着 data_dir 走：一旦显式传了 SFX_DATA_DIR，服务端会把账号目录
+            // 算成 <dataDir>/accounts，切资源库就等于换了个人。这里把它钉在 app_data 下。
+            let accounts_dir = app_data.join("accounts");
+            let _ = std::fs::create_dir_all(&accounts_dir);
 
             // 独立 Chromium headless shell 不再随安装包分发（解压后 236MB，占安装包九成体积），
             // 改成安装后在设置里点一下按需下载到应用数据目录。SFX_BROWSER 指向的因此是
@@ -343,6 +439,7 @@ fn main() {
                     .join("chrome-headless-shell.exe"),
                 browser_root,
                 data_dir,
+                accounts_dir,
                 download_dir,
                 license_path: app_data.join(licensing::LICENSE_FILE),
             });
@@ -404,6 +501,14 @@ fn main() {
                 Err(error) => eprintln!("创建系统托盘失败，关闭窗口会改为最小化：{error}"),
             }
 
+            // 开机自启拉起（带 --autostart）时只留在托盘：用户开机是为了让下载/服务在后台跑，
+            // 不是要看一脸启动画面。托盘建不起来就不隐藏 —— 否则窗口藏了没法找回。
+            if std::env::args().any(|arg| arg == AUTOSTART_FLAG) && TRAY_READY.load(Ordering::Relaxed) {
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.hide();
+                }
+            }
+
             Ok(())
         })
         // 原生处理关闭，启动页或前端异常时也能保持后台任务运行。
@@ -424,10 +529,13 @@ fn main() {
             backend_ready_url,
             open_ready_library,
             license_info,
+            autostart_status,
+            autostart_set,
             activate_with,
             updates::check_app_update,
             updates::download_app_update,
-            updates::install_app_update
+            updates::install_app_update,
+            dragout::start_file_drag
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

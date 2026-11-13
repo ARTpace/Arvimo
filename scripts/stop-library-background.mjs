@@ -2,13 +2,15 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {execFileSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
+import {resolveUserPaths} from '../server/data-dir.mjs';
 
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
-const pidPath=path.join(root,'.assetvault','library-server.pid');
+const currentPid=path.join(resolveUserPaths().dataDir,'library-server.pid');
+const pidPath=fs.existsSync(currentPid)?currentPid:path.join(root,'.assetvault','library-server.pid');
 const port=Number(process.env.SFX_PORT||4178);
 function psJson(command){
  if(process.platform!=='win32')return null;
- try{return execFileSync('powershell.exe',['-NoProfile','-ExecutionPolicy','Bypass','-Command',command],{encoding:'utf8',stdio:['ignore','pipe','ignore']}).trim();}catch{return null;}
+ try{return execFileSync('powershell.exe',['-NoProfile','-ExecutionPolicy','Bypass','-Command',command],{encoding:'utf8',stdio:['ignore','pipe','ignore'],windowsHide:true}).trim();}catch{return null;}
 }
 function pidsOnPort(){
  const raw=psJson(`Get-NetTCPConnection -LocalPort ${port} -State Listen -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess | ConvertTo-Json -Compress`);
@@ -31,7 +33,7 @@ if(!unique.length){
 }
 for(const pid of unique){
  try{
-  if(process.platform==='win32')execFileSync('taskkill',['/PID',String(pid),'/T','/F'],{stdio:'inherit'});
+  if(process.platform==='win32')execFileSync('taskkill',['/PID',String(pid),'/T','/F'],{stdio:'inherit',windowsHide:true});
   else process.kill(pid,'SIGTERM');
  }catch(e){console.log(`PID ${pid} 停止失败或已退出：${e.message}`);}
 }

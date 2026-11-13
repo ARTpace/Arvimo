@@ -5,6 +5,7 @@
 // 只有编码本身也不被浏览器接受（hevc / prores / wmv3 / mpeg2…）才真正重编码。
 // 判断依据是 ffprobe，不是扩展名——.mov 里装 h264 的比装 prores 的多得多，
 // 按扩展名一刀切会让本来能秒开的东西去跑一遍 libx264。
+import {FORMATS} from '../src/library/format-registry.js';
 import {spawn,spawnSync} from 'node:child_process';
 import {existsSync} from 'node:fs';
 import path from 'node:path';
@@ -143,5 +144,7 @@ export function streamMp4({res,file,ffmpeg,plan}){
  });
 }
 
-/** 浏览器自己就能播的容器。编码不一定认（mp4 里装 hevc 很常见），所以前端失败时还会回退一次。 */
-export const BROWSER_VIDEO_EXT=/\.(mp4|webm|m4v|ogv)$/i;
+/** 浏览器自己就能播的容器：从格式注册表 preview:'video-native' 派生，不再手写第二份清单。
+ *  编码不一定认（mp4 里装 hevc 很常见），所以前端失败时还会回退一次。 */
+const NATIVE_VIDEO_EXTS=Object.values(FORMATS).filter(item=>item.preview==='video-native').map(item=>item.ext);
+export const BROWSER_VIDEO_EXT=new RegExp(`\\.(${NATIVE_VIDEO_EXTS.join('|')})$`,'i');

@@ -56,7 +56,6 @@ export function createLanSharingSettings({toast}){
   <form class="lan-form" data-lan-form>
    <label>分享端口 <input type="number" data-lan-port min="1" max="65535" step="1" required aria-label="局域网分享固定端口" style="width:100px"></label>
    <input type="password" data-lan-password autocomplete="new-password" minlength="8" maxlength="128" aria-label="访问密码" placeholder="访问密码">
-   <button class="secondary" type="submit" data-lan-save>保存</button>
    <button type="button" class="lan-hint" data-tip="${HINTS.password}" aria-label="密码规则说明">?</button>
   </form>
   <div class="lan-sharing-addresses" data-lan-addresses></div>
@@ -71,7 +70,7 @@ export function createLanSharingSettings({toast}){
   </div>
   <div data-lan-clients></div>`;
  bindTips(card);
- const enabled=card.querySelector('[data-lan-enabled]'),password=card.querySelector('[data-lan-password]'),save=card.querySelector('[data-lan-save]'),status=card.querySelector('[data-lan-status]'),addresses=card.querySelector('[data-lan-addresses]');
+ const enabled=card.querySelector('[data-lan-enabled]'),password=card.querySelector('[data-lan-password]'),status=card.querySelector('[data-lan-status]'),addresses=card.querySelector('[data-lan-addresses]');
  const portNotice=card.querySelector('[data-lan-port-notice]'),changePort=card.querySelector('[data-lan-change-port]'),ackPort=card.querySelector('[data-lan-ack-port]');
  const sharePort=card.querySelector('[data-lan-port]');
  async function api(input,url='/api/lan/settings'){
@@ -152,24 +151,34 @@ export function createLanSharingSettings({toast}){
   }
  }
  async function updatePort(input){
-  changePort.disabled=ackPort.disabled=save.disabled=enabled.disabled=password.disabled=sharePort.disabled=true;
+  changePort.disabled=ackPort.disabled=enabled.disabled=password.disabled=sharePort.disabled=true;
   try{const data=await api({enabled:true,...input});render(data);toast(data.portConflict||data.error||data.available===false?'分享尚未恢复，请检查端口提示':data.portChanged?'分享链接已更新，请重新分享给其他人':'分享设置已更新');}
   catch(e){status.textContent=e.message;}
-  finally{changePort.disabled=ackPort.disabled=save.disabled=enabled.disabled=password.disabled=sharePort.disabled=false;}
+  finally{changePort.disabled=ackPort.disabled=enabled.disabled=password.disabled=sharePort.disabled=false;}
  }
  changePort.onclick=()=>updatePort({});
  ackPort.onclick=()=>updatePort({acknowledgePortChange:true});
  async function load(){
-  save.disabled=true;
   try{render(await api());enabled.disabled=password.disabled=false;await loadClients();}
   catch(e){status.textContent=e.message;enabled.disabled=password.disabled=true;}
-  finally{save.disabled=enabled.disabled;}
  }
- card.querySelector('form').onsubmit=async event=>{
-  event.preventDefault();save.disabled=true;enabled.disabled=password.disabled=true;
-  try{const data=await api({enabled:enabled.checked,password:password.value,sharingPort:Number(sharePort.value)});render(data);await loadClients();toast(data.error||data.portConflict?'分享端口不可用，本机仍可使用':data.portChanged?'分享链接已更新，请重新分享给其他人':'共享设置已保存');}
-  catch(e){status.textContent=e.message;}
-  finally{save.disabled=enabled.disabled=password.disabled=false;}
- };
+ /* 自动保存：共享页也撤掉保存键，勾开关、改密码、改端口都会直接写盘。
+    密码不足 8 位或端口越界时先不提交（静默等用户填完），免得半截输入就把共享改坏；
+    成功后只有「端口冲突」和「链接已变」还值得出声，普通改动只在状态行更新。 */
+ const form=card.querySelector('form');
+ async function persist(){
+  if(!form.checkValidity())return;
+  enabled.disabled=password.disabled=sharePort.disabled=true;
+  try{
+   const data=await api({enabled:enabled.checked,password:password.value,sharingPort:Number(sharePort.value)});
+   render(data);await loadClients();
+   const warning=data.error||data.portConflict?'分享端口不可用，本机仍可使用':data.portChanged?'分享链接已更新，请重新分享给其他人':'';
+   if(warning)toast(warning);
+  }catch(e){status.textContent=e.message;}
+  finally{enabled.disabled=password.disabled=sharePort.disabled=false;}
+ }
+ // 返回 persist 的 Promise：浏览器会忽略返回值，但测试（和任何调用方）能等它真正写完再断言。
+ form.onsubmit=event=>{event.preventDefault();return persist();};
+ for(const field of [enabled,password,sharePort])field.addEventListener('change',persist);
  return {card,load,check:()=>api()};
 }

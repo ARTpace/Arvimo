@@ -7,23 +7,30 @@ import {processIdentity,lockOwnerAlive,replaceLibraryOwner} from './process-lock
 import {runExportWorker,browserPath} from './export-worker.mjs';
 import {runArtstationWorker} from './artstation-worker.mjs';
 import {runPolyhavenJob} from './polyhaven.mjs';
+import {runSimreadyJob,simreadyId} from './simready.mjs';
 import {runPolypizzaJob} from './polypizza.mjs';
 import {runKenneyJob} from './kenney.mjs';
 import {runFreestylizedJob} from './freestylized.mjs';
 import {runPolyforkJob} from './polyfork.mjs';
 import {runAmbientcgJob} from './ambientcg.mjs';
-import {runImageJob} from './image-bundle.mjs';
+import {runUiverseJob} from './uiverse-job.mjs';
+import {runImageJob,markImageBundleIncomplete} from './image-bundle.mjs';
+import {isTransientNetworkError} from './net-errors.mjs';
 import {isPictureSite} from './picture-sites.mjs';
 import {inspectFolder,nativeFolderPicker} from './folder-dialog.mjs';
 import {commitFolder,commitArchive,reserveFolder} from './local-commit.mjs';
 import {assetStorageCategory,storageRoot} from './asset-storage.mjs';
 import {canonicalPath,recoverDownloads,recoveredOptionsMatch} from './download-recovery.mjs';
+import {cleanFilename,cleanFolderName} from './folder-name.mjs';
+import {findRemoteBoardDir} from './picture-board.mjs';
 import {TransferProgress} from './transfer-progress.mjs';
+import {mapLimit} from './bounded-map.mjs';
 import {verifyArchive} from './archive.mjs';
 import {verifyFolder,packFolder,findStagedGlb} from './folder-archive.mjs';
 import {convertGlbToFbx} from './fbx.mjs';
 import {blenderPath} from './blender.mjs';
 import {launchBlenderImport,launchBlenderMaterialImport,launchBlenderHdriImport,blenderBridgeStatus,probeBridge,startBridgeInstallJob,bridgeInstallJob} from './blender-import.mjs';
+import {tagList} from './tag-list.mjs';
 export const ACTIVE=new Set(['running','transferring','validating','saving','cancelling']);
 export const WAITING=new Set(['queued','held','retry_wait']);
 const terminal=new Set(['saved','failed','cancelled','interrupted']);
@@ -34,7 +41,7 @@ const exists=p=>isFile(p)||isDir(p);
 const uidPattern=/^[a-f0-9]{32}$/;
 /** Both platforms feed one queue; the kind only decides which runner converts the model.
  *  `images` is the picture-only counterpart: no mesh, no FBX, no Blender — just the asset's pictures. */
-export const JOB_KINDS=new Set(['sketchfab','artstation','images','polyhaven','ambientcg','polypizza','kenney','freestylized','polyfork']);
+export const JOB_KINDS=new Set(['sketchfab','artstation','images','polyhaven','ambientcg','polypizza','kenney','freestylized','polyfork','simready','uielement']);
 export const ARTSTATION_BATCH=20;
 /** Pictures are small, so a picture batch may be as wide as a model batch; the ceiling is about
  *  keeping one request understandable, not about payload size. */
@@ -44,6 +51,9 @@ export const IMAGE_BATCH=50;
  *  也不会在第一页就停下（画板页说好的「下载会抓取整站全部图片」得能兑现）。 */
 export const PICTURE_SITE_IMAGE_MAX=2000;
 export const PICTURE_SITE_IMAGE_BYTES=4*1024*1024*1024;
+/** 直接存文件夹时没有归档体积限制，而「1923 张 4K 原图」本身就有 8GB —— 4GB 会在
+ *  快下完时把整包判死，等于白跑两小时。文件夹模式给 16GB 的软上限，超了才边下边停。 */
+export const PICTURE_SITE_FOLDER_BYTES=16*1024*1024*1024;
 const ARTSTATION_URL=/^https:\/\/www\.artstation\.com\/artwork\/[A-Za-z0-9]{4,20}$/;
 export const PACK_MODES=new Set(['model','glb','full']);
 export const OUTPUT_MODES=new Set(['zip','folder']);
@@ -94,7 +104,16 @@ export function materialOptions(o={}){
 }
 export function modelSnapshot(m,kind){
  if(!uidPattern.test(m?.uid))throw Error('模型 ID 无效');
- const common={uid:m.uid,name:String(m.name||m.uid).slice(0,240),author:String(m.author||'未知作者').slice(0,100),license:String(m.license||'许可请查看原页面').slice(0,200),thumbnail:typeof m.thumbnail==='string'&&m.thumbnail.startsWith('https://')?m.thumbnail.slice(0,2048):null};
+ // 标签随任务一起落库：源站不提供标签的平台（Kenney / Poly Pizza / 花瓣…）靠这一份，
+ // 下载完成时写进 info.json 的就是「资产库里看到的那组标签」，不会出现下载包里一个标签都没有。
+ const common={uid:m.uid,name:String(m.name||m.uid).slice(0,240),author:String(m.author||'未知作者').slice(0,100),license:String(m.license||'许可请查看原页面').slice(0,200),thumbnail:typeof m.thumbnail==='string'&&m.thumbnail.startsWith('https://')?m.thumbnail.slice(0,2048):null,tags:tagList(m.tags)};
+ // UI 元素（Uiverse）落的是代码而不是图片：html + css 写成一个目录。
+ // 元素链接必须留着 —— 下载时要从里面读出用户名与 slug 才能取到代码。
+ if(kind==='uielement'){
+  if(m.platform!=='uiverse')throw Error('UI 元素任务只支持 Uiverse 平台');
+  if(!m.url)throw Error('Uiverse 元素链接缺失');
+  return {...common,kind:'uielement',platform:'uiverse',url:String(m.url).slice(0,2048),downloadable:false,assetId:String(m.assetId||'').slice(0,64),elementType:String(m.elementType||'').slice(0,40),theme:String(m.theme||'').slice(0,20)};
+ }
  // A picture job keeps the asset's platform *alongside* its kind: the queue reads `kind` to pick a
  // runner, and the runner then reads `platform` to decide where the pictures live. Persisting both
  // means a restored queue re-dispatches to exactly the same source it was created with.
@@ -134,6 +153,10 @@ export function modelSnapshot(m,kind){
   if(!m.assetId)throw Error('Poly Haven 资产 ID 缺失');
   return {...common,kind:'polyhaven',platform:'polyhaven',downloadable:true,url:String(m.url||`https://polyhaven.com/a/${m.assetId}`),assetId:String(m.assetId).slice(0,120),assetType:m.assetType==='textures'?'textures':m.assetType==='hdris'?'hdris':'models'};
  }
+ if(kind==='simready'){
+  const assetId=simreadyId(m.assetId);
+  return {...common,kind,platform:kind,assetId,downloadable:true,url:`https://hf-mirror.com/datasets/nvidia/simready-assets/tree/main/${assetId}`};
+ }
  if(kind==='polypizza'){
   if(!m.assetId)throw Error('Poly Pizza 资产 ID 缺失');
   return {...common,kind:'polypizza',platform:'polypizza',downloadable:true,url:String(m.url||`https://poly.pizza/m/${m.assetId}`),assetId:String(m.assetId).slice(0,80)};
@@ -160,10 +183,8 @@ export function modelSnapshot(m,kind){
  }
  return {...common,kind:'sketchfab',downloadable:m.downloadable===true,url:`https://sketchfab.com/models/${m.uid}`};
 }
-/** Shared stem for both delivery modes: filesystem-safe, capped, always carrying the uid prefix. */
-function cleanStem(name,uid){let stem=String(name||'model').replace(/\.zip$/i,'').replace(/[<>:"/\\|?*\x00-\x1f]/g,'_').replace(/[. ]+$/,'').slice(0,100)||'model';if(!stem.includes(uid.slice(0,8)))stem+='-'+uid.slice(0,8);return stem;}
-export function cleanFilename(name,uid){return cleanStem(name,uid)+'.zip';}
-export function cleanFolderName(name,uid){return cleanStem(name,uid);}
+/** 命名规则搬到了 folder-name.mjs：远程收藏卡也用同一套，才能原地接管同一个目录。 */
+export {cleanFilename,cleanFolderName};
 function optionKey(value){
  if(Array.isArray(value))return JSON.stringify(value.map(item=>JSON.parse(optionKey(item))));
  if(value&&typeof value==='object')return JSON.stringify(Object.fromEntries(Object.keys(value).sort().filter(key=>value[key]!==undefined).map(key=>[key,JSON.parse(optionKey(value[key]))])));
@@ -171,8 +192,8 @@ function optionKey(value){
 }
 const sameFolder=(a,b)=>canonicalPath(a)===canonicalPath(b);
 export class DownloadManager{
- constructor({dataDir,defaultFolder,runner=runExportWorker,artRunner=runArtstationWorker,imageRunner=runImageJob,polyRunner=runPolyhavenJob,pizzaRunner=runPolypizzaJob,kenneyRunner=runKenneyJob,freestyleRunner=runFreestylizedJob,polyforkRunner=runPolyforkJob,materialRunner=runAmbientcgJob,verify=verifyArchive,browser=browserPath,blender=blenderPath,fbxConverter=convertGlbToFbx,blenderImporter=launchBlenderImport,materialImporter=launchBlenderMaterialImport,hdriImporter=launchBlenderHdriImport,folderPicker=nativeFolderPicker,autoStart=true}={}){
-  this.instanceId=randomUUID();this.dataDir=path.resolve(dataDir);this.defaultFolder=path.resolve(defaultFolder);this.runner=runner;this.artRunner=artRunner;this.imageRunner=imageRunner;this.polyRunner=polyRunner;this.pizzaRunner=pizzaRunner;this.kenneyRunner=kenneyRunner;this.freestyleRunner=freestyleRunner;this.polyforkRunner=polyforkRunner;this.materialRunner=materialRunner;this.verify=verify;this.browser=browser;this.blender=blender;this.fbxConverter=fbxConverter;this.blenderImporter=blenderImporter;this.materialImporter=materialImporter;this.hdriImporter=hdriImporter;this.folderPicker=folderPicker;this.autoStart=autoStart;this.jobs=[];this.workers=new Map();this.transfers=new Map();this.closed=false;this.baseUrl=null;this.revision=0;this.timer=null;this.persistTimer=null;this.warning='';
+ constructor({dataDir,defaultFolder,runner=runExportWorker,artRunner=runArtstationWorker,imageRunner=runImageJob,polyRunner=runPolyhavenJob,simreadyRunner=runSimreadyJob,pizzaRunner=runPolypizzaJob,kenneyRunner=runKenneyJob,freestyleRunner=runFreestylizedJob,polyforkRunner=runPolyforkJob,materialRunner=runAmbientcgJob,uiverseRunner=runUiverseJob,verify=verifyArchive,browser=browserPath,blender=blenderPath,fbxConverter=convertGlbToFbx,blenderImporter=launchBlenderImport,materialImporter=launchBlenderMaterialImport,hdriImporter=launchBlenderHdriImport,folderPicker=nativeFolderPicker,autoStart=true}={}){
+  this.instanceId=randomUUID();this.dataDir=path.resolve(dataDir);this.defaultFolder=path.resolve(defaultFolder);this.runner=runner;this.artRunner=artRunner;this.imageRunner=imageRunner;this.polyRunner=polyRunner;this.pizzaRunner=pizzaRunner;this.simreadyRunner=simreadyRunner;this.kenneyRunner=kenneyRunner;this.freestyleRunner=freestyleRunner;this.polyforkRunner=polyforkRunner;this.materialRunner=materialRunner;this.uiverseRunner=uiverseRunner;this.verify=verify;this.browser=browser;this.blender=blender;this.fbxConverter=fbxConverter;this.blenderImporter=blenderImporter;this.materialImporter=materialImporter;this.hdriImporter=hdriImporter;this.folderPicker=folderPicker;this.autoStart=autoStart;this.jobs=[];this.workers=new Map();this.transfers=new Map();this.closed=false;this.baseUrl=null;this.revision=0;this.timer=null;this.persistTimer=null;this.warning='';
   this.settings={folder:this.defaultFolder,concurrency:1,retryLimit:1,paused:false};
   this.dismissedDownloads=new Set();
  }
@@ -180,12 +201,39 @@ export class DownloadManager{
   await fsp.mkdir(this.dataDir,{recursive:true});
   // Windows 旧品牌目录可能是 junction；先解析真实目录，避免排他创建误报 EEXIST。
   this.dataDir=await fsp.realpath(this.dataDir);this.lockPath=path.join(this.dataDir,'manager.lock');
-  try{const fd=fs.openSync(this.lockPath,'wx');fs.writeFileSync(fd,JSON.stringify(processIdentity()));fs.closeSync(fd);}catch(e){if(e.code!=='EEXIST')throw e;let owner;try{owner=JSON.parse(fs.readFileSync(this.lockPath));}catch{throw Error('下载记录目录锁无效，请检查 manager.lock');}if(lockOwnerAlive(owner)&&!(process.env.SFX_REPLACE_LIBRARY_OWNER==='1'&&replaceLibraryOwner(owner)))throw Error('此下载记录目录已由另一个服务使用');fs.unlinkSync(this.lockPath);return this.init();}
+  try{const fd=fs.openSync(this.lockPath,'wx');fs.writeFileSync(fd,JSON.stringify(processIdentity()));fs.closeSync(fd);}
+  catch(e){
+   if(e.code!=='EEXIST')throw e;
+   let owner=null;try{owner=JSON.parse(fs.readFileSync(this.lockPath));}catch{owner=null;}
+   if(!owner){
+    // 强杀 / 断电后 NTFS 上会留下写了一半（实测是全 0）的锁文件。旧逻辑直接报「锁无效」，
+    // 结果是服务再也起不来，只能让用户手动删文件。这里改成：内容坏且已经放了一会儿，就当陈旧锁接管。
+    // 用 mtime 而不是立刻接管，是为了不跟「刚写完锁、还没写完 JSON」的另一个进程抢。
+    const age=Date.now()-Number(fs.statSync(this.lockPath).mtimeMs||0);
+    if(age<60000)throw Error('下载记录目录锁无效，请检查 manager.lock');
+    fs.writeFileSync(this.lockPath,JSON.stringify(processIdentity()));
+   }else{
+    if(lockOwnerAlive(owner)&&!(process.env.SFX_REPLACE_LIBRARY_OWNER==='1'&&replaceLibraryOwner(owner)))throw Error('此下载记录目录已由另一个服务使用');
+    fs.unlinkSync(this.lockPath);return this.init();
+   }
+  }
   try{
    this.store=path.join(this.dataDir,'tasks.json');let saved;
    if(fs.existsSync(this.store)){try{saved=JSON.parse(fs.readFileSync(this.store,'utf8'));}catch{try{saved=JSON.parse(fs.readFileSync(this.store+'.bak','utf8'));this.warning='任务记录损坏，已从上次备份恢复；原损坏文件已保留。';fs.copyFileSync(this.store,this.store+'.damaged-'+Date.now());fs.copyFileSync(this.store+'.bak',this.store);}catch{throw Error('任务记录损坏，已停止启动，未覆盖原文件');}}}
    if(saved){if(saved.version!==1||!Array.isArray(saved.jobs)||!saved.settings)throw Error('任务记录格式无效，未重置');this.settings={...this.settings,...saved.settings};this.jobs=saved.jobs;
-    for(const j of this.jobs){if(!uidPattern.test(j.uid)||!j.id)throw Error('任务记录含无效模型');if(ACTIVE.has(j.state)){j.state='interrupted';j.message='服务上次中断，请重试（从头下载，不是断点续传）';j.finishedAt=Date.now();}}
+    for(const j of this.jobs){
+     if(!uidPattern.test(j.uid)||!j.id)throw Error('任务记录含无效模型');
+     if(ACTIVE.has(j.state)){
+      // 图片文件夹包是逐张落盘 + 逐张登记清单的，被强杀也能接着下 —— 提示要如实反映这一点。
+      // 其余任务（ZIP / 模型 / 单文件）确实只能重来，别给假希望。
+      const resume = j.kind==='images'&&j.options?.output==='folder'&&j.filePath
+       ?await markImageBundleIncomplete(j.filePath)
+       :false;
+      j.state='interrupted';
+      j.message=resume?'服务上次中断了；点「重试」会接着补下剩下的图片，已经下好的不会重下':'服务上次中断，请重试（从头下载，不是断点续传）';
+      j.finishedAt=Date.now();
+     }
+    }
    }
    // Delete only known interrupted-task scratch paths, never arbitrary user directories.
    for(const j of this.jobs){if(j.state==='interrupted'&&/^[a-f0-9-]{36}$/.test(j.id)&&Number.isSafeInteger(j.attempts)&&j.attempts>0){const key=`${j.id}-${j.attempts}`;await fsp.rm(path.join(this.dataDir,'workers',key),{recursive:true,force:true,maxRetries:5,retryDelay:150}).catch(()=>{});await fsp.rm(path.join(this.dataDir,'staging',key+'.zip.part'),{force:true}).catch(()=>{});await fsp.rm(path.join(this.dataDir,'staging',key+'.dir'),{recursive:true,force:true}).catch(()=>{});}}
@@ -202,8 +250,17 @@ export class DownloadManager{
  update(job,patch,{lazy=false}={}){Object.assign(job,patch,{updatedAt:Date.now()});this.revision++;if(lazy){clearTimeout(this.persistTimer);this.persistTimer=setTimeout(()=>{try{this.save();}catch{}},180);}else this.save();}
  log(job,message){job.logs??=[];job.logs.push(`[${new Date().toLocaleTimeString('zh-CN',{hour12:false})}] ${String(message).slice(0,1500)}`);job.logs=job.logs.slice(-160);}
  folderStatus(){return inspectFolder(this.settings.folder);}
- snapshot(){return {version:1,revision:this.revision,settings:this.settings,defaultFolder:this.defaultFolder,folderStatus:this.folderStatus(),browserAvailable:!!this.browser(),fbxAvailable:!!this.blender(),warning:this.warning,storageError:this.storageError||null,jobs:this.jobs.map(j=>({...j,fileExists:!!j.filePath&&exists(j.filePath)}))};}
+ snapshot(fileStatus){return {version:1,revision:this.revision,settings:this.settings,defaultFolder:this.defaultFolder,folderStatus:this.folderStatus(),browserAvailable:!!this.browser(),fbxAvailable:!!this.blender(),warning:this.warning,storageError:this.storageError||null,jobs:this.jobs.map(j=>({...j,fileExists:!!j.filePath&&(fileStatus?!!fileStatus.get(j.filePath):exists(j.filePath))}))};}
+ async snapshotAsync(){
+  const snapshot=this.snapshot(new Map());
+  await mapLimit(snapshot.jobs,16,async job=>{
+   if(!job.filePath)return;
+   try{const stat=await fsp.stat(job.filePath);job.fileExists=stat.isFile()||stat.isDirectory();}catch{job.fileExists=false;}
+  });
+  return snapshot;
+ }
  async sendToBlender(job,filePath=job.filePath){
+  if(job.kind==='simready')throw Error('SimReady 原始 USD 暂不支持一键导入 Blender，请打开下载目录手动导入');
   // 材质交付物里没有网格，走建材质这条路；HDRI/天空盒走设世界环境；其余一律按模型导入
   //（Kenney / FreeStylized 的 pack.zip 由 resolveBlenderImport 解包后挑模型；
   //  FreeStylized 的天空盒是等距全景图、贴图/智能材质是 PBR 贴图包，各走对应路线）。
@@ -264,17 +321,18 @@ export class DownloadManager{
   const kind=input.kind===undefined?'sketchfab':String(input.kind);
   if(!JOB_KINDS.has(kind))throw Error('不支持的任务类型');
   const openInBlender=input.openInBlender===true;
+  if(kind==='simready'&&openInBlender)throw Error('SimReady 暂不支持一键导入 Blender，请先下载原始 USD');
   const batch=kind==='artstation'?ARTSTATION_BATCH:kind==='images'?IMAGE_BATCH:50;
   const polyMaterial=kind==='polyhaven'&&Array.isArray(input.models)&&input.models.length>0&&input.models.every(m=>m?.assetType==='textures');
   const polyHdri=kind==='polyhaven'&&Array.isArray(input.models)&&input.models.length>0&&input.models.every(m=>m?.assetType==='hdris');
   const polyMixed=kind==='polyhaven'&&Array.isArray(input.models)&&input.models.some(m=>m?.assetType==='textures'||m?.assetType==='hdris')&&!polyMaterial&&!polyHdri;
   if(polyMixed)throw Error('Poly Haven 的模型、材质和 HDRI 请分批下载');
-  const noun=kind==='artstation'?' ArtStation 作品':kind==='images'?'资产图片':polyHdri?' Poly Haven HDRI':polyMaterial?' Poly Haven 材质':kind==='polyhaven'?' Poly Haven 模型':kind==='ambientcg'?' ambientCG 材质':kind==='polypizza'?' Poly Pizza 模型':kind==='kenney'?' Kenney 资源包':kind==='polyfork'?' Polyfork 模型':kind==='freestylized'?' FreeStylized 资产':'模型';
+  const noun=kind==='artstation'?' ArtStation 作品':kind==='images'?'资产图片':kind==='uielement'?' UI 元素':polyHdri?' Poly Haven HDRI':polyMaterial?' Poly Haven 材质':kind==='polyhaven'?' Poly Haven 模型':kind==='ambientcg'?' ambientCG 材质':kind==='polypizza'?' Poly Pizza 模型':kind==='kenney'?' Kenney 资源包':kind==='polyfork'?' Polyfork 模型':kind==='freestylized'?' FreeStylized 资产':'模型';
   if(!Array.isArray(input.models)||!input.models.length||input.models.length>batch)throw Error(`每批最多添加 ${batch} 个${noun}`);
   if(kind==='ambientcg'&&new Set(input.models.map(m=>m.sourceType||'material')).size>1)throw Error('ambientCG 不同类型的资产请分批下载');
   if(this.storageError)throw Error(this.storageError);if(this.jobs.length>=500)throw Error('任务记录已达 500 条，请清理已结束记录');
   const requestedOptions=openInBlender?{...input.options,output:'folder',format:'fbx'}:input.options;
-  const options=kind==='images'?imageOptions(requestedOptions):kind==='ambientcg'||polyMaterial?materialOptions(requestedOptions):polyHdri?{output:'folder',resolution:MATERIAL_RESOLUTIONS.has(requestedOptions?.resolution)?requestedOptions.resolution:'2K',textureFormat:'HDR'}:kind==='polypizza'||kind==='kenney'?{output:'folder',format:'glb'}:kind==='polyfork'?{output:'folder',format:requestedOptions?.format==='fbx'?'fbx':'glb'}:kind==='freestylized'?{output:'folder',format:'glb',resolution:MATERIAL_RESOLUTIONS.has(requestedOptions?.resolution)?requestedOptions.resolution:'2K'}:exportOptions(kind==='artstation'?{...requestedOptions,packMode:'glb'}:requestedOptions);
+  const options=kind==='simready'?{output:'folder',format:'usd'}:kind==='images'?imageOptions(requestedOptions):kind==='uielement'?{output:'folder'}:kind==='ambientcg'||polyMaterial?materialOptions(requestedOptions):polyHdri?{output:'folder',resolution:MATERIAL_RESOLUTIONS.has(requestedOptions?.resolution)?requestedOptions.resolution:'2K',textureFormat:'HDR'}:kind==='polypizza'||kind==='kenney'?{output:'folder',format:'glb'}:kind==='polyfork'?{output:'folder',format:requestedOptions?.format==='fbx'?'fbx':'glb'}:kind==='freestylized'?{output:'folder',format:'glb',resolution:MATERIAL_RESOLUTIONS.has(requestedOptions?.resolution)?requestedOptions.resolution:'2K'}:exportOptions(kind==='artstation'?{...requestedOptions,packMode:'glb'}:requestedOptions);
   if(kind==='ambientcg'&&input.models.every(m=>m.sourceType==='substance'))options.textureFormat='SBSAR';
   const models=input.models.map(m=>modelSnapshot(m,kind)),added=[],duplicates=[],opened=[];
   // 已下载的重复项要「顺手送进 Blender」时，导入可能要几十秒，不能在循环里串行等：
@@ -315,6 +373,33 @@ export class DownloadManager{
   }else throw Error('不支持的任务操作');this.pump();return this.snapshot();
  }
  batch(action,ids){if(!['cancel','retry','hold','resume','remove'].includes(action)||!Array.isArray(ids)||ids.length>500)throw Error('批量操作参数无效');const errors=[];for(const id of ids){try{this.action(id,action);}catch(e){errors.push({id,error:e.message});}}return {errors,...this.snapshot()};}
+ /** 上一次失败留下的半成品图片目录：状态是「未完成 / 下载中」且就在本次的下载目录里，才可以接着用。
+  *  续传靠的是目录里的 info.json（清单即凭据），所以只认带清单的目录，别把别的东西当成半成品。 */
+ resumableFolder(j){
+  const dir=j.filePath;
+  if(!dir||j.attempts<=1||!isDir(dir))return null;
+  if(path.dirname(path.resolve(dir))!==path.resolve(j.downloadDir))return null;
+  try{
+   const info=JSON.parse(fs.readFileSync(path.join(dir,'info.json'),'utf8'));
+   if(!Array.isArray(info?.images)||!info.images.length)return null;
+   if(!['incomplete','downloading'].includes(String(info.status||'')))return null;
+   return dir;
+  }catch{return null;}
+ }
+ /** 「只入库」留下的远程收藏卡：目录里只有 info.json（status:'remote'），一张图都没有。
+  *  用户在这张卡上点「下载原图」时原地接管它 —— 不新建「(1)」目录，资产库里也不会变成两张卡。
+  *  找不到就返回 null，走正常的新目录流程。 */
+ async resumeRemoteBoard(j){
+  if(j.kind!=='images'||j.options?.output!=='folder'||!j.uid)return null;
+  // 先按命名规则精确探一次（O(1)）：批量下载几十个画板时，每个任务都去扫一遍分类目录
+  // 读几百份 info.json 是白等的开销。命名规则与写卡时同一份（folder-name.mjs），通常一次命中。
+  const direct=path.join(j.downloadDir,cleanFolderName(j.name||'图片包',j.uid));
+  try{
+   const info=JSON.parse(fs.readFileSync(path.join(direct,'info.json'),'utf8'));
+   if(info?.uid===j.uid&&info?.status==='remote')return direct;
+  }catch{/* 标题被改过 / 不在预期位置：退到目录扫描 */}
+  return findRemoteBoardDir(j.downloadDir,j.uid).catch(()=>null);
+ }
  pump(){
   clearTimeout(this.timer);if(this.closed||!this.baseUrl||this.settings.paused||this.storageError)return;
   while(this.workers.size<this.settings.concurrency){const j=this.jobs.find(j=>j.state==='queued'||j.state==='retry_wait'&&j.nextAttemptAt<=Date.now());if(!j)break;const controller=new AbortController();const promise=this.run(j,controller);this.workers.set(j.id,{controller,promise});promise.finally(()=>{this.workers.delete(j.id);this.pump();}).catch(()=>{});}
@@ -346,7 +431,10 @@ export class DownloadManager{
   let liveDir=null;
   try{
    if(directFolder){
-    liveDir=await reserveFolder(j.downloadDir,cleanFolderName(j.name||'图片包',j.uid));
+    // 重试时接着用上一次的目录：一个 294 张的画板断在第 200 张，没理由把前 200 张再抓一遍，
+    // 更没理由在下载目录里多留一个「(1)」的半成品。runImageJob 会按清单跳过已有的图。
+    const resume=this.resumableFolder(j)||await this.resumeRemoteBoard(j);
+    liveDir=resume||await reserveFolder(j.downloadDir,cleanFolderName(j.name||'图片包',j.uid));
     this.update(j,{filePath:liveDir,live:true},{lazy:true});
    }
   const art=j.kind==='artstation';
@@ -360,13 +448,15 @@ export class DownloadManager{
    // `hasMarmoset` rides along so the forked worker can pick its pipeline without re-reading the
    // artwork page first; it is persisted on the job, so a restored queue dispatches exactly the same way.
     const meta=j.kind==='images'
-    ?await this.imageRunner({uid:j.uid,platform:j.platform,name:j.name,author:j.author,url:j.url,assetId:j.assetId,deliver:looseStage?'folder':'zip',output:directFolder?liveDir:staged,workRoot:profile,...(isPictureSite(j.platform)?{limit:PICTURE_SITE_IMAGE_MAX,totalBytes:PICTURE_SITE_IMAGE_BYTES}:{})},{signal,progress:onProgress})
+    ?await this.imageRunner({uid:j.uid,platform:j.platform,name:j.name,author:j.author,url:j.url,assetId:j.assetId,tags:j.tags,deliver:looseStage?'folder':'zip',output:directFolder?liveDir:staged,workRoot:profile,...(isPictureSite(j.platform)?{limit:PICTURE_SITE_IMAGE_MAX,totalBytes:directFolder?PICTURE_SITE_FOLDER_BYTES:PICTURE_SITE_IMAGE_BYTES}:{})},{signal,progress:onProgress})
     :j.kind==='ambientcg'
      ?await this.materialRunner({uid:j.uid,assetId:j.assetId,options:j.options,deliver:looseStage?'folder':'zip',output:staged,workRoot:profile},{signal,progress:onProgress})
     :art
     ?await this.artRunner({uid:j.uid,url:j.url,format:'glb',hasMarmoset:!imageBundle,deliver:looseStage?'folder':'zip',output:staged,workRoot:profile},{signal,progress:onProgress})
     :j.kind==='polyhaven'
      ?await this.polyRunner({uid:j.uid,options:runnerOptions,output:staged,profile,assetId:j.assetId,assetType:j.assetType},{signal,progress:onProgress})
+    :j.kind==='simready'
+     ?await this.simreadyRunner({uid:j.uid,output:staged,assetId:j.assetId},{signal,progress:onProgress})
     :j.kind==='polypizza'
      ?await this.pizzaRunner({uid:j.uid,output:staged,assetId:j.assetId},{signal,progress:onProgress})
     :j.kind==='kenney'
@@ -375,6 +465,8 @@ export class DownloadManager{
      ?await this.freestyleRunner({uid:j.uid,output:staged,assetId:j.assetId,assetType:j.assetType,options:j.options},{signal,progress:onProgress})
     :j.kind==='polyfork'
      ?await this.polyforkRunner({uid:j.uid,output:staged,assetId:j.assetId,options:j.options},{signal,progress:onProgress})
+    :j.kind==='uielement'
+     ?await this.uiverseRunner({uid:j.uid,url:j.url,assetId:j.assetId,name:j.name,author:j.author,tags:j.tags,output:staged},{signal,progress:onProgress})
     :await this.runner({networkToken,uid:j.uid,options:runnerOptions,baseUrl:this.baseUrl,output:staged,profile},{signal,progress:onProgress});
    signal.throwIfAborted();
 
@@ -393,7 +485,7 @@ export class DownloadManager{
     deliverable=packed;folderDelivery=false;
    }
    signal.throwIfAborted();
-   this.update(j,{state:'validating',stage:'validating',message:folderDelivery?(materialJob?'校验材质贴图清单、贴图内容及内容指纹':imageBundle?'校验作品图片清单、图片内容及内容指纹':'校验 GLB 网格、来源信息及内容指纹'):(materialJob?'校验 ZIP CRC、材质贴图清单、贴图内容及 SHA-256':imageBundle?'校验 ZIP CRC、作品图片清单、图片内容及 SHA-256':'校验 ZIP CRC、GLB 网格、来源信息及 SHA-256')});
+   this.update(j,{state:'validating',stage:'validating',message:j.kind==='simready'?'校验 USD 文件清单、大小及内容指纹':folderDelivery?(materialJob?'校验材质贴图清单、贴图内容及内容指纹':imageBundle?'校验作品图片清单、图片内容及内容指纹':'校验 GLB 网格、来源信息及内容指纹'):(materialJob?'校验 ZIP CRC、材质贴图清单、贴图内容及 SHA-256':imageBundle?'校验 ZIP CRC、作品图片清单、图片内容及 SHA-256':'校验 ZIP CRC、GLB 网格、来源信息及 SHA-256')});
    const verification=folderDelivery?await verifyFolder(deliverable,{uid:j.uid,signal}):await this.verify(deliverable,{uid:j.uid,signal});
    signal.throwIfAborted();
    if(verification.warning)j.warning='部分 CDN 贴图需检查；文件结构校验不代表材质视觉一致';
@@ -410,14 +502,28 @@ export class DownloadManager{
     try{this.update(j,{state:'saving',stage:'saving',message:materialJob?'正在把材质导入已打开的 Blender':hdriJob?'正在把 HDRI 设为 Blender 世界环境':'正在发送到已打开的 Blender 场景'});blender=await this.sendToBlender(j,filePath);}
     catch(e){j.warning=(j.warning?j.warning+'；':'')+'已保存，但发送到 Blender 失败：'+String(e.message||e);this.log(j,j.warning);blender={ok:false,error:String(e.message||e)};}
    }
+   // 有图取不回来时如实说清楚：卡片上写「已保存」却少了几张，比报错更让人没法判断。
+   if(meta.failedCount>0)j.warning=(j.warning?j.warning+'；':'')+`有 ${meta.failedCount} 张图片取不回来，已跳过（可在下载目录里核对）`;
+   if(meta.truncatedCount>0)j.warning=(j.warning?j.warning+'；':'')+`已达本机体积上限，还有 ${meta.truncatedCount} 张未下载`;
    this.log(j,(materialJob?'材质已保存并通过校验：':imageBundle?'图片已保存并通过校验：':'导出已保存并通过校验：')+filePath);
    const savedMessage=j.openInBlender&&(!imageBundle||materialJob)?(blender?.ok?(materialJob?'已保存并已把材质导入 Blender':'已保存并已发送到 Blender'):(materialJob?'已保存到本机，但未能导入 Blender':'已保存到本机，但未能发送到 Blender')):(folderDelivery?(materialJob?'材质已保存到本机，内容校验通过':imageBundle?'图片已保存到本机，内容校验通过':'已保存到本机，内容校验通过'):'已保存到本机，文件完整性校验通过');
    this.update(j,{state:'saved',stage:'saved',message:savedMessage,filePath,filename:path.basename(filePath),bytes:verification.bytes,verification,blender,finishedAt:Date.now(),nextAttemptAt:null});
   }catch(e){
+   // 直写最终目录的图片任务即使失败也留下了半成品目录；把它的清单从「下载中」改成「未完成」，
+   // 否则资产库里那张卡会一直显示正在下载（子进程被强杀时它也兜不住，init() 里有第二次修补）。
+   if(directFolder&&liveDir)await markImageBundleIncomplete(liveDir);
    const message=signal.aborted?String(signal.reason?.message||'任务已取消'):String(e.message||e);this.log(j,message);
-   const transient=!signal.aborted&&/timeout|超时|ECONN|fetch failed|Failed to fetch|HTTP (429|502|503|504)/i.test(message);
+   // 「值不值得自动重试」与图片层共用同一份判定（net-errors.mjs）：早先这里只认
+   // /ECONN|timeout/，而花瓣掐连接抛的是 `socket hang up`，于是任务直接判死、一次都不重试。
+   // 错误对象可能只有文案（跨进程 / 折了 status），所以状态码也直接从消息里认 —— 包括
+   // 花瓣的 567：它落在 5xx 里，但含义是「限流，等一会儿」，必须重试。
+   const transient=!signal.aborted&&(isTransientNetworkError(e)||/HTTP\s*(?:408|425|429|5\d\d)/i.test(message));
+   // 限流要等得比「网络抖一下」久：五秒重连对 IP 配额毫无意义，反而把冷却窗口又踩一遍。
+   const rateLimited=/限流|HTTP\s*(?:429|567)|HTTP\s*5\d\d/i.test(message);
+   // 图片任务的重试次数放宽：续传会跳过已落盘的图，重试只补剩下的，失败一次不再等于整包白下。
+   const retryLimit=j.kind==='images'?Math.max(j.retryLimit,3):j.retryLimit;
    if(this.closed)this.update(j,{state:'interrupted',message:'本地服务已关闭；重启后可手动重试',finishedAt:Date.now()});
-   else if(transient&&j.retryCount<j.retryLimit){j.retryCount++;this.update(j,{state:'retry_wait',message:`临时网络错误，等待自动重试 ${j.retryCount}/${j.retryLimit}：${message}`,nextAttemptAt:Date.now()+5000*j.retryCount});}
+   else if(transient&&j.retryCount<retryLimit){j.retryCount++;const waitMs=rateLimited?30000*j.retryCount:5000*j.retryCount;this.update(j,{state:'retry_wait',message:`${rateLimited?'图站限流':'临时网络错误'}，${Math.round(waitMs/1000)} 秒后自动重试 ${j.retryCount}/${retryLimit}：${message}`,nextAttemptAt:Date.now()+waitMs});}
    else this.update(j,{state:signal.aborted?'cancelled':'failed',message,finishedAt:Date.now()});
   }finally{this.transfers.delete(networkToken);clearTimeout(timeout);await fsp.rm(staged,{recursive:true,force:true}).catch(()=>{});await fsp.rm(packed,{recursive:true,force:true}).catch(()=>{});}
  }

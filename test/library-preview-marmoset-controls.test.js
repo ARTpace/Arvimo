@@ -109,6 +109,6 @@ test('画布尺寸跟着显示尺寸同步，不只靠 window resize',()=>{
  assert.ok(/sizeObserver\.observe\(canvas\.parentElement\|\|canvas\)/.test(preview),'观察的是容器，画布 hidden 时它是 0');
  assert.ok(preview.includes('observeStage();'),'建好与复用渲染器两条路径都要挂上观察');
  assert.ok(/if\(w===viewW&&h===viewH\)return;/.test(preview),'尺寸没变要早退（它现在会被每帧兜底调到）');
- assert.ok(/frame%15===0\)resize\(\)/.test(preview),'ResizeObserver 万一不吭声，loop 里低频兜底');
+ assert.ok(/function loop\(\)\{[\s\S]*?resize\(\);[\s\S]*?controls\.update\(\)/.test(preview),'交互请求的帧在绘制前同步尺寸，空闲时不再为兜底持续绘制');
  assert.ok(preview.includes('let viewW=0,viewH=0,sizeObserver=null;'),'记着上次同步过的尺寸');
 });

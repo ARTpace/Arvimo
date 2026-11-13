@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import {createSearchTranslator} from './ai-search.mjs';
 
-const defaults={enabled:false,baseUrl:'http://127.0.0.1:31415/v1',model:'auto',apiKey:''};
+const defaults={enabled:false,baseUrl:'http://127.0.0.1:31415/v1',model:'auto',embedModel:'',apiKey:''};
 function normalize(input,current){
  if(!input||typeof input!=='object'||Array.isArray(input))throw Error('AI 设置格式无效');
  const next={...current,...input};
@@ -14,7 +14,11 @@ function normalize(input,current){
  if(baseUrl.length>2048||!model||model.length>200)throw Error('请填写有效的接口地址和模型名称');
  const apiKey=input.clearKey?'':typeof input.apiKey==='string'&&input.apiKey.trim()?input.apiKey.trim():current.apiKey;
  if(apiKey.length>4096||/[\r\n]/.test(apiKey))throw Error('密钥格式无效');
- return {enabled:next.enabled===true,baseUrl,model,apiKey};
+ // 向量模型是可选的：没填就意味着「语义搜索未启用」，而不是配置错误。
+ // 它刻意与对话模型分开 —— 做图搜的那类服务里，两者几乎从不相同。
+ const embedModel=String(next.embedModel??'').trim();
+ if(embedModel.length>200||/[\r\n]/.test(embedModel))throw Error('向量模型名称无效');
+ return {enabled:next.enabled===true,baseUrl,model,apiKey,embedModel};
 }
 
 export function createAIService({file,fetchImpl=fetch,timeoutMs=30000}){
@@ -23,7 +27,7 @@ export function createAIService({file,fetchImpl=fetch,timeoutMs=30000}){
   try{return normalize(JSON.parse(await fs.readFile(file,'utf8')),defaults);}
   catch(error){if(error.code==='ENOENT')return {...defaults};throw Error('AI 配置读取失败，请检查本地配置文件');}
  }
- const publicConfig=config=>({enabled:config.enabled,baseUrl:config.baseUrl,model:config.model,hasKey:!!config.apiKey});
+ const publicConfig=config=>({enabled:config.enabled,baseUrl:config.baseUrl,model:config.model,embedModel:config.embedModel,hasKey:!!config.apiKey});
  async function configure(input){
   const operation=pending.then(async()=>{
    const config=normalize(input,await read());
@@ -34,7 +38,7 @@ export function createAIService({file,fetchImpl=fetch,timeoutMs=30000}){
   });
   pending=operation.catch(()=>{});return operation;
  }
- async function request(config,endpoint,payload,signal,waitMs=timeoutMs){
+ async function request(config,endpoint,payload,signal,waitMs=timeoutMs,maxBytes=1024*1024){
   const headers={'Content-Type':'application/json'};
   if(config.apiKey)headers.Authorization=`Bearer ${config.apiKey}`;
   let response;
@@ -42,7 +46,7 @@ export function createAIService({file,fetchImpl=fetch,timeoutMs=30000}){
   catch{throw Error('AI 请求失败或超时，请检查地址与服务状态');}
   if(!response.ok){await response.body?.cancel();throw Error(`AI 接口返回 HTTP ${response.status}，请检查密钥、模型和服务状态`);}
   const chunks=[];let bytes=0;
-  try{for await(const chunk of response.body){bytes+=chunk.length;if(bytes>1024*1024)throw Error();chunks.push(Buffer.from(chunk));}return JSON.parse(Buffer.concat(chunks).toString('utf8'));}
+  try{for await(const chunk of response.body){bytes+=chunk.length;if(bytes>maxBytes)throw Error();chunks.push(Buffer.from(chunk));}return JSON.parse(Buffer.concat(chunks).toString('utf8'));}
   catch{throw Error('AI 返回内容无效或过大');}
  }
  async function complete(messages,{signal,maxTokens=512,timeoutMs:waitMs}={}){
@@ -54,14 +58,38 @@ export function createAIService({file,fetchImpl=fetch,timeoutMs=30000}){
   return {text,model:typeof data.model==='string'?data.model:config.model};
  }
  const translator=createSearchTranslator({settings:async()=>publicConfig(await read()),complete});
+ /**
+  * 向量化（OpenAI 兼容 /embeddings）。
+  *
+  * 响应体积必须单独放宽：32 条 × 1024 维的 JSON 就有 600KB 上下，用对话那套 1MB 上限
+  * 迟早会「批量一调就报内容无效」。这里给 8MB，并只接受 float 数组。
+  * index 字段按位置排序：兼容实现里普遍带它，但不带时必须仍能对上顺序。
+  */
+ async function embed(texts,{signal}={}){
+  const config=await read();
+  if(!config.enabled)throw Error('请先在 AI 接入中启用并保存设置');
+  if(!config.embedModel)throw Error('请先在 AI 接入里填写向量模型，例如 text-embedding-3-small');
+  const inputs=(Array.isArray(texts)?texts:[]).map(text=>String(text||'').slice(0,4000)).filter(Boolean);
+  if(!inputs.length)return [];
+  const data=await request(config,'embeddings',{model:config.embedModel,input:inputs,encoding_format:'float'},signal,90000,8*1024*1024);
+  const list=Array.isArray(data.data)?data.data:[];
+  if(list.length!==inputs.length)throw Error(`向量接口返回条数不符（期望 ${inputs.length}，实际 ${list.length}）`);
+  const ordered=[...list].sort((a,b)=>(Number(a?.index)||0)-(Number(b?.index)||0));
+  return ordered.map(item=>{
+   const vec=item?.embedding;
+   if(!Array.isArray(vec)||!vec.length||!vec.every(value=>Number.isFinite(value)))throw Error('向量接口返回了无效的向量');
+   return Float32Array.from(vec);
+  });
+ }
  return {
   translate:query=>translator.translate(query),
   translateSearch:query=>translator.translateSearch(query),
   expand:query=>translator.expand(query),
   parseLocal:query=>translator.parseLocal(query),
+  visionSearch:input=>translator.visionSearch(input),
   brainstorm:theme=>translator.brainstorm(theme),
   tagAssets:arg=>translator.tagAssets(arg),
-  settings:async()=>publicConfig(await read()),key:async()=>({apiKey:(await read()).apiKey}),configure,complete,
+  settings:async()=>publicConfig(await read()),key:async()=>({apiKey:(await read()).apiKey}),configure,complete,embed,
   models:async(input,signal)=>{
    const config=normalize(input,await read());
    const data=await request(config,'models',null,signal);

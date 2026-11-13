@@ -24,3 +24,6 @@ let keyArgs=[];try{await fs.access(env.TAURI_SIGNING_PRIVATE_KEY);keyArgs=['--pr
 run(path.join(root,'node_modules/@tauri-apps/cli/tauri.js'),['signer','sign',...keyArgs,'--app-version',version,path.join(root,'dist',`AssetVault_${version}_x64-setup.exe`)]);
 run('scripts/prepare-release.mjs');
 run('scripts/clean-installers.mjs',['--apply']);
+// Only after packaging, signing and preparing the release have all succeeded.
+const cleanup=spawnSync(process.execPath,['scripts/clean-build-cache.mjs','--apply'],{cwd:root,env,stdio:'inherit'});
+if(cleanup.error||cleanup.status!==0)console.warn('Release completed; build-cache cleanup skipped/failed. Close running builds/apps and run npm run clean:build -- --apply later.');

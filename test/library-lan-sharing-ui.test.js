@@ -6,7 +6,9 @@ import {createLanSharingSettings} from '../src/library/lan-sharing.js';
 test('冲突时隐藏失效链接；主动换端口后显示新链接，确认后清除提醒',async t=>{
  function element(){
   const nodes=new Map();
-  return {children:[],addEventListener(){},
+  // 端口表单走浏览器原生校验（实现里 submit 先问 checkValidity），桩要跟上：
+  // 这里返回 true 表示「输入合法」，校验分支本身由浏览器负责，不是本测试要覆盖的。
+  return {children:[],addEventListener(){},checkValidity(){return true;},reportValidity(){},
    querySelector(selector){if(!nodes.has(selector))nodes.set(selector,element());return nodes.get(selector);},
    append(...children){this.children.push(...children);},replaceChildren(){this.children=[];},
   };

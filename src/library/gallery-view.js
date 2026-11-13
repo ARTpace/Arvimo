@@ -1,5 +1,4 @@
-import {isPictureSite} from './platforms.js';
-// 图片平台共用视图判据，模型平台保留原有网格与紧凑视图。
+// 网格 / 瀑布流对所有有卡片的页面开放。
 //
 // ArtStation 与图站共用按原图比例排列的瀑布流。
 // Sketchfab 是 3D 模型，卡片上的面数、动画、许可是有用信息，不该被极简掉。
@@ -9,9 +8,9 @@ import {isPictureSite} from './platforms.js';
  *  small 固定宽 800 且比 medium 轻约三分之一，正合适二三百像素的瀑布流列宽。 */
 export const GALLERY_RENDITION='small';
 
-/** 画廊是否可用：发现页上的图片平台。 */
-export function galleryAvailable({route,platform}={}){
- return route==='discover'&&(platform==='artstation'||isPictureSite(platform));
+/** 网格和瀑布流在发现页、资产库、收藏都能切。下载页没有卡片网格。 */
+export function galleryAvailable({route}={}){
+ return route!=='downloads';
 }
 
 /** 当前是否真的按画廊渲染：可用之外还要用户主动切过来。 */
@@ -19,8 +18,9 @@ export function galleryActive(state={}){
  return !!state.gallery&&galleryAvailable(state);
 }
 
+/** 网格 / 瀑布流二选一：瀑布流只在图片平台开启时生效（见 galleryAvailable）。 */
 export function displayGridClass(state={}){
- return `model-grid${galleryActive(state)?' gallery':state.compact?' compact':''}`;
+ return galleryActive(state)?'model-grid gallery':'model-grid';
 }
 
 /** 请求封面时要带的档位。非画廊（或不是 A 站）返回空串，交给图片代理用它自己的默认档。 */

@@ -95,36 +95,37 @@ let headerSeq=0;
  * 用指定指纹取一个 URL。整体缓冲后返回（ArtStation 的 JSON 接口最大也就几百 KB）。
  * 返回 `{status,headers,body,url,fingerprint}`；`body` 已按 content-encoding 解压。
  */
-export function curlImpersonateFetch(url,{fingerprint='safari184',timeout=30000,headers=null,maxBytes=DEFAULT_MAX_BYTES,signal,proxy=null}={}){
+export function curlImpersonateFetch(url,{fingerprint='safari184',timeout=30000,headers=null,maxBytes=DEFAULT_MAX_BYTES,signal,proxy=null,caFile=process.env.SFX_PROXY_CA_FILE}={}){
   return new Promise((resolve,reject)=>{
     const bin=curlImpersonateBinary();
     if(!bin)return reject(Error('未找到 curl-impersonate。请先运行 npm run fetch:curl-impersonate（或设置 SFX_CURL_IMPERSONATE 指向可执行文件）。'));
     const hdrFile=path.join(os.tmpdir(),`sfx-ci-${process.pid}-${headerSeq++}-${Date.now()}.hdr`);
     const args=[
+      '-q', // Must be first: do not inherit curlrc (including insecure/proxy/header options).
       '--impersonate',fingerprint,
-      '-sS','-L',                       // 静默进度、显示错误、跟随跳转
+      '-sS','--proto','=http,https', // Single hop only; caller validates every redirect.
       '--max-time',String(Math.max(1,Math.ceil(timeout/1000))),
       '-D',hdrFile,'-o','-',            // 头写临时文件，正文走 stdout
-      ...(proxy?['--proxy',`${proxy.protocol}//${proxy.host}`]:[]),
+      '--proxy',proxy?`${proxy.protocol}//${proxy.host}`:'', // Ignore ambient proxy variables when explicitly direct.
+      ...(caFile?['--cacert',caFile,...(proxy?.protocol==='https:'?['--proxy-cacert',caFile]:[])]:[]),
       ...(headers?Object.entries(headers).flatMap(([k,v])=>['-H',`${k}: ${v}`]):[]),
       url,
     ];
     const child=spawn(bin,args,{windowsHide:true,stdio:['ignore','pipe','pipe']});
     const chunks=[];const errChunks=[];
-    let bytes=0,killed=false,failure=null;
+    let bytes=0,killed=false,failure=null,timer;
     const finish=err=>{
       if(killed)return;
       killed=true;
       clearTimeout(timer);
       signal?.removeEventListener('abort',onAbort);
+      let headerText='';
+      if(!err)try{headerText=fs.readFileSync(hdrFile,'utf8');}catch{/* 进程没来得及写：按无头处理 */}
       fsp.unlink(hdrFile).catch(()=>{});
       if(err)return reject(err);
-      let headerText='';
-      try{headerText=fs.readFileSync(hdrFile,'utf8');}catch{/* 进程没来得及写：按无头处理 */}
       const {status,headers:parsedHeaders}=parseHeaderFile(headerText);
       if(!status){
-        const detail=Buffer.concat(errChunks).toString('utf8').trim().slice(0,200);
-        return reject(Error(`curl-impersonate 未返回有效响应${detail?`：${detail}`:''}`));
+        return reject(Error('curl-impersonate 未返回有效响应'));
       }
       const body=decodeBody(Buffer.concat(chunks),parsedHeaders['content-encoding']);
       if(parsedHeaders['content-encoding'])delete parsedHeaders['content-encoding'];
@@ -134,7 +135,7 @@ export function curlImpersonateFetch(url,{fingerprint='safari184',timeout=30000,
     const onAbort=()=>{try{child.kill('SIGKILL');}catch{}finish(Error('任务已取消'));};
     if(signal?.aborted)return onAbort();
     signal?.addEventListener('abort',onAbort,{once:true});
-    const timer=setTimeout(()=>{try{child.kill('SIGKILL');}catch{}finish(Error('远程站点响应超时'));},timeout+5000);
+    timer=setTimeout(()=>{try{child.kill('SIGKILL');}catch{}finish(Error('远程站点响应超时'));},timeout+5000);
     child.stdout.on('data',c=>{
       bytes+=c.length;
       if(bytes>maxBytes){failure=Error('响应体过大，已停止读取');try{child.kill('SIGKILL');}catch{}return;}
@@ -142,7 +143,7 @@ export function curlImpersonateFetch(url,{fingerprint='safari184',timeout=30000,
     });
     child.stderr.on('data',c=>{if(errChunks.length<16)errChunks.push(c);});
     child.on('error',e=>finish(e.code==='ENOENT'?Error('curl-impersonate 无法执行：请重新运行 npm run fetch:curl-impersonate'):e));
-    child.on('close',()=>finish(failure));
+    child.on('close',(code,signal)=>finish(failure||(code===0?null:Error(`curl-impersonate 请求失败（${code===null?'进程中断':'退出码 '+code}）`))));
   });
 }
 

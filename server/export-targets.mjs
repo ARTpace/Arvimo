@@ -82,7 +82,8 @@ async function extractZip(src,dest){
   const {execFile}=await import('node:child_process');
   await fsp.mkdir(dest,{recursive:true});
   await new Promise((resolve,reject)=>{
-    execFile('unzip',['-o',src,'-d',dest],err=>err?reject(err):resolve());
+    // 后台服务没有控制台，unzip 是控制台程序：不加 windowsHide 会闪一个命令行窗口。
+    execFile('unzip',['-o',src,'-d',dest],{windowsHide:true},err=>err?reject(err):resolve());
   });
   const out=[];
   const walk=async p=>{for(const e of await fsp.readdir(p,{withFileTypes:true})){const f=path.join(p,e.name);if(e.isDirectory())await walk(f);else out.push(f);}};

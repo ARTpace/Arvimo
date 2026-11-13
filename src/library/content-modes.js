@@ -13,7 +13,7 @@
  * 再点一次当前模式＝退出。「A 站只要 3D」由 app.js 落地：进入时把 #art-type 拨到 marmoset、
  * 退出时还原用户的选择，本模块只负责算出「该点亮谁 / 点了之后要去哪」。
  *
- * 高亮只由 state 推出（平台 + modelOnly + gallery），和三种展示视图同一套做法：
+ * 高亮只由 state 推出（平台 + modelOnly + gallery），和两种展示视图同一套做法：
  * 点击处理里不各写一遍图标状态。
  */
 import {ALL,isPictureSite} from './platforms.js';
