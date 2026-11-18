@@ -1,0 +1,26 @@
+/* Shared by the library settings and the embedded/standalone canvas. */
+.shortcut-settings{width:100%;margin:0!important;padding:0!important;background:transparent!important;border:0!important;box-shadow:none!important;color:inherit;font-size:13px}
+.shortcut-tools{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:34px;margin-bottom:8px}
+.shortcut-tools>button,.shortcut-reset{border:0;background:transparent;color:#82909d;cursor:pointer;font-size:12px;padding:5px 8px}
+.shortcut-tools>button:hover,.shortcut-reset:hover{color:var(--accent,#c9f581)}
+.shortcut-message{color:#d9b46b;font-size:12px;min-width:0}
+.shortcut-list{display:flex;flex-direction:column;background:#ffffff04;border-radius:14px;overflow:hidden;padding:0 18px}
+.shortcut-row{display:grid;grid-template-columns:minmax(120px,1.2fr) minmax(150px,1.4fr) 48px;gap:16px;align-items:center;min-height:48px;padding:8px 4px;border-bottom:1px solid #ffffff0a;box-sizing:border-box}
+.shortcut-row[hidden],.shortcut-message[hidden],.shortcut-empty[hidden]{display:none}
+.shortcut-row:last-child{border-bottom:0}
+.shortcut-heading{color:#82909d;min-height:44px}
+.shortcut-heading>span:last-child{text-align:center}
+.shortcut-settings input.shortcut-search{flex:1;min-width:0;width:auto;height:38px;padding:8px 13px;border:1px solid #ffffff16;border-radius:9px;background:#ffffff05;color:inherit;font:inherit;outline:none;box-sizing:border-box}
+.shortcut-settings input.shortcut-search:focus{border-color:#b7d38c66}
+.shortcut-search::placeholder{color:#77818b}
+.shortcut-settings .shortcut-tools{margin-bottom:18px;gap:12px}
+.shortcut-settings .shortcut-tools>button{white-space:nowrap;padding:9px 13px;border:1px solid #ffffff10;border-radius:9px;background:#ffffff08;color:#a0a9b2}
+.shortcut-message:not([hidden]){display:block;margin:0 0 10px}
+.shortcut-empty{padding:24px;color:#82909d;text-align:center}
+.shortcut-row>span:first-child{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;line-height:1.5}
+.shortcut-settings button.shortcut-key{display:block;justify-self:start;width:auto;max-width:100%;min-height:28px;padding:3px 10px;text-align:left;font-family:ui-monospace,Consolas,monospace;font-size:12px;line-height:20px;color:#d2d8df;background:#ffffff0c;border:1px solid transparent;border-radius:8px;cursor:pointer;transition:color .15s,background .15s}
+.shortcut-key:hover,.shortcut-key[aria-pressed=true]{color:var(--accent,#c9f581);border-color:#b7d38c66;background:#b7d38c08}
+.shortcut-key:focus-visible,.shortcut-reset:focus-visible{outline:1px solid var(--accent,#c9f581);outline-offset:2px}
+.shortcut-reset{justify-self:center;width:30px;height:30px;padding:3px;font-size:17px;line-height:24px}
+#settings-dialog .settings-pages>[id="settings-page-builtin.core-settings.hotkeys"]{padding:0;border:0;border-radius:0;background:transparent}
+@media(max-width:600px){.shortcut-row{grid-template-columns:minmax(80px,1fr) minmax(110px,1fr) 32px;gap:8px}.shortcut-list{padding:0 10px}}

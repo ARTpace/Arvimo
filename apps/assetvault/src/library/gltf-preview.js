@@ -1662,7 +1662,7 @@ async function showPackModel(manifest,token){
  function close(){
   disposed=true;loadToken++;
   clearTimeout(cacheIdleTimer);
-  cacheIdleTimer=setTimeout(releaseIdleResources,60000);
+  releaseIdleResources();
   resetEnvironment();
   disposeMaterialPreset();
   revokeBlobs();

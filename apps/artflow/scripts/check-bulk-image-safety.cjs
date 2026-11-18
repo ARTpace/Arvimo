@@ -276,8 +276,9 @@ console.log('PASS per-image live guard, off-main-thread proxy worker, idle canva
     const progress = [];
     const loading = [];
     const endedGroups = [];
-    let snapshot = { sessionId: 'project-1', activeBoardId: 'board-1', boards: [{ id: 'board-1' }] };
-    const replaceDocument = () => { snapshot = { ...snapshot, sessionId: 'another-project' }; };
+    const { createCanvasDocumentState } = require('../utils/canvas-document-state.ts');
+    const store = createCanvasDocumentState(options.empty ? [] : [{ id: 'board-1', elements: [] }]);
+    const replaceDocument = () => store.replaceProject([{ id: 'board-1', elements: [] }]);
     const { handleAddFiles } = useFileHandlers({
       getCanvasPoint: (x, y) => ({ x, y }),
       addElementsWithParenting: (items, commit, groupId) => {
@@ -285,7 +286,7 @@ console.log('PASS per-image live guard, off-main-thread proxy worker, idle canva
         options.onWrite?.(items);
       },
       endImportHistoryGroup: id => endedGroups.push(id),
-      documentState: { getSnapshot: () => snapshot },
+      documentState: store,
       isCanvasBusy: options.isCanvasBusy,
       setSelectedElementIds: ids => selection.push(ids),
       setActiveTool: tool => tools.push(tool),
@@ -295,7 +296,7 @@ console.log('PASS per-image live guard, off-main-thread proxy worker, idle canva
       setIsLoading: value => loading.push(value),
       setProgressMessage: value => progress.push(value),
     });
-    return { handleAddFiles, writes, selection, tools, errors, progress, loading, endedGroups, replaceDocument };
+    return { handleAddFiles, writes, selection, tools, errors, progress, loading, endedGroups, replaceDocument, store };
   };
   try {
     const { waitForImportCommit } = require('../utils/importScheduling.ts');
@@ -367,6 +368,17 @@ console.log('PASS per-image live guard, off-main-thread proxy worker, idle canva
       if (previousWindow === undefined) delete global.window;
       else global.window = previousWindow;
     }
+
+    const empty = makeHarness({ empty: true });
+    const emptySession = empty.store.getSnapshot().sessionId;
+    await empty.handleAddFiles(images.slice(0, 1), { x: 0, y: 0 });
+    assert.equal(empty.writes.length, 1, 'first import after removing all boards must place the image');
+    const emptyState = empty.store.getSnapshot();
+    assert.equal(emptyState.boards.length, 1);
+    assert.equal(emptyState.activeBoardId, emptyState.boards[0].id);
+    assert.equal(emptyState.sessionId, emptySession, 'creating an import board must not replace the project');
+    assert.equal(empty.errors.at(-1), null);
+    console.log('PASS importing into an empty project creates a destination without replacing the project');
 
     const single = makeHarness();
     await single.handleAddFiles([{ ...images[0], size: 300 * MiB }], { x: 0, y: 0 });

@@ -16,12 +16,12 @@ export function createAutostartCard({ toast = () => {} } = {}) {
   const card = document.createElement('section');
   card.className = 'settings-card';
   card.innerHTML = `
-    <div class="settings-section-title"><span>启动与后台</span><small>登录 Windows 后自动运行，窗口收在托盘里</small></div>
+    <div class="settings-section-title"><span>开机与后台</span></div>
     <label class="check-row autostart-row">
       <input type="checkbox" id="autostart-toggle" aria-describedby="autostart-note" disabled>
-      <span>开机时自动启动 Arvimo · 艺团</span>
+      <span>登录 Windows 后自动启动</span>
     </label>
-    <p class="compact-note" id="autostart-note">开机只启动后台服务，不弹主窗口；点任务栏托盘图标即可打开。关闭窗口默认也是收到托盘，不中断下载。</p>`;
+    <p class="compact-note" id="autostart-note">只起后台服务，关窗后仍在托盘运行。</p>`;
   const toggle = card.querySelector('#autostart-toggle');
   const note = card.querySelector('#autostart-note');
   let busy = false, supported = false, enabled = false;
@@ -37,11 +37,8 @@ export function createAutostartCard({ toast = () => {} } = {}) {
       note.textContent = '当前系统不支持开机自启，只能手动启动。';
       return;
     }
-    note.hidden = !status.command;
-    if (status.command) {
-      // 注册表里指向的可能是旧安装位置：如实显示，别让用户以为「开了但其实指不到」。
-      note.textContent = `启动项：${status.command}`;
-    }
+    // 注册表里的启动命令又长又对用户无用，不再展示；只有异常状态才用 note 提示。
+    note.hidden = true;
   }
 
   async function refresh() {

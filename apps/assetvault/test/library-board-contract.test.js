@@ -1,3 +1,4 @@
+import {assembleLibraryStyles} from '../scripts/lib/library-styles.mjs';
 // 画板 / 智能收集的契约测试：静态钉住命名、事件、接线与「保存成功后才 ack」的顺序，
 // 防止并行开发时有人改了契约却没同步 docs/board-development.md §4。
 import test from 'node:test';
@@ -18,7 +19,7 @@ test('CSS / 事件名遵守冻结契约，不撞图站画板', () => {
     selected: 'assetvault:board-selected',
     collect: 'assetvault:collect-changed',
   });
-  const css = read('src/library/app.css');
+  const css = assembleLibraryStyles();
   assert.match(css, /\.bd-dialog\{/);
   assert.doesNotMatch(css, /\.bd-dialog[\s\S]{0,4000}\.board-grid/);
   const hub = read('src/library/board-hub.js');

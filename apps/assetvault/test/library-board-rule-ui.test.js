@@ -10,7 +10,7 @@ function harness({initial={},board}={}){
  const saves=[],notices=[];let pending;
  const ui=createBoardRule({esc,icon:()=>'',toast:x=>notices.push(x),document,
  controls:{currentRule:()=>initial,getModels:()=>[],describeRule:()=>[]},store:{byId:()=>board,saveSmart:async payload=>{assertSmartConditions(payload);saves.push(payload);if(pending)await pending;return 'saved';}}});
- ui.dialog.showModal=()=>{ui.dialog.open=true;};ui.dialog.close=()=>{ui.dialog.open=false;};
+ ui.dialog.show=()=>{ui.dialog.open=true;};ui.dialog.close=()=>{ui.dialog.open=false;};
  const find=s=>ui.dialog.querySelector(s);
  const click=s=>{const n=find(s);assert.ok(n,s);n.dispatchEvent(new window.Event('click',{bubbles:true}));};
  return {ui,find,click,saves,notices,setPending:p=>pending=p,window};

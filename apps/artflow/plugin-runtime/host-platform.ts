@@ -17,7 +17,7 @@ export type WindowMoveResult = { ok: boolean; message?: string };
 export type AppRestartResult = { ok: boolean; message?: string };
 
 export interface HostPlatformService {
-  confirm(message: string): boolean;
+  confirm(message: string): Promise<boolean>;
   /** 打开插件源码目录（相对应用根）；返回 null=成功，否则为拒绝原因。 */
   openPluginDir(relPath: string): Promise<string | null>;
   /** 当前环境是否具备打开目录能力（Electron preload 桥存在）。 */
@@ -87,7 +87,7 @@ export interface HostPlatformService {
 }
 
 export interface HostPlatformBridge {
-  confirm?(message: string): boolean;
+  confirm?(message: string): boolean | Promise<boolean>;
   openPluginDir?(relPath: string): Promise<string | null>;
   setAlwaysOnTop?(enabled: boolean): Promise<boolean | string>;
   setWindowOpacity?(opacity: number): Promise<number | string>;
@@ -125,7 +125,7 @@ export interface HostPlatformBridge {
 const REJECTED = 'rejected: host bridge unavailable' as const;
 
 export const createHostPlatformService = (bridge: HostPlatformBridge | undefined): HostPlatformService => ({
-  confirm: message => bridge?.confirm?.(message) ?? false,
+  confirm: async message => (await bridge?.confirm?.(message)) === true,
   canOpenDirs: typeof bridge?.openPluginDir === 'function',
   openPluginDir: relPath => {
     if (!bridge?.openPluginDir) return Promise.resolve(REJECTED);

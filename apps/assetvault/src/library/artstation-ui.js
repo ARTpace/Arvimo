@@ -83,7 +83,7 @@ export function createArtstationUI({enabled=()=>true,$,icon,esc,toast,state,requ
  async function resolveModel(url){
   const meta=await resolve(url);
   if(!meta.uid)throw Error('无法从作品地址得到稳定的作品标识');
-  return {uid:meta.uid,platform:'artstation',artId:meta.artId,name:meta.title||url,author:meta.author||'未知作者',thumbnail:meta.thumbnail||null,size:meta.size||null,license:'ArtStation 作品 · 需确认授权',downloadable:false,artworkUrl:meta.artworkUrl||url,embedUrl:meta.embedUrl,mviewUrl:meta.mviewUrl||null};
+  return {uid:meta.uid,platform:'artstation',artId:meta.artId,name:meta.title||url,author:meta.author||'未知作者',thumbnail:meta.thumbnail||null,size:meta.size||null,license:'ArtStation 作品 · 需确认授权',downloadable:false,artworkUrl:meta.artworkUrl||url,embedUrl:meta.embedUrl,mviewUrl:meta.mviewUrl||null,platformCategories:meta.platformCategories||[],categories:meta.categories||[]};
  }
  async function resolveEmbed(model){
   const meta=await resolve(artworkUrl(model));

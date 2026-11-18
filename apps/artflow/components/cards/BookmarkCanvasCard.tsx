@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { useLanguage } from '../../utils/language-store';
 import type { BookmarkElement } from '../../types';
 import { CanvasCardShell } from './CanvasCardShell';
 
@@ -7,6 +8,7 @@ interface BookmarkCanvasCardProps {
 }
 
 export const BookmarkCanvasCard: React.FC<BookmarkCanvasCardProps> = ({ element }) => {
+    const language = useLanguage();
     const [copied, setCopied] = useState(false);
     const url = element.url || 'https://';
     
@@ -87,7 +89,7 @@ export const BookmarkCanvasCard: React.FC<BookmarkCanvasCardProps> = ({ element 
                     <span className="w-1.5 h-1.5 rounded-full" style={{ background: 'var(--bp-success)' }} />
                     HTTPS READY
                 </span>
-                <span className="font-mono" style={{ color: accent }}>BOOKMARK</span>
+                <span className="font-mono" style={{ color: accent }}>{language === 'zho' ? '网页书签' : 'BOOKMARK'}</span>
             </div>}
         >
                 {/* Favicon / Icon Orb */}

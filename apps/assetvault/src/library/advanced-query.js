@@ -9,6 +9,7 @@ import {createPagedQuery} from './library-page-fetch.js';
 import {createFormatFilterState} from './format-filter.js';
 import {sortLabel, kindLabel} from './filter-dimensions.js';
 import {rangeDetail} from './numeric-filter.js';
+import {askText, askChoice} from './ask-dialog.js';
 const API = '/api/library';
 const HEADERS = {'X-SFX-Local': '1', 'Content-Type': 'application/json'};
 
@@ -249,11 +250,11 @@ export function createAdvancedQuery({$, state, renderGrid, toast, esc, icon, res
     renderCollections();
   }
 
-  async function openCollection(id, {force = false, refresh = false} = {}) {
+  async function openCollection(id, {force = false, refresh = false, board = null} = {}) {
     // 画板 / 合集列表以前只在弹窗打开时才拉；现在画板卡片区直接调它，
     // 没加载过就会「点了没反应」，所以这里先补一次。
-    if (refresh || !collections.length) await refreshCollections();
-    const item = collections.find(entry => entry.id === id);
+    if (board?.id !== id && (refresh || !collections.length)) await refreshCollections();
+    const item = board?.id === id ? board : collections.find(entry => entry.id === id);
     if (!item) return;
     // 再点一次当前画板 = 退出回到全部资产，和「选中态可取消」的直觉一致。
     if (!force && activeBoard?.id === item.id) { await clearCollection(); return; }
@@ -273,8 +274,8 @@ export function createAdvancedQuery({$, state, renderGrid, toast, esc, icon, res
     // 打开手动画板时默认按画板里保存的顺序显示；用户仍可在排序下拉里换成别的。
     if (activeCollection && sort.value === 'recent') sort.value = 'collection';
     renderCollections();
-    await apply();
     broadcastBoard();
+    await apply();
   }
 
   function clearCollection() {
@@ -291,8 +292,8 @@ export function createAdvancedQuery({$, state, renderGrid, toast, esc, icon, res
 
   /** 新建手动画板。智能画板走画板模块的规则对话框（要命名 + 预览规则），不在这里分身。 */
   async function createBoard() {
-    const name = window.prompt('画板名称');
-    if (!name || !name.trim()) return;
+    const name = await askText({title: '新建画板', message: '建好后把卡片拖进来，或右键「加入画板」', placeholder: '给画板起个名字', maxLength: 80});
+    if (!name) return;
     try {
       await request('/collections', {method: 'POST', body: {name: name.trim()}});
       await refreshCollections();
@@ -306,12 +307,13 @@ export function createAdvancedQuery({$, state, renderGrid, toast, esc, icon, res
     if (!id) {
       const manual = collections.filter(item => !item.smart);
       if (!manual.length) { toast('请先在「更多」面板新建或选择一个合集'); return; }
-      const choice = window.prompt(
-        `把当前结果加入哪个合集？\n${manual.map((m, i) => `${i + 1}. ${m.name}`).join('\n')}`, '1');
+      const choice = await askChoice({
+        title: '加入哪个画板',
+        message: `当前加载的 ${lastUids.length} 条结果加入哪个画板？`,
+        choices: manual.map(item => ({label: item.name, value: item.id})),
+      });
       if (!choice) return;
-      const idx = Number(choice) - 1;
-      if (!Number.isInteger(idx) || idx < 0 || idx >= manual.length) { toast('输入无效'); return; }
-      id = manual[idx].id;
+      id = choice;
     }
     if (!lastUids.length) { toast('当前没有命中结果可加入'); return; }
     try {

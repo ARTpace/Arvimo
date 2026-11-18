@@ -1,3 +1,7 @@
+import {updateAlbumTiles,albumDragLayout} from './album-card-layout.js';
+import {albumFolderView,groupImageVariants,localIndexSnapshot} from './image-albums.js';
+import {createGalleryPreload} from './gallery-preload.js';
+import {previewHeader,compactPreview,setupPreviewDismiss} from './preview-sidebar.js';
 // 资产库目录里的「未登记文件」+ 通用文件预览。
 //
 // 资产库的卡片来自下载任务记录；用户自己拷进资产库文件夹的素材（模型、贴图、材质、字体、
@@ -6,9 +10,6 @@
 //   1. 只读——扫描不写盘、不改名、不删除；
 //   2. 3D / 全景复用 gltf-preview 那个渲染器（单例，canvas 在 #preview-dialog 里），
 //      图片/字体/音频/视频/文档才用 #file-preview-dialog，两种弹窗分工明确。
-import {TGALoader} from 'three/examples/jsm/loaders/TGALoader.js';
-import {decodeTiff} from './tiff-decode.js';
-import {decodePsd} from './psd-decode.js';
 import {groupImageSequences} from './image-sequence.js';
 import {assetCard,cardMedia,cardNote} from './card-shell.js';
 import {favoriteUid,registerFavoriteTarget,favoriteButtonHtml} from './favorite-targets.js';
@@ -16,7 +17,7 @@ import {favoriteUid,registerFavoriteTarget,favoriteButtonHtml} from './favorite-
 import {sizeText as fmtBytes} from './download-card.js';
 // 格式清单的唯一事实源：以前这里有 NATIVE_IMAGE / SERVER_IMAGE / GALLERY_IMAGE /
 // BROWSER_VIDEO 四份正则和服务端各写一份，新增 RAW / FLV / AI 时必然漏。现在全部从注册表派生。
-import {FORMATS, extensionOf, formatOf, formatKind, formatsOfModel} from './format-registry.js';
+import {FORMATS, extensionOf, formatOf, formatKind, formatsOfModel,hasModelThumbnail} from './format-registry.js';
 import {matchesFormatFilter} from './format-filter-selection.js';
 // 文档渲染的纯策略层（无 DOM、无第三方库，主包几乎不增重）：分派判定与提示文案都从它取。
 // 真正的渲染器 doc-render.js 是独立 bundle，只在第一次打开文档时 import() 加载。
@@ -26,9 +27,16 @@ const extsWhere = predicate => new Set(Object.values(FORMATS).filter(predicate).
 /** 浏览器自己能显示的图片，直接 <img>。 */
 const NATIVE_EXTS = extsWhere(item => item.preview === 'native');
 /** 浏览器解不了、但后端能转 PNG 的格式（PSD / 相机 RAW / HEIC / DDS）。 */
-const THUMB_EXTS = extsWhere(item => item.preview === 'thumb' || item.preview === 'decode-psd');
+const THUMB_EXTS = extsWhere(item => item.preview === 'thumb' || ['decode-psd','decode-tga','decode-tiff'].includes(item.preview));
 /** 能进图片素材包预览的格式（缩略图墙 + 大图）：原生图 + 后端转码图。 */
-const GALLERY_EXTS = new Set([...NATIVE_EXTS, ...extsWhere(item => item.preview === 'thumb' && (item.group === 'image' || item.kind === 'image'))]);
+const GALLERY_EXTS = new Set([...NATIVE_EXTS, ...extsWhere(item => THUMB_EXTS.has(item.ext) && item.kind === 'image')]);
+export const packageImages = pkg => {
+ // 远程收藏卡没有本地 entries：从存的远程地址也能拼出图集（卡片宫格 + 点开翻图）。
+ if(Array.isArray(pkg?.remoteImages)&&pkg.remoteImages.length&&!pkg.entries?.length){
+  return pkg.remoteImages.map((item,i)=>({rel:String(i),name:item.title||`图片 ${i+1}`,url:item.url,thumb:item.thumb}));
+ }
+ return groupImageVariants((pkg.entries||[]).filter(item=>item.rel&&GALLERY_EXTS.has(extensionOf(item.name))).map(item=>({...item,rel:item.rel,name:item.name})));
+};
 /** 视频是否原生可播由 openFile() 直接问注册表的 preview 字段，这里不再留第二份判据。 */
 const SERVER_IMAGE = name => THUMB_EXTS.has(extensionOf(name));
 const GALLERY_IMAGE = name => GALLERY_EXTS.has(extensionOf(name));
@@ -53,15 +61,55 @@ function fmtTime(ms){
 export function packageRel(pkg,rel){return pkg.rel?`${pkg.rel}/${rel}`:rel;}
 /** 缩略图 URL：一律走后端缩略图缓存（PNG 缩放、PSD 转码都在那里，w 是最大边）。
  *  后端遇到做不了的格式（SVG / 没装 ffmpeg）会原样透传，所以这里不必要再按格式分支。
- *  导出给画板视图用：画板要显示素材包封面，走的是同一套取图规则。 */
+ *  导出给画板视图用：画板要显示素材包封面，走的是同一套取图规则。
+ *  例外：SVG 这类浏览器自己就能画、但后端拒转的图，直接给原文件 —— 走 /api/local/thumb 只会 415，
+ *  卡片就变成「缩略图加载失败」（用户 2026-11-16 反馈的封面失败里就有它）。 */
 export function packageImageUrl(pkg,rel,width){
   if(pkg.imageUrl)return pkg.imageUrl(rel,true);
-  return `/api/local/thumb?root=${encodeURIComponent(pkg.root)}&rel=${encodeURIComponent(packageRel(pkg,rel))}&w=${width||512}`;
+  // 远程收藏卡的拼贴缩略图：rel 是 remoteImages 索引，直接走 /api/image 代理取远程小图。
+  if(pkg.remote&&Array.isArray(pkg.remoteImages)){
+   const item=pkg.remoteImages[Number(rel)]||{};
+   const raw=item.thumb||item.url||'';
+   return `/api/image?url=${encodeURIComponent(raw)}&v=2`;
+  }
+  if(pkg.root&&BROWSER_ONLY_IMAGE.test(String(rel)))return packageFileUrlOf(pkg,rel);
+  return `/api/local/thumb?root=${encodeURIComponent(pkg.root)}&rel=${encodeURIComponent(packageRel(pkg,rel))}&w=${width||512}&v=${Number(pkg.mtime)||0}`;
 }
+/** 浏览器直接渲染、后端缩略图通道不接的图片格式。 */
+const BROWSER_ONLY_IMAGE=/\.(svg|ico)$/i;
+const packageFileUrlOf=(pkg,rel)=>`/api/local/file?root=${encodeURIComponent(pkg.root)}&rel=${encodeURIComponent(packageRel(pkg,rel))}`;
 
-export function createLocalFiles({$,icon,esc,gltfPreview,notify,onChanged,onFetchPackage,storage,favorites=()=>new Set()}){
+/**
+ * 卡片封面：平台缩略图 → 包内现成图片 → 兜底封面（derivedCover）。
+ * derivedCover 是后端在「包里一张图都没有」时推出来的：3D 主文件（现渲一帧）、
+ * HDR/EXR（tonemap 一张）、视频（抓一帧），或者压缩包里的一张图。
+ * @returns {{src:string, modelCover?:boolean}|null}
+ */
+export function packageCoverOf(pkg){
+  if(pkg.thumb)return {src:`/api/image?url=${encodeURIComponent(pkg.thumb)}`};
+  if(pkg.cover)return {src:packageImageUrl(pkg,pkg.cover,384)};
+  const derived=pkg.derivedCover;
+  if(!derived?.rel)return null;
+  if(derived.source==='archive'){
+    // 压缩包内的图：解出一个条目流给浏览器。带 w=384 让后端顺手缩成卡片尺寸 ——
+    // 包里的底色图常有 1~15 MB，原样发进网格会明显拖慢首屏。
+    // container 为空表示「这个包自己就是一个 zip」（pkg.rel 就是 zip 路径），不能再包一层包目录，
+    // 否则拼成 `x.zip/x.zip` 直接 404 —— 只落下一个 zip 的素材包全是这种。
+    const zipRel=derived.container?packageRel(pkg,derived.container):pkg.rel;
+    return {src:`/api/local/archive/entry?root=${encodeURIComponent(pkg.root)}&rel=${encodeURIComponent(zipRel)}&entry=${encodeURIComponent(derived.rel)}&w=384`};
+  }
+  return {src:`/api/local/thumb?root=${encodeURIComponent(pkg.root)}&rel=${encodeURIComponent(packageRel(pkg,derived.rel))}&w=384&v=${Number(pkg.mtime)||0}`,modelCover:isModelRel(derived.rel)};
+}
+/** 3D 主文件当封面时要挂 .model-thumb：失败后由 library-view 交给离屏渲染器出图。 */
+const isModelRel=hasModelThumbnail;
+
+export function createLocalFiles({activeBoardId=()=>'',$,icon,esc,gltfPreview,notify,onChanged,onFetchPackage,onBrowse,onAlbumBoard,albumTags=()=>[],onAlbumTags,storage,favorites=()=>new Set()}){
+ let albumFolder='';
+ const albumHistory=[];
  let files=[];
  let packages=[];
+ const albumReferences=new Map();
+ const albumFolders=new Map();
  // 图片序列是「视图层」概念：磁盘上仍是一个个文件，只有渲染时才折叠成一张卡。
  let sequences=[];
  let sequenceMembers=new Set();
@@ -147,7 +195,7 @@ export function createLocalFiles({$,icon,esc,gltfPreview,notify,onChanged,onFetc
    packages=Array.isArray(data.packages)?data.packages:[];
    truncated=!!data.truncated;
    rebuildSequences();
-   const index=JSON.stringify({version:1,files,packages,truncated});
+   const index=JSON.stringify(localIndexSnapshot({files,packages,truncated}));
    try{if(index.length<2*1024*1024)storage?.setItem('sfx-local-index-v1',index);else storage?.setItem('sfx-local-index-v1','null');}catch{}
    return {files,packages,truncated};
   }catch(error){
@@ -157,6 +205,27 @@ export function createLocalFiles({$,icon,esc,gltfPreview,notify,onChanged,onFetc
   }
  }
 
+ function organizePackages(rows,{query=''}={}){
+  const images=rows.filter(pkg=>pkg.category==='images'),other=rows.filter(pkg=>pkg.category!=='images');
+  const nav=document.getElementById('album-folder-nav');
+  if(nav){nav.hidden=!albumFolder||!!query;nav.textContent='返回'+(albumHistory.at(-1)?'上一层':'全部资产')+' · '+albumFolder.split('/').pop();}
+  if(query)return rows.map(pkg=>({pkg}));
+  const view=albumFolderView(images,albumFolder);
+  return [...(albumFolder?[]:other.map(pkg=>({pkg}))),...view.albums.map(pkg=>({pkg})),...view.folders.map(folder=>({folder}))];
+ }
+ function searchPackageImages(pkg,query){
+  const term=String(query||'').trim().toLowerCase();if(!term||pkg.category!=='images')return [];
+  return packageImages(pkg).filter(item=>[item.name,...albumTags(pkg,item)].some(value=>String(value).toLowerCase().includes(term))).map(item=>({root:pkg.root,rel:packageRel(pkg,item.rel),name:item.name,ext:extensionOf(item.name),kind:'image',bytes:item.bytes||0,addedAt:pkg.addedAt,mtime:pkg.mtime}));
+ }
+ function folderCard(folder){
+  const pkg={root:'album-folder',rel:folder.rel,albums:folder.albums};albumFolders.set(folder.rel,pkg);
+  const mode=collageCount(pkg),wide=localStorage.getItem(`${collageKey(pkg)}:wide`)==='1';
+  return `<article role="button" tabindex="0" class="model-card album-folder-card pkg-collection pkg-c${mode}${mode===6&&wide?' pkg-wide':''}" data-album-folder="${esc(folder.rel)}" title="打开文件夹：${esc(folder.name)}"><div class="album-folder-stack"><div class="album-folder-covers">${folderMedia(pkg,mode)}</div><div class="album-folder-caption"><strong>${esc(folder.name)}</strong><span class="album-folder-count">${folder.albums.length} 个图集</span></div></div><button type="button" class="pkg-resize" data-pkg-resize data-no-drag title="拖动调整文件夹展示" aria-label="拖动调整文件夹展示"></button></article>`;
+ }
+ function folderMedia(pkg,count){
+  const covers=pkg.albums.slice(0,count).map(album=>packageCoverOf(album)?.src||'');
+  return `<div class="pkg-collage">${covers.map(src=>`<div class="pkg-tile">${src?`<img src="${esc(src)}" alt="" loading="lazy" decoding="async">`:icon('folder')}</div>`).join('')}</div>`;
+ }
  /** 搜索词与类型筛选跟着资产库工具条走，两种条目共用一套条件。 */
  function matches(file,{query='',kind='',formats=null}={}){
   if(kind){
@@ -180,7 +249,7 @@ export function createLocalFiles({$,icon,esc,gltfPreview,notify,onChanged,onFetc
   if(formats?.active&&!matchesFormatFilter(formatsOfModel(pkg),formats))return false;
   const q=String(query||'').trim().toLowerCase();
   if(!q)return true;
-  return [pkg.title,pkg.author,pkg.rel].some(value=>String(value||'').toLowerCase().includes(q));
+  return [pkg.title,pkg.author,pkg.rel,...(pkg.entries||[]).flatMap(item=>[item.name,...albumTags(pkg,item)])].some(value=>String(value||'').toLowerCase().includes(q));
  }
 
  /** 序列索引只从 files 派生，不写盘；扫描结果变了就整表重建。 */
@@ -208,6 +277,7 @@ export function createLocalFiles({$,icon,esc,gltfPreview,notify,onChanged,onFetc
  function stopSequence(){
   if(!seqPlayer)return;
   clearTimeout(seqPlayer.timer);
+  seqPlayer.clearWarm?.();
   if(seqPlayer.onKey)seqPlayer.dlg?.removeEventListener('keydown',seqPlayer.onKey);
   seqPlayer=null;
  }
@@ -240,7 +310,9 @@ export function createLocalFiles({$,icon,esc,gltfPreview,notify,onChanged,onFetc
   if(!img||!toggle)return;
   const player={dlg:$('#file-preview-dialog'),index:0,playing:false,timer:null,fps:12};
   seqPlayer=player;
-  const warm=new Set();
+  const warm=new Map();
+  const releaseWarm=image=>image.removeAttribute('src');
+  player.clearWarm=()=>{for(const image of warm.values())releaseWarm(image);warm.clear();};
   const paint=index=>{
    const at=((index%seq.count)+seq.count)%seq.count;
    player.index=at;
@@ -248,13 +320,14 @@ export function createLocalFiles({$,icon,esc,gltfPreview,notify,onChanged,onFetc
    seek.value=String(at);
    pos.textContent=`${at+1} / ${seq.count}`;
    // 顺着播放方向预热后面三帧：24/30fps 时现解码会拖影。
-   for(const step of [1,2,3]){
-    const url=frameUrl(seq,seq.frames[(at+step)%seq.count]);
+   const wanted=new Set([1,2,3].map(step=>frameUrl(seq,seq.frames[(at+step)%seq.count])));
+   for(const [url,image] of warm)if(!wanted.has(url)){releaseWarm(image);warm.delete(url);}
+   for(const url of wanted){
     if(warm.has(url))continue;
-    warm.add(url);
     const pre=new Image();
     pre.decoding='async';
     pre.src=url;
+    warm.set(url,pre);
    }
   };
   const pause=()=>{
@@ -304,12 +377,18 @@ export function createLocalFiles({$,icon,esc,gltfPreview,notify,onChanged,onFetc
  }
 
  function card(file){
-  const label=KIND_LABEL[file.kind]||'其他';
-  return `<article class="local-file-card" data-file="${esc(keyOf(file))}" tabindex="0" role="button"
-   aria-label="预览 ${esc(file.name)}" title="${esc(file.rel)}">
-   <div class="local-file-badge">${icon(KIND_ICON[file.kind]||'cube')}<span>${esc(file.ext||'—')}</span></div>
-   <div class="local-file-copy"><strong>${esc(file.name)}</strong><small>${esc(label)} · ${esc(fmtBytes(file.bytes))}</small><small>${esc(fmtTime(file.mtime))}</small></div>
-  </article>`;
+  const model=isModelRel(file.rel||file.name),label=KIND_LABEL[file.kind]||'其他';
+  const format=formatOf(file.name||file.rel);
+  const hasCover=model||GALLERY_IMAGE(file.name)||file.kind==='env'||file.kind==='video'||format?.preview==='thumb';
+  const query=new URLSearchParams({root:file.root||'',rel:file.rel||'',w:'384',v:String(Number(file.mtime)||0)});
+  const src=hasCover&&file.root?`/api/local/${BROWSER_ONLY_IMAGE.test(file.name)?'file':'thumb'}?${query}`:'';
+  const uid=favoriteUid('file',keyOf(file));
+  registerFavoriteTarget(uid,{uid,name:file.name,platform:'local',assetType:model?'models':file.kind,thumbnail:src,localRoot:file.root,localRel:file.rel},{skipCollect:true});
+  const facts=[`${label} · ${file.ext||'—'}`,fmtBytes(file.bytes),fmtTime(file.mtime),file.rel];
+  return assetCard({keyName:'file',keyValue:esc(keyOf(file)),className:`thumb-contain local-asset-card${model?' local-model-card':''}`,
+   media:cardMedia({src:esc(src),alt:esc(file.name),className:model?'thumbnail model-thumb':'thumbnail',icon:icon(KIND_ICON[file.kind]||'grid'),text:esc(file.ext||label)}),
+   overlay:`<button class="preview-hit" aria-label="预览 ${esc(file.name)}"></button>${favoriteButtonHtml({uid,saved:favorites().has(uid),icon,esc})}<button type="button" class="card-facts-btn" data-card-facts title="查看信息" aria-label="查看信息">${icon('help')}</button><div class="card-facts">${facts.map(line=>`<p>${esc(line)}</p>`).join('')}</div>`,
+   title:esc(file.name),titleAttrs:`title="${esc(file.rel)}"`});
  }
 
  /** 一个资产包一张卡：封面是官方缩略图或包内图片，点开看包内文件或直接进 3D 预览。
@@ -331,45 +410,65 @@ function packageCard(pkg){
    ?`<span class="card-live-badge" data-status="remote">远程收藏${Number(pkg.imageCount)?` · ${Number(pkg.imageCount)} 张`:''}</span>`
    :'';
  // 远程卡补原图也收进右键菜单。
-  // 多图集合：包里能进预览的图片 ≥2 张、且不是边下边写的半成品时，媒体区改成 2×2 拼贴。
+  // 多图集合：包里能进预览的图片 ≥2 张、且不是边下边写的半成品时，媒体区改成宫格拼贴。
   // 计数用左上角蓝色「N 张」角标（与画板的绿、单图卡的灰区分），不在这里的脚注里重复。
   const galleryImgs=packageImages(pkg);
   const isCollection=galleryImgs.length>1&&!liveBadge;
+  // 每个图集独立记忆宫格大小，由卡片角标拖动调节。
+  const collage=isCollection?collageCount(pkg):0;
   // 素材包的封面是 1:1 图，按 contain 显示（cover 会把 alpha 蒙版的边切掉）。
-  const cover=pkg.thumb?`/api/image?url=${encodeURIComponent(pkg.thumb)}`:(pkg.cover?packageImageUrl(pkg,pkg.cover,384):'');
+  const cover=packageCoverOf(pkg);
   const media=isCollection
-   ? collectionMedia(galleryImgs,pkg)
-   : cardMedia({src:cover?esc(cover):'',alt:esc(pkg.title),icon:kindIcon,text:esc(label)});
+   ? collectionMedia(galleryImgs,pkg,collage)
+   : cover
+    ? `<img class="${cover.modelCover?'thumbnail model-thumb':'thumbnail'}" src="${esc(cover.src)}" alt="${esc(pkg.title)}" loading="lazy" decoding="async">`
+    : cardMedia({icon:kindIcon,text:esc(label)});
   // 脚注：平台标签 + 名称 + 作者，统一压在封面底部（图片内部），不另占封面外的文字栏，
   // 也不在封面左上角再摆一条类型标（避免和角标挤在同一角）。下载按钮挪到脚注右上角。
  const facts=[label,pkg.author||'',isCollection?`${galleryImgs.length} 张`:'',pkg.rel||''].filter(Boolean);
  // 本地素材包也用同一颗心形键。它已经在资产库里（只是由磁盘索引画卡），所以登记为
  // skipCollect：只记收藏标记，不再往 state.models 里塞一份会把素材包卡顶掉的模型卡。
  const favUid=/^[a-f0-9]{32}$/i.test(pkg.uid||'')?pkg.uid:favoriteUid('package',packageKey(pkg));
- registerFavoriteTarget(favUid,{uid:favUid,name:pkg.title,platform:pkg.platform||'local',assetType:'images',thumbnail:pkg.thumb||pkg.cover||''},{skipCollect:true});
+ registerFavoriteTarget(favUid,{uid:favUid,name:pkg.title,platform:pkg.platform||'local',assetType:'images',thumbnail:packageCoverOf(pkg)?.src||pkg.thumb||pkg.cover||''},{skipCollect:true});
  const heart=favoriteButtonHtml({uid:favUid,saved:favorites().has(favUid),icon,esc});
- const overlay=`${isCollection?countBadge(galleryImgs.length):''}<button class="preview-hit" aria-label="打开素材包 ${esc(pkg.title)}"><span>${kindIcon}打开素材包</span></button>${liveBadge}${remoteBadge}${heart}<button type="button" class="card-facts-btn" data-card-facts title="查看信息" aria-label="查看信息">${icon('help')}</button><div class="card-facts">${facts.map(line=>`<p>${esc(line)}</p>`).join('')}</div>`;
+  // 漏登记：目录里明明有包内身份（info.json / uid），资产库里却没有对应记录。
+  // 不标出来的话，它和「用户刚拷进来还没登记的素材包」长得一模一样，看着就像重复卡。
+  const unclaimedBadge=pkg.category!=='images'&&pkg.pendingClaim
+   ?`<span class="card-live-badge" data-status="unclaimed" title="这个目录里有包内身份信息，但资产库没有对应记录">未登记</span>`
+   :'';
+ const overlay=`<button class="preview-hit" aria-label="打开素材包 ${esc(pkg.title)}"></button>${unclaimedBadge}${liveBadge}${remoteBadge}${heart}<button type="button" class="card-facts-btn" data-card-facts title="查看信息" aria-label="查看信息">${icon('help')}</button><div class="card-facts">${facts.map(line=>`<p>${esc(line)}</p>`).join('')}</div>`;
   return assetCard({
    keyName:'package',
    keyValue:esc(packageKey(pkg)),
-   className:isCollection?'pkg-collection':'thumb-contain',
+   className:collage?`pkg-collection pkg-c${collage}${collage===6&&localStorage.getItem(`${collageKey(pkg)}:wide`)==='1'?' pkg-wide':''}`:'thumb-contain',
    media,
    overlay,
    title:esc(pkg.title),
    titleAttrs:`title="${esc(pkg.rel||pkg.title)}"`,
    byline:pkg.author?`<span class="card-byline">${esc(pkg.author)}</span>`:'',
    actions:download,
-  });
+  }).replace('</article>',(collage?'<button type="button" class="pkg-resize" data-pkg-resize data-no-drag title="上下拖动调整图集展示" aria-label="拖动调整图集展示"></button>':'')+'</article>');
 }
-/** 左上角蓝色「N 张」角标芯片：多图集合卡的识别标记（与画板的绿、单图卡的灰区分）。 */
-function countBadge(n){return `<span class="pkg-count-badge">${icon('grid')}<span>${n} 张</span></span>`;}
-/** 多图集合卡的媒体区：取前 4 张图拼成 2×2，超额时第 4 格压「+N」。 */
-function collectionMedia(imgs,pkg){
-  const shown=imgs.slice(0,4);
+/** 以目录身份保存每张图集的布局；非法值回 4 宫。 */
+const COLLAGE_KEY='assetvault-pkg-collage-v2';
+function collageKey(pkg){
+ const board=activeBoardId();
+ const scope=board?`board:${board}`:albumFolder?`folder:${albumFolder}`:'library';
+ return `${COLLAGE_KEY}:${JSON.stringify([scope,packageKey(pkg)])}`;
+}
+function collageCount(pkg){
+  const saved=Number(localStorage.getItem(collageKey(pkg)));
+  return saved===6||saved===9?saved:4;
+}
+/** 多图集合卡的媒体区：按当前宫格模式取前 N 张拼贴，超额时最后一格压「+N」。 */
+function collectionMedia(imgs,pkg,count=4){
+  const total=pkg.previewImageCount||imgs.length;
+  const shown=imgs.slice(0,count);
+  const overflowIndex=count-1;
   const tiles=shown.map((im,i)=>{
-   const dim=i===3&&imgs.length>4;
+   const dim=i===overflowIndex&&total>count;
    const src=packageImageUrl(pkg,im.rel,256);
-   return `<div class="pkg-tile"><img class="pkg-tile-img" src="${esc(src)}" alt="" loading="lazy" decoding="async">${dim?`<span class="pkg-tile-plus">+${imgs.length-3}</span>`:''}</div>`;
+   return `<div class="pkg-tile"><img class="pkg-tile-img" src="${esc(src)}" alt="" loading="lazy" decoding="async">${dim?`<span class="pkg-tile-plus">+${total-count+1}</span>`:''}</div>`;
   }).join('');
   return `<div class="pkg-collage">${tiles}</div>`;
 }
@@ -388,16 +487,31 @@ function collectionMedia(imgs,pkg){
  function packagePhotoUrl(pkg,rel){
   if(pkg.imageUrl)return pkg.imageUrl(rel,false);
   const name=String(rel).split('/').pop();
-  // 大图预览最大边从 2048 降到 1024：PSD/RAW/HEIC/DDS 这类要后端转码的图，尺寸减半后
-  // 解码与传输都明显变快，预览本就看个全貌，1024 足矣；原生浏览器图走原文件不受影响。
-  return SERVER_IMAGE(name)?packageImageUrl(pkg,rel,1024):packageFileUrl(pkg,rel);
+  // 转码预览明确请求原尺寸 PNG，卡片继续使用受限尺寸的 WebP。
+  return SERVER_IMAGE(name)?`${packageImageUrl(pkg,rel,1024)}&full=1`:packageFileUrl(pkg,rel);
  }
 
- function openPackage(pkg){
+ async function openPackage(pkg){
+  if(pkg?.previewOnly){try{await scan();const full=packages.find(item=>packageKey(item)===packageKey(pkg));if(!full||full.previewOnly)throw Error('完整清单还未就绪');pkg=full;}catch(error){notify?.(`图集清单加载失败：${error.message}`);return;}}
   if(!pkg)return;
-  // 远程收藏卡里只有 info.json：没有可打开的文件，也没有缩略图墙。
-  // 别弹一个空清单让人以为包坏了 —— 直接说清下一步该点哪儿。
-  if(pkg.remote){notify?.('这个包只记了平台信息（标题 / 作者 / 封面），图片还没下载到本机：点卡片上的「下载原图」补齐。');return;}
+  // 远程收藏卡：没下原图，但「只入库」时存了每张图的远程地址 → 直接开图集画廊逐张翻。
+  // 给包挂 imageUrl 钩子，把 rel 当 remoteImages 索引：openGallery 的缩略图条和大图都从
+  // /api/image 代理取远程地址，一张原图都不下。老远程卡没有这个字段，仍走提示不动。
+  if(pkg.remote){
+   const remote=Array.isArray(pkg.remoteImages)?pkg.remoteImages:[];
+   if(remote.length){
+    const previewPkg={...pkg,imageUrl:(rel,useThumb)=>{
+     const item=remote[Number(rel)]||remote[0]||{};
+     const raw=(useThumb&&item.thumb)?item.thumb:item.url;
+     return `/api/image?url=${encodeURIComponent(raw||'')}&v=2${useThumb?'':'&full=1'}`;
+    }};
+    const shots=remote.map((item,i)=>({rel:String(i),name:item.title||`图片 ${i+1}`,type:'image',
+     url:item.url,thumb:item.thumb,pageUrl:item.pageUrl,author:item.author,width:item.width,height:item.height}));
+    openGallery(previewPkg,shots);
+    return;
+   }
+   notify?.('这个包只记了平台信息（标题 / 作者 / 封面），图片还没下载到本机：点卡片上的「下载原图」补齐。');return;
+  }
   // 有主文件就直接进它自己的预览（模型进 3D，图片进图片预览）；没有就把包内清单摊出来。
   if(pkg.entry&&pkg.type==='folder'){
    const name=pkg.entry.split('/').pop();
@@ -421,14 +535,8 @@ function collectionMedia(imgs,pkg){
    '资产包清单 · 只读');
  }
 
- /** 包内能进预览的图片（TGA/TIFF 这类还是得靠单文件预览，先不进缩略图墙）。 */
- function packageImages(pkg){
-  return (pkg.entries||[])
-   .filter(item=>item.rel&&GALLERY_IMAGE(item.name))
-   .map(item=>({...item,rel:item.rel,name:item.name}));
- }
 
-const MAX_TILES=120;
+
 let galleryPkg=null,galleryImages=[],galleryIndex=0,galleryZoom=null;
 /** 缩略图条懒加载观察器：只让滚到视口附近的图真正去后端取，避免一次性打上百个请求。 */
 let stripObserver=null;
@@ -445,31 +553,42 @@ function openGallery(pkg,images,index=0){
  const dlg=$('#file-preview-dialog'),stage=$('#file-preview-stage'),aside=$('#file-preview-details');
  if(!dlg||!stage||!aside)return;
  galleryPkg=pkg;
- galleryImages=pkg.imageUrl?images:images.slice(0,MAX_TILES);
+ galleryImages=images;
  galleryIndex=Math.max(0,Math.min(Number(index)||0,galleryImages.length-1));
  clearStage();
  dlg.classList.add('is-gallery');
  dlg.classList.toggle('is-xhs-note',!!pkg.note);
  stage.classList.add('is-gallery');
- $('#file-preview-title').innerHTML=`${icon(PACKAGE_ICON[pkg.category]||'image')}${esc(pkg.title)}`;
+ $('#file-preview-title').innerHTML=`${icon(PACKAGE_ICON[pkg.category]||'image')}图片预览`;
  // 这一行「资产包预览 · 只读」压在画面正中，纯噪音，直接留空。
  $('#file-preview-hint').textContent='';
- stage.innerHTML=`<div class="local-gallery-main" data-gallery-main>
-   <img class="local-gallery-photo" alt="" draggable="true" data-drag-url="" data-drag-root="" data-drag-rel="" data-drag-name="">
+ stage.innerHTML=`<div class="local-gallery-main" data-gallery-main data-preview-pan>
+   <img class="local-gallery-photo" alt="" draggable="false">
    <video class="local-gallery-video" controls playsinline loop preload="auto" hidden></video>
    <iframe data-gallery-viewer title="交互式 3D 预览" allow="fullscreen" allowfullscreen hidden style="position:absolute;inset:0;width:100%;height:100%;border:0"></iframe>
    <p class="local-gallery-error" hidden>这张图生成不了预览</p>
    ${pkg.note?'<div class="xhs-float-title" data-xhs-title></div>':''}
    ${pkg.note?`<div class="xhs-pager"><span data-xhs-page></span><div class="xhs-dots" data-xhs-dots></div></div>`:''}
    <div class="local-gallery-hud">
+    <button type="button" data-gallery-nav="-1" title="上一张" aria-label="上一张">‹</button>
+    <span data-gallery-page></span>
+    <button type="button" data-gallery-nav="1" title="下一张" aria-label="下一张">›</button>
+    <i class="gallery-hud-divider" aria-hidden="true"></i>
     <button type="button" data-gallery-zoom="out" aria-label="缩小">−</button>
     <span data-gallery-zoom-label>100%</span>
     <button type="button" data-gallery-zoom="in" aria-label="放大">+</button>
-    <button type="button" data-gallery-zoom="reset" title="适应窗口">适应</button>
+    <i class="gallery-hud-divider" aria-hidden="true"></i>
+    <button type="button" data-gallery-zoom="reset" title="适应窗口" aria-label="适应窗口">${icon('scan')}</button>
    </div>
   </div>`;
- // 缩略图条挂在 dialog 上（不是 preview-layout 里面），才能横跨大图和信息栏的整个宽度。
+ // 本地图集将缩略图放到右栏，信息保留为可展开区域。
+ if(!pkg.note&&!pkg.details){
+  aside.innerHTML='<div class="gallery-side-info"><div data-gallery-info></div></div><label class="gallery-thumb-size" title="缩略图尺寸"><span aria-hidden="true">⊞</span><input type="range" min="0" max="5" step="1" data-gallery-thumb-size aria-label="缩略图尺寸"></label>';
+  aside.classList.add('gallery-thumb-sidebar');
+ }
  const strip=ensureStrip(dlg);
+ strip.classList.remove('is-overview');
+ strip.hidden=galleryImages.length<2;
  // 不再一次性把全部缩略图 src 写死（一条 222 张的图集会瞬间发出 222 个请求，卡住图片服务与磁盘）；
  // 改成「占位 + 滚到附近才加载」，宽度也从 256 降到 128，更快更省。
  strip.innerHTML=galleryImages.map((item,i)=>{
@@ -480,6 +599,7 @@ function openGallery(pkg,images,index=0){
  }).join('');
  setupStripLazyLoad(strip);
  galleryZoom=bindZoom(stage.querySelector('[data-gallery-main]'),stage.querySelector('[data-gallery-zoom-label]'));
+ stage.querySelector('.local-gallery-photo')?.addEventListener('dragstart',event=>event.preventDefault());
  preloadGallery();
  showGalleryImage(galleryIndex,{reveal:true});
  if(!dlg.open)dlg.showModal();
@@ -491,7 +611,23 @@ function ensureStrip(dlg){
  if(!strip){
   strip=document.createElement('div');
   strip.className='local-gallery-strip';
-  dlg.append(strip);
+  const sidebar=dlg.querySelector('.gallery-thumb-sidebar');
+  (sidebar||dlg).append(strip);
+  if(sidebar){
+   const input=sidebar.querySelector('[data-gallery-thumb-size]');
+   const saved=Number(localStorage.getItem('assetvault-gallery-thumb-columns'))||4;
+   const columns=Math.max(3,Math.min(8,Math.round(saved)));
+   input.value=String(8-columns);
+   const applySize=()=>{
+    const count=8-Number(input.value);
+    strip.style.setProperty('--gallery-thumb-columns',String(count));
+    input.setAttribute('aria-valuetext',`每行 ${count} 张`);
+    input.title=`每行 ${count} 张`;
+    localStorage.setItem('assetvault-gallery-thumb-columns',String(count));
+   };
+   applySize();
+   input.addEventListener('input',applySize);
+  }
  }
  return strip;
 }
@@ -522,29 +658,15 @@ function setupStripLazyLoad(strip){
 function galleryInfoHtml(pkg,item){
  if(pkg.details)return '';
  const count=galleryImages.length;
- return `<div class="eyebrow">LOCAL PACKAGE</div>
-  <h2>${esc(pkg.title)}</h2>
-  <p class="author-name">${esc(PACKAGE_LABEL[pkg.category]||'资产')}${pkg.resolution?` · ${esc(pkg.resolution)}`:''}</p>
-  <div class="details-stats"><div><strong>${count}</strong><span>张图片</span></div><div><strong>${esc(fmtBytes(pkg.bytes))}</strong><span>包大小</span></div></div>
-  <div class="local-gallery-current">
-   <span class="local-gallery-label">当前图片 ${galleryIndex+1} / ${count}</span>
-   <p class="local-gallery-name">${esc(item.name)}</p>
-   <p class="local-gallery-size">${esc(fmtBytes(item.bytes))}</p>
-  </div>
-  <div class="detail-license"><p class="local-file-path">${esc(pkg.rel||pkg.root)}</p><p>滚轮缩放大图、按住拖动看细节；← → 或点下方缩略图切换。</p></div>`;
+ const variants=item.variants||[];
+ const formats=variants.length>1?`<div class="gallery-formats" aria-label="文件版本">${variants.map((variant,i)=>`<button type="button" data-gallery-variant="${i}" aria-pressed="${variant.rel===item.rel}">${esc(extensionOf(variant.name).toUpperCase())}</button>`).join('')}</div>`:'';
+ return `<div class="gallery-summary"><span class="gallery-summary-icon" aria-hidden="true">${icon('image')}</span>${previewHeader({...item,name:item.name||pkg.title,platform:'local',assetType:'images'},{index:galleryIndex,count})}</div>${formats}${pkg.root?`<div class="gallery-image-actions">${onAlbumBoard?'<button type="button" class="secondary" data-gallery-board title="加入画板" aria-label="加入画板">＋</button>':''}<label><input aria-label="单图标签" ${onAlbumBoard?'':'disabled'} data-gallery-tags value="${esc(albumTags(pkg,item).join('，'))}" placeholder="标签"></label></div>`:''}<details class="pv-extra"><summary>${icon('help')}<span>详细信息</span></summary><p class="local-file-path">${esc(pkg.rel||pkg.root)}</p></details>`;
 }
 
-let galleryPreload=[];
-/** 笔记图往往一张几 MB，滚到才请求就会空等。打开时把整篇图并行拉进内存，翻页直接换已经解码的那张。 */
+const galleryPreload=createGalleryPreload();
 function preloadGallery(){
- galleryPreload.forEach(img=>{img.onload=null;img.onerror=null;});
- if(!galleryPkg?.note||galleryPkg.noteLoading||galleryImages.length<2){galleryPreload=[];return;}
- galleryPreload=galleryImages.map(item=>{
-  const img=new Image();
-  img.decoding='async';
-  img.src=packagePhotoUrl(galleryPkg,item.rel);
-  return img;
- });
+ if(!galleryPkg?.note||galleryPkg.noteLoading){galleryPreload.clear();return;}
+ galleryPreload.update(galleryImages,galleryIndex,item=>packagePhotoUrl(galleryPkg,item.rel));
 }
 
 /** 换大图只改 <img> 的 src，缩略图条保留不动：整块重绘会让横向滚动位置跳回开头。 */
@@ -590,7 +712,7 @@ function showGalleryImage(index,{reveal=false}={}){
    img.dataset.dragName=item.name||item.title||'';
    const error=img.parentElement?.querySelector('.local-gallery-error');
   if(error)error.hidden=true;
-  img.onload=()=>{if(error)error.hidden=true;img.classList.remove('is-broken');};
+  img.onload=()=>{if(error){error.hidden=img.dataset.fallback!=='1';if(!error.hidden)error.textContent='原图加载失败，当前显示缩略图';}img.classList.remove('is-broken');};
   // PSD 转码失败（坏文件 / 不认识的压缩）时别留一张破图，说清楚为什么。
   img.onerror=()=>{
    // 图站原图（花瓣这种无后缀直链、部分站的 4K 图）回源偶发失败时会整块黑屏。
@@ -606,18 +728,22 @@ function showGalleryImage(index,{reveal=false}={}){
    delete img.dataset.fallback;
    img.alt=item.name;
    const url=packagePhotoUrl(galleryPkg,item.rel);
-   const cached=galleryPreload[index];
-   const show=()=>{if(galleryIndex===index)img.src=url;};
-   // 还没解码完就先留着上一张，避免切过去是一块空白再慢慢出来。
-   if(!img.getAttribute('src')||(cached?.complete&&cached.naturalWidth))show();
-   else if(cached)cached.addEventListener('load',show,{once:true});
-   else show();
+   // 当前图独立持有src，预取淘汰不会中止当前图加载。
+   img.src=url;
   }
  }
+ preloadGallery();
  galleryZoom?.reset();
  const aside=$('#file-preview-details');
- if(aside)aside.innerHTML=galleryInfoHtml(galleryPkg,item);
+ const info=aside?.querySelector('[data-gallery-info]')||aside;
+ if(info){info.classList.add('pv-sidebar');info.innerHTML=galleryInfoHtml(galleryPkg,item);}
  galleryPkg.details?.(item,galleryIndex,galleryImages.length);
+ if(!galleryPkg.details&&info)compactPreview(info,{...item,uid:`${galleryPkg.root||galleryPkg.title}|${item.rel}`,name:item.name||galleryPkg.title,platform:'local',assetType:'images'});
+ const infoAnchor=$('#file-preview-dialog .pv-info-anchor');
+ if(hud&&infoAnchor&&!galleryPkg.note)hud.append(infoAnchor);
+ const counter=hud?.querySelector('[data-gallery-page]');
+ if(counter)counter.textContent=`${index+1} / ${galleryImages.length}`;
+ for(const button of hud?.querySelectorAll('[data-gallery-nav]')||[])button.disabled=Number(button.dataset.galleryNav)<0?index===0:index===galleryImages.length-1;
  const pageLabel=stage?.querySelector('[data-xhs-page]');
  if(pageLabel)pageLabel.textContent=galleryPkg?.noteLoading?'正在读取这篇笔记的全部图片…':`第${index+1}页 / 共${galleryImages.length}页`;
  const floatTitle=stage?.querySelector('[data-xhs-title]');
@@ -633,6 +759,16 @@ function showGalleryImage(index,{reveal=false}={}){
   active.classList.add('is-active');
   if(reveal)active.scrollIntoView({inline:'center',block:'nearest'});
  }
+}
+
+/** 网页版：预览大图拖出去给的是原图（drag-payload.js 写的 dataset），但它被拖回窗口时
+ *  drop 里同样是 Files —— 标上「站内拖拽」，drop-import 才不会当成外部文件去入库。
+ *  桌面版不起 HTML5 拖拽（drag-out.js 掐掉 dragstart），由那边的 drag-out-active 负责，
+ *  这里挂上反而可能留下一个永远摘不掉的类，把真正的外部拖入挡在外面。 */
+function markSelfDrag(img){
+ if(!img||globalThis.window?.__TAURI__?.core?.invoke)return;
+ img.addEventListener('dragstart',()=>document.documentElement.classList.add('self-drag'));
+ img.addEventListener('dragend',()=>document.documentElement.classList.remove('self-drag'));
 }
 
 /** 滚轮以光标为中心缩放，按住拖动平移。wheel 必须 preventDefault，
@@ -674,6 +810,7 @@ function bindZoom(main,label){
   // 视频条目用的是原生 controls：拖动平移会在 pointerdown 里 setPointerCapture，
   // 后续 pointerup/click 全被重定向到外层容器，播放键点了毫无反应 —— 视频上不接管指针。
   if(event.button!==0||event.target.closest('.local-gallery-hud')||event.target.closest('video'))return;
+  event.preventDefault();event.stopPropagation();
   drag={left:event.clientX,top:event.clientY,x:state.x,y:state.y};
   try{main.setPointerCapture(event.pointerId);}catch{}
   main.classList.add('is-dragging');
@@ -710,16 +847,15 @@ function unlockPageScroll(){document.documentElement.classList.remove('file-prev
  }
 
  function detailsHtml(file){
-  return `<div class="eyebrow">LOCAL FILE</div><h2>${esc(file.name)}</h2>
-   <p class="author-name">${esc(KIND_LABEL[file.kind]||'其他')}${file.ext?` · .${esc(file.ext)}`:''}</p>
-   <div class="details-stats"><div><strong>${esc(fmtBytes(file.bytes))}</strong><span>大小</span></div><div><strong>${esc(fmtTime(file.mtime))}</strong><span>修改时间</span></div></div>
-   <div class="detail-license"><p class="local-file-path">${esc(file.rel)}</p><p>只读预览：打开这个文件不会改动磁盘上的内容。</p></div>`;
+  return `${previewHeader({...file,platform:'local',assetType:file.kind})}<details class="pv-extra"><summary>${icon('help')}<span>详细信息</span></summary><p>${esc(fmtTime(file.mtime))}</p><p class="local-file-path">${esc(file.rel)}</p></details>`;
  }
 
  /** 3D 与全景走现有的 #preview-dialog（渲染器在那），其余用 #file-preview-dialog。 */
  function openModel(file){
   const dlg=$('#preview-dialog');
+  $('#model-details').classList.add('pv-sidebar');
   $('#model-details').innerHTML=detailsHtml(file);
+  compactPreview($('#model-details'),file);
   const iframe=$('#viewer');if(iframe)iframe.removeAttribute('src');
   dlg.showModal();
   if(file.kind==='env')gltfPreview.loadLocalEnvironment({url:fileUrl(file),name:file.name});
@@ -727,28 +863,33 @@ function unlockPageScroll(){document.documentElement.classList.remove('file-prev
  }
 
  function clearStage(){
+  galleryPreload.clear();
   stopSequence();
   if(stripObserver){stripObserver.disconnect();stripObserver=null;}
   const stage=$('#file-preview-stage');
   if(!stage)return;
-  for(const node of stage.querySelectorAll('video,audio')){try{node.pause();node.removeAttribute('src');}catch{}}
+  for(const node of stage.querySelectorAll('video,audio')){try{node.pause();node.removeAttribute('src');node.load();}catch{}}
   for(const node of stage.querySelectorAll('iframe'))node.removeAttribute('src');
   // 文档渲染器（独立 bundle）把清理函数挂在 host 上：EPUB 的 rendition 持有 iframe 与事件，
   // 不清会一直活着。这里只认通用钩子，不 import doc-render.js，主包因此不会背 1.2MB。
   for(const node of stage.querySelectorAll('[data-doc-host]')){try{node.__avDispose?.();}catch{}}
+  for(const node of stage.querySelectorAll('img')){node.onload=null;node.onerror=null;node.removeAttribute('src');}
   stage.replaceChildren();
   stage.hidden=false;
   stage.classList.remove('is-gallery');
   const dlg=$('#file-preview-dialog');
   dlg?.classList.remove('is-gallery','is-xhs-note');
   dlg?.querySelector('.local-gallery-strip')?.remove();
+  dlg?.querySelector('.gallery-thumb-sidebar')?.classList.remove('gallery-thumb-sidebar');
 }
 
  function showOther(file,stageHtml,hint){
   const dlg=$('#file-preview-dialog');
   const stage=$('#file-preview-stage');
   clearStage();
+  $('#file-preview-details').classList.add('pv-sidebar');
   $('#file-preview-details').innerHTML=detailsHtml(file);
+  compactPreview($('#file-preview-details'),file);
   $('#file-preview-title').innerHTML=`${icon(KIND_ICON[file.kind]||'cube')}${esc(file.name)}`;
   stage.innerHTML=stageHtml;
   $('#file-preview-hint').textContent=hint||'';
@@ -845,6 +986,7 @@ function unlockPageScroll(){document.documentElement.classList.remove('file-prev
  }
 
  async function drawTga(url,stage){
+  const {TGALoader}=await import('./image-decoders.js');
   const tex=await new Promise((res,rej)=>new TGALoader().load(url,res,undefined,rej));
   const image=tex.image||{};
   const {data,width,height}=image;
@@ -864,7 +1006,7 @@ function unlockPageScroll(){document.documentElement.classList.remove('file-prev
 
  /** 后端把浏览器解不了的格式转成 PNG：相机 RAW / AI / HEIC / DDS / PSD。 */
  function derivedImageUrl(file,width=1600){
-  return `/api/local/thumb?root=${encodeURIComponent(file.root)}&rel=${encodeURIComponent(file.rel)}&w=${width}`;
+  return `/api/local/thumb?root=${encodeURIComponent(file.root)}&rel=${encodeURIComponent(file.rel)}&w=${width}&full=1`;
  }
 
  function showDerivedImage(file,hint){
@@ -967,6 +1109,7 @@ function unlockPageScroll(){document.documentElement.classList.remove('file-prev
      $('#file-preview-hint').textContent='TGA 已解码为图片 · 只读';
     }else if(/\.(tif|tiff)$/i.test(file.name)){
      const stage=showOther(file,'',`正在解码 ${file.name}…`);
+     const {decodeTiff}=await import('./image-decoders.js');
      const decoded=await decodeTiff(await fetchBytes(url));
      paintBitmap(stage,decoded);
      $('#file-preview-hint').textContent=decoded.pages>1
@@ -974,6 +1117,7 @@ function unlockPageScroll(){document.documentElement.classList.remove('file-prev
       : 'TIFF 已解码为图片 · 只读';
     }else if(/\.psd$/i.test(file.name)){
      const stage=showOther(file,'',`正在解码 ${file.name}…`);
+     const {decodePsd}=await import('./image-decoders.js');
      const decoded=decodePsd(await fetchBytes(url));
      paintBitmap(stage,decoded);
      $('#file-preview-hint').textContent=`PSD 合并图像 · ${decoded.width}×${decoded.height}${decoded.bitDepth===16?' · 16 位':''}${decoded.layers?' · 只显示拼合结果':''}`;
@@ -1072,7 +1216,7 @@ function unlockPageScroll(){document.documentElement.classList.remove('file-prev
   }
   const card=event.target.closest('[data-package]');
   if(card){
-   const pkg=packages.find(entry=>packageKey(entry)===card.dataset.package);
+   const pkg=packages.find(entry=>packageKey(entry)===card.dataset.package)||albumReferences.get(card.dataset.package);
    if(pkg){openPackage(pkg);return true;}
   }
   const item=event.target.closest('[data-file]');
@@ -1084,15 +1228,81 @@ function unlockPageScroll(){document.documentElement.classList.remove('file-prev
  }
 
  function setup(){
+  const gridHost=$('#grid');
+  if(gridHost&&!document.getElementById('album-folder-nav')){
+   const nav=document.createElement('button');nav.id='album-folder-nav';nav.type='button';nav.className='secondary album-folder-nav';nav.hidden=true;
+   nav.addEventListener('click',()=>{albumFolder=albumHistory.pop()||'';onBrowse?.();});gridHost.before(nav);
+  }
+
   const grid=$('#grid');
   if(grid){
+   grid.addEventListener('pointerdown',event=>{
+    const handle=event.target.closest('[data-pkg-resize]');
+    if(!handle||event.button!==0)return;
+    event.preventDefault();event.stopImmediatePropagation();
+    const card=handle.closest('.model-card'),key=card?.dataset.package;
+    const folder=card?.dataset.albumFolder;
+    const pkg=folder!==undefined?albumFolders.get(folder):packages.find(entry=>packageKey(entry)===key)||albumReferences.get(key);
+    if(!pkg)return;
+    const layoutKey=collageKey(pkg);
+    const start=event.clientY,startX=event.clientX;
+    let mode=collageCount(pkg);
+    let wide=card.classList.contains('pkg-wide'),lastY=start,lastX=startX;
+    const animations=[];
+    const shield=document.createElement('div');
+    shield.className='pkg-resize-shield';document.body.append(shield);
+    document.documentElement.classList.add('pkg-resizing');
+    handle.classList.add('is-resizing');
+    shield.setPointerCapture(event.pointerId);
+    const move=e=>{
+     e.preventDefault();e.stopImmediatePropagation();
+     const {mode:next,wide:nextWide}=albumDragLayout(mode,wide,e.clientX-lastX,e.clientY-lastY);
+     if(next===mode&&(next!==6||nextWide===wide))return;
+     lastY=e.clientY;lastX=e.clientX;
+     const collage=card.querySelector('.pkg-collage');
+     const before=new Map([...collage.children].filter(tile=>!tile.hidden).map(tile=>[tile,tile.getBoundingClientRect()]));
+     animations.splice(0).forEach(animation=>animation.cancel());
+     const apply=()=>{
+      card.classList.remove(`pkg-c${mode}`);mode=next;card.classList.add(`pkg-c${mode}`);
+      wide=nextWide;card.classList.toggle('pkg-wide',mode===6&&wide);
+      updateAlbumTiles(card.querySelector('.pkg-collage'),folder!==undefined?folderMedia(pkg,mode):collectionMedia(packageImages(pkg),pkg,mode));
+      grid.dispatchEvent(new Event('album-layout-change',{bubbles:true}));
+     };
+     apply();
+     if(!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches)for(const [tile,old] of before){
+      if(tile.hidden)continue;
+      const rect=tile.getBoundingClientRect();
+      if(!rect.width||!rect.height)continue;
+      const animation=tile.animate?.([
+       {transformOrigin:'0 0',transform:`translate(${old.left-rect.left}px,${old.top-rect.top}px) scale(${old.width/rect.width},${old.height/rect.height})`},
+       {transformOrigin:'0 0',transform:'none'}
+      ],{duration:120,easing:'cubic-bezier(.2,.65,.3,1)'});
+      if(animation)animations.push(animation);
+     }
+    };
+    const finish=e=>{
+     e.preventDefault();e.stopImmediatePropagation();
+     handle.classList.remove('is-resizing');
+     shield.removeEventListener('pointermove',move);shield.removeEventListener('pointerup',finish);shield.removeEventListener('pointercancel',finish);shield.removeEventListener('lostpointercapture',finish);
+     localStorage.setItem(layoutKey,String(mode));
+     localStorage.setItem(`${layoutKey}:wide`,wide?'1':'0');
+     document.documentElement.classList.remove('pkg-resizing');
+     // 等合成 click 派发完再撤走隔离层，避免松手误开下方卡片。
+     setTimeout(()=>shield.remove(),0);
+    };
+    shield.addEventListener('pointermove',move);shield.addEventListener('pointerup',finish);shield.addEventListener('pointercancel',finish);shield.addEventListener('lostpointercapture',finish);
+    shield.addEventListener('click',e=>{e.preventDefault();e.stopImmediatePropagation();});
+   },true);
    grid.addEventListener('click',event=>{
+    if(event.target.closest('[data-pkg-resize]')){event.preventDefault();event.stopPropagation();return;}
+    const board=event.target.closest('[data-package-board]');if(board){event.preventDefault();Promise.resolve(onAlbumBoard?.(packages.find(pkg=>packageKey(pkg)===board.dataset.packageBoard))).catch(error=>notify?.(error.message));return;}
+    const folder=event.target.closest('[data-album-folder]');if(folder){albumHistory.push(albumFolder);albumFolder=folder.dataset.albumFolder;onBrowse?.();return;}
     // 卡片右上角的小按钮都在「打开资产」之前处理，否则点下载会先弹出预览。
     const downloadButton=event.target.closest('[data-package-download]');
     if(downloadButton){
      event.preventDefault();
      event.stopPropagation();
-     downloadPackage(packages.find(entry=>packageKey(entry)===downloadButton.dataset.packageDownload),downloadButton);
+     downloadPackage(packages.find(entry=>packageKey(entry)===downloadButton.dataset.packageDownload)||albumReferences.get(downloadButton.dataset.packageDownload),downloadButton);
      return;
     }
     // 登记 / 补原图已收进右键菜单（走 packageAction），这里只留整包下载一颗卡片按键。
@@ -1100,13 +1310,35 @@ function unlockPageScroll(){document.documentElement.classList.remove('file-prev
    });
    grid.addEventListener('keydown',event=>{
     if(event.key!=='Enter'&&event.key!==' ')return;
+    if(event.target.closest('[data-pkg-resize]'))return;
+    const folder=event.target.closest('[data-album-folder]');
+    if(folder){event.preventDefault();albumHistory.push(albumFolder);albumFolder=folder.dataset.albumFolder;onBrowse?.();return;}
     if(event.target.closest?.('[data-package-download]'))return;
     if(openFromEvent(event))event.preventDefault();
    });
   }
   // 缩略图与大图同在一个弹窗里，点击用弹窗级委托：换图只改 src，元素不重建。
   const previewDialog=$('#file-preview-dialog');
+  setupPreviewDismiss(previewDialog);
+  previewDialog?.addEventListener('change',event=>{
+   if(event.target.matches('[data-gallery-tags]')&&galleryPkg)onAlbumTags?.(galleryPkg,galleryImages[galleryIndex],event.target.value);
+  });
+  previewDialog?.addEventListener('keydown',event=>{
+   if(event.target.matches('[data-gallery-tags]')&&event.key==='Enter'){event.preventDefault();event.stopPropagation();event.target.blur();}
+  });
   previewDialog?.addEventListener('click',event=>{
+   const nav=event.target.closest('[data-gallery-nav]');
+   if(nav&&galleryPkg){showGalleryImage(galleryIndex+Number(nav.dataset.galleryNav),{reveal:true});return;}
+   const addBoard=event.target.closest('[data-gallery-board]');
+   if(addBoard&&galleryPkg){Promise.resolve(onAlbumBoard?.(galleryPkg,[galleryImages[galleryIndex]])).catch(error=>notify?.(error.message));return;}
+   const variant=event.target.closest('[data-gallery-variant]');
+   if(variant&&galleryPkg){
+    const current=galleryImages[galleryIndex],next=current.variants?.[Number(variant.dataset.galleryVariant)];
+    if(next){galleryImages[galleryIndex]={...next,variants:current.variants};showGalleryImage(galleryIndex);}
+    return;
+   }
+   const overview=event.target.closest('[data-gallery-overview]');
+   if(overview){const strip=previewDialog.querySelector('.local-gallery-strip');const on=strip?.classList.toggle('is-overview');overview.setAttribute('aria-pressed',String(!!on));return;}
    const thumb=event.target.closest('[data-gallery-index]');
    if(thumb&&galleryPkg){showGalleryImage(Number(thumb.dataset.galleryIndex));return;}
    const zoom=event.target.closest('[data-gallery-zoom]');
@@ -1117,16 +1349,16 @@ function unlockPageScroll(){document.documentElement.classList.remove('file-prev
    }
   });
   previewDialog?.addEventListener('keydown',event=>{
-   if(!galleryPkg||(event.key!=='ArrowLeft'&&event.key!=='ArrowRight'))return;
+   if(event.target.closest('input,textarea,select')||!galleryPkg||(event.key!=='ArrowLeft'&&event.key!=='ArrowRight'))return;
    event.preventDefault();
    const next=galleryIndex+(event.key==='ArrowRight'?1:-1);
    if(next>=0&&next<galleryImages.length)showGalleryImage(next,{reveal:true});
   });
   previewDialog?.addEventListener('close',()=>{
+   if(previewDialog.open)return;
    clearStage();
    unlockPageScroll();
-   galleryPreload.forEach(img=>{img.onload=null;img.onerror=null;});
-  galleryPreload=[];
+   galleryPreload.clear();
   galleryPkg=null;galleryImages=[];galleryIndex=0;galleryZoom=null;
   });
  }
@@ -1138,13 +1370,13 @@ function unlockPageScroll(){document.documentElement.classList.remove('file-prev
   // 点开却是一片黑（花瓣这类原图直链最容易撞上）。两处必须共用同一个版本号。
   // 同源相对地址（本地托管副本的 /api/local/file、/api/local/thumb）本来就是本机直出，
   // 套 /api/image 代理会被「只支持图床地址」挡下来，本地素材点开预览就是一片黑。
-  const imgUrl=(rel,useThumb)=>{const it=items[Number(rel)]||{};const raw=useThumb&&it.thumb?it.thumb:it.url;return /^\/(?!\/)/.test(String(raw||''))?raw:`/api/image?url=${encodeURIComponent(raw)}&v=2`;};
+  const imgUrl=(rel,useThumb)=>{const it=items[Number(rel)]||{};const raw=useThumb&&it.thumb?it.thumb:it.url;return /^\/(?!\/)/.test(String(raw||''))?raw:`/api/image?url=${encodeURIComponent(raw)}&v=2${useThumb?'':'&full=1'}`;};
   const thumbUrl=rel=>imgUrl(rel,true);
   openGallery({title,category:'images',note,noteLoading,imageUrl:imgUrl,thumbUrl,videoUrl:rel=>`/api/video?url=${encodeURIComponent(items[Number(rel)].play||items[Number(rel)].url)}`,details:onChange},items,index);
  }
  /** 右键菜单直接调动作，不再靠卡片上隐藏按钮的模拟点击。key = root|rel。 */
  function packageAction(key,action){
-  const pkg=packages.find(entry=>packageKey(entry)===key);
+  const pkg=packages.find(entry=>packageKey(entry)===key)||albumReferences.get(key);
   if(!pkg)return false;
   if(action==='register'&&pkg.type==='folder'&&!pkg.hasMeta){register(pkg);return true;}
   if(action==='fetch'&&pkg.remote){onFetchPackage?.(pkg,null);return true;}
@@ -1158,5 +1390,6 @@ function unlockPageScroll(){document.documentElement.classList.remove('file-prev
   if(seq)openSequence(seq);
   return !!seq;
  }
- return {setup,scan,matches,matchesPackage,card,packageCard,openFile,openPackage,openImageGallery,sequences:()=>sequences,sequenceMembers:()=>sequenceMembers,sequenceCard,openSequence,findSequence,openSequenceByUid,entries:()=>files,packages:()=>packages,count:()=>files.length,truncated:()=>truncated,loading:()=>loading,packageAction};
+ function referenceCard(model){const key=packageKey(model.albumPackage);const pkg=packages.find(entry=>packageKey(entry)===key)||model.albumPackage;albumReferences.set(key,pkg);return packageCard(pkg).replace('<article ',`<article data-uid="${esc(model.uid)}" `);}
+ return {referenceCard,resetAlbumFolder:()=>{albumFolder='';albumHistory.length=0;const nav=document.getElementById('album-folder-nav');if(nav)nav.hidden=true;},albumFolderActive:()=>!!albumFolder,albumFolderScope:()=>albumFolder,searchPackageImages,packageImages,organizePackages,folderCard,setup,scan,matches,matchesPackage,card,packageCard,openFile,openPackage,openImageGallery,sequences:()=>sequences,sequenceMembers:()=>sequenceMembers,sequenceCard,openSequence,findSequence,openSequenceByUid,entries:()=>files,packages:()=>packages,count:()=>files.length,truncated:()=>truncated,loading:()=>loading,packageAction};
 }

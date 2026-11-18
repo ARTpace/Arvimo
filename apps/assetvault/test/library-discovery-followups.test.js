@@ -1,3 +1,4 @@
+import {assembleLibraryStyles} from '../scripts/lib/library-styles.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -79,7 +80,7 @@ test('预览资源跨预览复用缓存，且必须有容量上限',()=>{
  assert.ok(code.includes('function bindLoadingOverlay()'),'要有加载过渡层的绑定入口');
  assert.ok(code.includes("document.getElementById('viewer-loading')"),'过渡层容器要接上');
  assert.ok(code.includes('new MutationObserver(sync).observe(stateEl'),'由 #state 变化驱动，不改各处 setHint');
- assert.ok(read('src/library/app.css').includes('@keyframes viewer-spin'),'app.css 要有关联的动画');
+ assert.ok(assembleLibraryStyles().includes('@keyframes viewer-spin'),'app.css 要有关联的动画');
 });
 
 test('安装版里所有外链都交给系统默认浏览器',()=>{

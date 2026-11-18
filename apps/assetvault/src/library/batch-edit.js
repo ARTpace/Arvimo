@@ -1,3 +1,4 @@
+import {showActionCard} from './action-card.js';
 // 批量整理：选中一批资产后统一打标 / 评分 / 收藏 / 写备注。
 //
 // 为什么不直接 POST /api/library/tags/mutate：那条接口要自己处理 uid 格式校验、
@@ -49,7 +50,7 @@ export function createBatchEdit({
     for (const selector of ['.be-add', '.be-remove', '.be-note']) field(selector).value = '';
     field('.be-rating').value = '';
     field('.be-fav').value = '';
-    dialog.showModal?.();
+    showActionCard(dialog);
   }
 
   function apply() {
@@ -96,7 +97,7 @@ export function createBatchEdit({
     button.type = 'button';
     button.className = 'secondary be-open';
     button.title = '批量给选中资产打标签、改评分与收藏';
-    button.textContent = '批量整理';
+    button.textContent = '整理';
     button.addEventListener('click', open);
     bar.appendChild(button);
   }

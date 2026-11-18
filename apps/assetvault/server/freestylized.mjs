@@ -16,7 +16,10 @@ export const FREESTYLIZED_TYPES={
  alphas:{rest:'alpha',path:'alpha',label:'Alpha',category:()=>false},
  smart:{rest:'smart_material',path:'smart_material',label:'智能材质',category:()=>false},
 };
-export function freestylizedType(value){return FREESTYLIZED_TYPES[value]?value:'models';}
+/** 类型归一：库里的天空盒常被归一成跨平台统一的 hdris（见 asset-kind.mjs 的 KIND_ALIASES），
+ *  这里必须接受这组别名并折回 skybox，否则会被兜底成 models 去解 3D 模型包，预览直接失败。 */
+const TYPE_ALIASES={hdris:'skybox',hdri:'skybox',env:'skybox',environment:'skybox'};
+export function freestylizedType(value){const v=TYPE_ALIASES[value]||value;return FREESTYLIZED_TYPES[v]?v:'models';}
 export function freestylizedUid(type,slug){return createHash('md5').update(`freestylized:${type}:${slug}`).digest('hex');}
 
 export function freestylizedDriveId(html){
@@ -116,20 +119,60 @@ export async function freestylizedCategories(type,{signal,open=openPublic}={}){
  return {type:freestylizedType(type),categories};
 }
 
-async function downloadFile(url,dest,{signal,open}){
- const r=await open(url,{signal,timeout:180000});
- if(r.status<200||r.status>=300){try{r.stream.destroy();}catch{}throw Error(`Google Drive 下载失败 HTTP ${r.status}`);}
- const mime=String(r.headers['content-type']||'');
- if(mime.includes('text/html')){try{r.stream.destroy();}catch{}throw Error('Google Drive 没有直接返回文件，请到资产页手动确认下载');}
+/** Stream to disk with real progress; resume transient interruptions without accepting truncated files. */
+export async function downloadFreestylizedFile(url,dest,{signal,open=openPublic,progress=()=>{}}={}){
  await fs.mkdir(path.dirname(dest),{recursive:true});
  const fd=await fs.open(dest,'w');
+ let bytes=0,total=null,lastProgress=0,validator=null;
+ const started=Date.now();
+ const report=(force=false)=>{
+  const now=Date.now();if(!force&&now-lastProgress<250)return;lastProgress=now;
+  progress({stage:'transferring',message:'正在下载 FreeStylized 资源包…',bytesWritten:bytes,totalBytes:total,transferRate:Math.round(bytes*1000/Math.max(1,now-started))});
+ };
  try{
-  let bytes=0;
-  for await(const chunk of r.stream){
+  for(let attempt=0;attempt<3;attempt++){
    signal?.throwIfAborted();
-   bytes+=chunk.length;
-   if(bytes>2*1024*1024*1024)throw Error('文件超过 2GB 限制');
-   await fd.write(chunk);
+   let response,timer,abort;
+   try{
+    report(true);
+    response=await open(url,{signal,timeout:30000,...(bytes?{headers:{Range:`bytes=${bytes}-`,...(validator?{'If-Range':validator}:{})}}:{})});
+    if(response.status<200||response.status>=300)throw Object.assign(Error(`FreeStylized 下载失败 HTTP ${response.status}`),{permanent:true});
+    if(String(response.headers['content-type']||'').includes('text/html'))throw Object.assign(Error('下载源返回了网页，请到资产页确认下载权限'),{permanent:true});
+    const range=String(response.headers['content-range']||'').match(/^bytes (\d+)-(\d+)\/(\d+)$/);
+    if(response.status===206){
+     if(!range||Number(range[1])!==bytes||(total!==null&&Number(range[3])!==total))throw Object.assign(Error('下载续传范围不一致，已停止以避免文件损坏'),{permanent:true});
+     total=Number(range[3]);
+    }else{
+     if(bytes){bytes=0;await fd.truncate(0);}
+     const length=Number(response.headers['content-length']);total=Number.isSafeInteger(length)&&length>0?length:null;
+    }
+    const etag=String(response.headers.etag||'');
+    validator=etag&&!etag.startsWith('W/')?etag:response.headers['last-modified']||null;
+    if(total>2*1024**3)throw Object.assign(Error('文件超过 2GB 限制'),{permanent:true});
+    abort=()=>response.stream.destroy(signal.reason||Error('任务已取消'));
+    signal?.addEventListener('abort',abort,{once:true});signal?.throwIfAborted();
+    const arm=()=>{clearTimeout(timer);timer=setTimeout(()=>response.stream.destroy(Error('下载连续 45 秒未收到数据')),45000);timer.unref?.();};
+    arm();report(true);
+    for await(const chunk of response.stream){
+     signal?.throwIfAborted();arm();
+     if(bytes+chunk.length>2*1024**3)throw Object.assign(Error('文件超过 2GB 限制'),{permanent:true});
+     let written=0;
+     while(written<chunk.length){
+      const result=await fd.write(chunk,written,chunk.length-written,bytes).catch(error=>{error.permanent=true;throw error;});
+      if(!result.bytesWritten)throw Object.assign(Error('下载文件写入失败'),{permanent:true});
+      bytes+=result.bytesWritten;written+=result.bytesWritten;
+     }
+     report();
+    }
+    if(!bytes||total!==null&&bytes!==total)throw Error('资源包传输不完整');
+    report(true);return;
+   }catch(error){
+    if(signal?.aborted||error.permanent||attempt===2)throw error;
+    progress({stage:'transferring',message:`连接中断，正在续传（${attempt+1}/2）…`,bytesWritten:bytes,totalBytes:total});
+   }finally{
+    clearTimeout(timer);if(abort)signal?.removeEventListener('abort',abort);
+    response?.stream.destroy();
+   }
   }
  }finally{await fd.close();}
 }
@@ -149,7 +192,7 @@ export async function runFreestylizedJob({uid,output,assetId,assetType,options},
  if(!fileUrl)throw Error('这个 FreeStylized 资产没有公开下载（部分资源包只在 Patreon 提供）');
  progress({stage:'transferring',message:'正在下载资源包…'});
  const dest=path.join(output,'pack.zip');
- await downloadFile(fileUrl,dest,{signal,open});
+ await downloadFreestylizedFile(fileUrl,dest,{signal,open,progress});
  const stat=await fs.stat(dest);
  const meta={uid,kind:'pack',platform:'freestylized',assetId:slug,assetType:type,url:pageUrl,license:'FreeStylized 免费资源，下载前请在官网确认授权范围',files:[{file:'pack.zip',bytes:stat.size,url:fileUrl}],note:`FreeStylized ${spec.label}。`,exportedAt:new Date().toISOString(),tool:'Arvimo · FreeStylized'};
  await fs.writeFile(path.join(output,'info.json'),JSON.stringify(meta,null,2),'utf8');

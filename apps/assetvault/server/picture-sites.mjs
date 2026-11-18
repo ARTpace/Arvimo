@@ -1554,12 +1554,20 @@ const resolveFlickr = {
     let user = '';
     let setId = '';
     let photoId = '';
+    let tagFilter = '';
     if (!keyword) {
       let u;
       try { u = new URL(raw); } catch { throw new Error('无法识别的 Flickr 链接'); }
       const seg = u.pathname.split('/').filter(Boolean);
+      // 题材分类入口：/search/?tags=landscape —— Flickr 没有官方分类接口，但 photos.search
+      // 的 tags 参数是原站浏览标签的正式通道（实测每个题材 8–11 万张），用它当分类筛选。
+      if (seg[0] === 'search' && u.searchParams.get('tags')) {
+        mode = 'tagsearch';
+        tagFilter = String(u.searchParams.get('tags')).split(',').map(s => s.trim()).filter(Boolean).slice(0, 5).join(',');
+      }
       // 形态：/photos/{作者}/、/people/{nsid}/、/photos/{作者}/albums/{相册id}、/photos/{作者}/{作品id}
-      if (seg[0] === 'photos' || seg[0] === 'people') {
+      if (mode === 'tagsearch') { /* 题材分类已设好 mode，跳过下面的链接形态判定 */ }
+      else if (seg[0] === 'photos' || seg[0] === 'people') {
         user = seg[1] || '';
         if (seg[2] === 'albums' || seg[2] === 'sets' || seg[2] === 'collections') {
           setId = seg[3] || '';
@@ -1610,7 +1618,7 @@ const resolveFlickr = {
     // ⚠️ findByUsername 只认「用户名」，/photos/{path_alias}/ 里的别名它一律回 User not found；
     // 必须先走 urls.lookupUser（吃整个主页 URL，别名和 NSID 都认），失败再退回 findByUsername（用户直接输纯用户名时）。
     let nsid = /^\d+@N\d+$/.test(user) ? user : '';
-    if (!nsid && mode !== 'search' && mode !== 'explore') {
+    if (!nsid && mode !== 'search' && mode !== 'tagsearch' && mode !== 'explore') {
       if (!user) throw new Error('Flickr 链接里找不到作者，请粘摄影师主页或相册页');
       const tries = [];
       for (const slug of [user, decodeURIComponent(user)]) {
@@ -1640,10 +1648,11 @@ const resolveFlickr = {
     const items = [];
     const seen = new Set();
     const perPage = 100;
-    for (let page = 1; page <= MAX_PAGES && items.length < maxItems; page++) {
+    for (let page = 1; items.length < maxItems; page++) {
       const params = { per_page: String(perPage), page: String(page), extras: FLICKR_EXTRAS, safe_search: '1' };
       let method;
       if (mode === 'search') { method = 'flickr.photos.search'; params.text = keyword; params.sort = 'relevance'; }
+      else if (mode === 'tagsearch') { method = 'flickr.photos.search'; params.tags = tagFilter; params.tag_mode = 'any'; params.sort = 'interestingness-desc'; }
       else if (mode === 'explore') {
         // 首页推荐：Flickr 的「有趣照片」公开流（无需用户身份），sort 就是站方算法。
         // 它不认 safe_search 参数，带上会被接口判成非法参数，所以这里删掉。
@@ -1674,11 +1683,11 @@ const resolveFlickr = {
       const pages = Number(box.pages) || 1;
       if (page >= pages || list.length < perPage) break;
     }
-    if (!items.length) throw new Error(mode === 'search' ? `Flickr 没有搜到「${keyword}」的图片` : mode === 'explore' ? 'Flickr 首页推荐流暂时取不到（接口可能限流），稍后再试或直接粘作品页链接' : '这个 Flickr 页面没有公开作品');
+    if (!items.length) throw new Error(mode === 'search' ? `Flickr 没有搜到「${keyword}」的图片` : mode === 'tagsearch' ? `Flickr 没有找到「${tagFilter}」分类的作品` : mode === 'explore' ? 'Flickr 首页推荐流暂时取不到（接口可能限流），稍后再试或直接粘作品页链接' : '这个 Flickr 页面没有公开作品');
     return {
       items, skipped: [],
-      title: mode === 'search' ? `Flickr · ${keyword}` : mode === 'explore' ? 'Flickr · 探索推荐' : `Flickr · ${user || nsid}`,
-      author: mode === 'search' ? 'Flickr' : mode === 'explore' ? 'Flickr' : (items[0].author || user || 'Flickr'),
+      title: mode === 'search' ? `Flickr · ${keyword}` : mode === 'tagsearch' ? `Flickr · ${tagFilter.replace(/,/g, ' / ')}` : mode === 'explore' ? 'Flickr · 探索推荐' : `Flickr · ${user || nsid}`,
+      author: mode === 'search' || mode === 'tagsearch' || mode === 'explore' ? 'Flickr' : (items[0].author || user || 'Flickr'),
       cover: items[0].url, source: raw, rendition: 'original',
     };
   },
@@ -1751,11 +1760,41 @@ async function pxGqlPhoto(queryRich, variables, operationName, signal) {
 // 500px 的首页推荐（「编辑精选」）走独立 query：pageResources 必须带 userId，editorsChoices 不用。
 // 网页本身是纯 CSR 外壳（3406 字节、零张图），所以这是唯一不渲染浏览器就能拿到首页图流的通道。
 // 分页只有 cursor（edges[].cursor），没有 pageInfo。
-const PX_EDITORS_QUERY = `query editorsChoices($first: Int!, $after: String) {
-  editorsChoices(first: $first, after: $after) {
+// editorsChoices 也接受 categories:[String!]（实测官方小写值生效），让默认流的分类筛选可用。
+const PX_EDITORS_QUERY = `query editorsChoices($first: Int!, $after: String, $categories: [String!]) {
+  editorsChoices(first: $first, after: $after, categories: $categories) {
     edges { cursor node { id resource { ... on Photo { ${PX_PHOTO_FIELDS} } } } }
   }
 }`;
+// 最新上架流：和编辑精选同构（edges[].cursor + resource.Photo），翻页参数一样。
+// 原站「筛选」面板的三个条件都是 freshResources 的原生参数（抓 500px 前端 bundle 实测）：
+//   categories:[String!]（小写，如 landscape/still life）、equipments:[String!]（CAMERA/PHONE）、
+//   qualityEnabled:Boolean（「仅看推荐新作」）。官方值来自 getFreshOptions 查询。
+const PX_FRESH_QUERY = `query freshResources($first: Int!, $after: String, $categories: [String!], $equipments: [String!], $qualityEnabled: Boolean) {
+  freshResources(first: $first, after: $after, categories: $categories, equipments: $equipments, qualityEnabled: $qualityEnabled) {
+    edges { cursor node { ... on Photo { ${PX_PHOTO_FIELDS} } } }
+  }
+}`;
+/** 500px 官方筛选值（getFreshOptions 实测），用于校验 URL query，避免把乱七八糟的值透传给官方接口。 */
+const PX_FRESH_CATEGORIES = new Set(['landscape','city','people','nature','still life','events','sports','creative']);
+const PX_FRESH_EQUIPMENTS = new Set(['CAMERA','PHONE']);
+/** 从 500px URL 的 query 里解析筛选条件：?categories=landscape,people&equipments=CAMERA&quality=1
+ *  返回 GraphQL 变量片段；无合法值就不带对应变量（让官方用默认）。 */
+function pxFreshFilter(raw) {
+  let u;
+  try { u = new URL(raw); } catch { return {}; }
+  const q = u.searchParams;
+  const list = (key, allowed) => (q.get(key) || '').split(',')
+    .map(s => s.trim().toLowerCase()).filter(s => allowed.has(s));
+  const categories = list('categories', PX_FRESH_CATEGORIES);
+  const equipments = (q.get('equipments') || '').split(',')
+    .map(s => s.trim().toUpperCase()).filter(s => PX_FRESH_EQUIPMENTS.has(s));
+  const out = {};
+  if (categories.length) out.categories = categories;
+  if (equipments.length) out.equipments = equipments;
+  if (q.get('quality') === '1' || q.get('quality') === 'true') out.qualityEnabled = true;
+  return out;
+}
 /** 首页 / 精选 / 热门这类入口（不是摄影师主页）。 */
 const PX_HOME_PATHS = new Set(['', 'editors', 'popular', 'upcoming', 'fresh']);
 function is500pxHome(raw) {
@@ -1765,17 +1804,25 @@ function is500pxHome(raw) {
   const seg = u.pathname.split('/').filter(Boolean);
   return seg.length === 0 || (seg.length === 1 && PX_HOME_PATHS.has(seg[0].toLowerCase()));
 }
-/** 首页推荐流：翻 cursor，一页 24 张；未登录只发 600 / 1024 两档预览（pxItem 里按长边换算尺寸）。 */
-async function pxEditorsChoice({ signal, maxItems, raw }) {
+/** 500px 首页流（编辑精选 / 最新上架）：翻 cursor，一页 24 张；未登录只发 600/1024 两档预览。
+ *  editorsChoices 的 node 是 {resource: Photo}，freshResources 的 node 直接是 Photo —— 用 unwrap
+ *  归一，两个流共用同一套翻页。最新上架流支持原站筛选：filter 来自 URL query（分类/器材/仅推荐）。 */
+async function pxHomeFeed({ signal, maxItems, raw, fresh = false, filter = {} }) {
   const items = [];
   const seen = new Set();
   let after = null;
+  const query = fresh ? PX_FRESH_QUERY : PX_EDITORS_QUERY;
+  const op = fresh ? 'freshResources' : 'editorsChoices';
+  const label = fresh ? '最新上架' : '编辑精选';
+  const unwrap = node => (fresh ? node : node && node.resource);
+  // editorsChoices 只支持 categories；equipments / qualityEnabled 是 freshResources 专属。
+  const vars = fresh ? filter : { categories: filter.categories };
   for (let page = 0; page < MAX_PAGES && items.length < maxItems; page++) {
-    const data = await pxGqlPhoto(PX_EDITORS_QUERY, { first: 24, after }, 'editorsChoices', signal);
-    const edges = (data && data.editorsChoices && data.editorsChoices.edges) || [];
+    const data = await pxGqlPhoto(query, { first: 24, after, ...vars }, op, signal);
+    const edges = (data && data[op] && data[op].edges) || [];
     if (!edges.length) break;
     for (const e of edges) {
-      const p = e && e.node && e.node.resource;
+      const p = unwrap(e && e.node);
       if (!p || !p.id || seen.has(p.id)) continue;
       seen.add(p.id);
       items.push(pxItem(p));
@@ -1785,9 +1832,10 @@ async function pxEditorsChoice({ signal, maxItems, raw }) {
     if (!cursor || cursor === after) break;
     after = cursor;
   }
-  if (!items.length) throw new Error('500px 编辑精选暂时没有返回图片（接口可能改版）');
-  return { items, skipped: [], title: '500px · 编辑精选', author: '500px', cover: items[0].url, source: raw, rendition: 'original' };
+  if (!items.length) throw new Error(`500px ${label}暂时没有返回图片（接口可能改版）`);
+  return { items, skipped: [], title: `500px · ${label}`, author: '500px', cover: items[0].url, source: raw, rendition: 'original' };
 }
+const pxEditorsChoice = args => pxHomeFeed(args);
 /** 签名地址里带着 /photo/{legacyId}/，作品页地址可以从中还原（GraphQL 的 Photo 上没有 legacyId 字段）。 */
 function pxPhotoUrl(urls) {
   const any = (urls && (urls.size_4k || urls.size_2048 || urls.size_1024 || urls.size_600)) || '';
@@ -1842,8 +1890,14 @@ const resolve500px = {
     if (raw && !/^https?:\/\//i.test(raw)) {
       throw new Error('500px 的关键词搜索接口没有公开（GraphQL 只有 getUser / pageResources），请粘摄影师主页或作品页链接');
     }
-    // 首页 / 精选页：出「编辑精选」那一屏，用户切到 500px 就有图可看。
-    if (!raw || is500pxHome(raw)) return pxEditorsChoice({ signal, maxItems, raw: raw || 'https://500px.com/' });
+    // 首页 / 精选页：fresh 走「最新上架」，其余（含裸域名、editors/popular/upcoming）走「编辑精选」。
+    // popular/upcoming 在 500px GraphQL 里没有对应根字段，统一并到编辑精选，不硬造空流。
+    if (!raw || is500pxHome(raw)) {
+      const u = new URL(raw || 'https://500px.com/');
+      const fresh = /\/fresh\/?$/i.test(u.pathname);
+      const f = pxFreshFilter(raw);
+      return pxHomeFeed({ signal, maxItems, raw: raw || 'https://500px.com/', fresh, filter: f });
+    }
     const { photoId, username } = parse500pxUrl(raw);
     if (photoId) {
       const numeric = /^\d+$/.test(photoId);
@@ -2273,6 +2327,9 @@ const resolveXiaohongshu = {
 // 用户点「登录」就把这个地址开在一个可见窗口里，登录/过验证完 cookie 自动入库。
 // 不需要登录的站不列在这里，前端就不显示登录按钮。
 export const PICTURE_LOGIN_URLS = Object.freeze({
+  // 3D 平台：菜单里每个平台右侧的「登录」图标就查这张表（GET /api/browser/logins）。
+  // 没登记的站 = 免登录站，菜单里不出登录图标，别让用户点了才发现没入口。
+  sketchfab: 'https://sketchfab.com/login',
   zcool: 'https://www.zcool.com.cn/',
   huaban: 'https://huaban.com/',
   pinterest: 'https://www.pinterest.com/',

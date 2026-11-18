@@ -12,12 +12,15 @@
       {
         "title": "Arvimo \u00b7 \u827a\u56e2",
         "decorations": false,
+        "transparent": true,
+        "shadow": false,
         "dragDropEnabled": false,
         "width": 1400,
         "height": 900,
         "minWidth": 960,
         "minHeight": 640,
-        "url": "waiting.html"
+        "url": "waiting.html",
+        "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --disk-cache-size=268435456"
       }
     ],
     "security": {

@@ -1,3 +1,4 @@
+import {assembleLibraryStyles} from '../scripts/lib/library-styles.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -11,7 +12,7 @@ const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const read=f=>fs.readFileSync(path.join(root,f),'utf8');
 const preview=read('src/library/gltf-preview.js');
 const html=read('src/library/index.html');
-const css=read('src/library/app.css');
+const css=assembleLibraryStyles();
 
 test('鼠标映射对齐八猴：左键旋转、右键缩放、中键平移',()=>{
  assert.ok(preview.includes('controls.mouseButtons={LEFT:THREE.MOUSE.ROTATE,MIDDLE:THREE.MOUSE.PAN,RIGHT:THREE.MOUSE.DOLLY}'),

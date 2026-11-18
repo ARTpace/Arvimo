@@ -1,3 +1,4 @@
+import {albumPreviewItems} from '../src/library/image-albums.js';
 // /api/library/* 细粒度接口（阶段 2 建、阶段 3 扩展按需分页）。
 // 只处理 ROUTES 列出的路径，其余（scan / register）交回 library.mjs。
 //
@@ -5,6 +6,7 @@
 // 直接从 library-state.json 的 blob 派生同样的行，检索功能不打折，engine 字段如实标明。
 // 只有「合集」是纯持久化数据、没有 DB 就无处可存 —— 那几条路由明确返回 503，不假装成功。
 import {StringDecoder} from 'node:string_decoder';
+import path from 'node:path';
 import {normalizeRows, rowsFromState, queryAssets, DEFAULT_QUERY, SORTS} from './library-query.mjs';
 import {queryAssetPage, simpleFtsTerm, FTS_CANDIDATE_LIMIT} from './library-page.mjs';
 import {compileQuery} from './query-sql.mjs';
@@ -17,11 +19,12 @@ import {normalizeTagOps} from './library-tags-write.mjs';
 import {normalizeAssetOps} from './library-asset-ops.mjs';
 import {exportLibrary, importLibrary, normalizeSnapshot, PortableRejected} from './library-portable.mjs';
 import {probeThirdPartyLibrary, importEagleLibrary} from './import-eagle.mjs';
-import {listStores, createStore, selectStore, renameStore, removeStore, StoreRejected} from './store-registry.mjs';
+import {listStores, createStore, selectStore, renameStore, relocateStore, removeStore, StoreRejected} from './store-registry.mjs';
 import {SESSION_STATE_KEY, SESSION_FIELDS} from './library-schema.mjs';
 import {createEventBus} from './library-events.mjs';
 import {onScanChange} from './scan-cache.mjs';
 import {createMemberDirectory, listMembers, saveMember, removeMember, MemberRejected, can, requestPermission} from './library-members.mjs';
+import {writeSidecar as writeAssetSidecar} from './asset-sidecar.mjs';
 
 const ROUTES = new Set([
   '/api/library/mutations', '/api/library/query', '/api/library/query/status', '/api/library/assets',
@@ -131,7 +134,7 @@ function inputFromSearch(params) {
   };
 }
 
-export function createLibraryApi({storage, backups = null, importRoots = null, dataDir = '', downloadDir = '', storeBase = '', semantic = null, allowLocalRoot = () => {}, onWarn = () => {}} = {}) {
+export function createLibraryApi({storage, backups = null, importRoots = null, dataDir = '', downloadDir = '', archiveRoot = '', storeBase = '', semantic = null, allowLocalRoot = () => {}, onWarn = () => {}} = {}) {
   if (!storage) throw Error('缺少资产库存储实例');
   // 变更广播总线：写路径 emit、SSE 路由 subscribe，两边共用一个实例。
   const events = createEventBus({onWarn});
@@ -274,8 +277,15 @@ export function createLibraryApi({storage, backups = null, importRoots = null, d
         const action = text(input.action) || 'create';
         try {
           if (action === 'create') {
-            const store = createStore(storeBase, {name: input.name, dir: input.dir});
+            const store = createStore(storeBase, {name: input.name, dir: input.dir, assetsDir: input.assetsDir});
             return send(res, 200, {ok: true, store, ...listStores(storeBase, {dataDir, downloadDir})});
+          }
+          if (action === 'relocate') {
+            // 改资产目录（archiveRoot）。文件不搬，只有重启后新落盘才走新路径。
+            const store = relocateStore(storeBase, text(input.id), {assetsDir: input.assetsDir});
+            const restartRequired = !store.unchanged && !!dataDir && path.resolve(store.dataDir) === path.resolve(dataDir);
+            if (restartRequired) events.emit({kind: 'stores', actor: identity?.member_id});
+            return send(res, 200, {ok: true, store, restartRequired, ...listStores(storeBase, {dataDir, downloadDir})});
           }
           if (action === 'select') {
             const {store, restartRequired} = selectStore(storeBase, text(input.id), {dataDir});
@@ -284,7 +294,11 @@ export function createLibraryApi({storage, backups = null, importRoots = null, d
           }
           if (action === 'rename') {
             const store = renameStore(storeBase, text(input.id), input.name);
-            return send(res, 200, {ok: true, store, ...listStores(storeBase, {dataDir, downloadDir})});
+            // 改名会连归档根目录一起改。正在使用的库必须重启，否则进程还往旧路径写、
+            // 又把旧文件夹建回来，磁盘上就出现「新名字空目录 + 旧名字有资产」的分裂。
+            const restartRequired = !!dataDir && path.resolve(store.dataDir) === path.resolve(dataDir);
+            if (restartRequired && store.moved) events.emit({kind: 'stores', actor: identity?.member_id});
+            return send(res, 200, {ok: true, store, restartRequired, ...listStores(storeBase, {dataDir, downloadDir})});
           }
           if (action === 'remove') {
             const removed = removeStore(storeBase, text(input.id), {dataDir});
@@ -340,7 +354,7 @@ export function createLibraryApi({storage, backups = null, importRoots = null, d
           const derived = opsAffectDerived(input.ops);
           // 遗留整块通道改用户域时，明确授权派生层以 blob 为准同步评分/标签；
           // 目录域变更不带这个标记，DB 里的用户数据就不会被旧 blob 覆盖。
-          const applied = await storage.mutate(transform, {derived, syncUser: derived});
+          const applied = await storage.mutate(transform, {derived, syncUser: derived,clientProtocol:req.headers['x-av-file-protocol']??null});
           if (!applied) { send(res, 409, {error: '资产库状态不可写，请重试'}); return true; }
           const version = await storage.withDb(conn => conn.version) || 0;
           // 整块写入说不清「改了哪些资产」，广播一个粗粒度事件让客户端整体失效。
@@ -352,7 +366,7 @@ export function createLibraryApi({storage, backups = null, importRoots = null, d
           });
         } catch (error) {
           const rejected = error instanceof MutationRejectedError;
-          return send(res, rejected ? 400 : 500, {error: rejected ? error.message : `增量写入失败：${error.message}`});
+          return send(res, error.status || (rejected ? 400 : 500), {error: rejected ? error.message : `增量写入失败：${error.message}`,code:error.code,requiredProtocol:error.requiredProtocol});
         }
       }
 
@@ -437,6 +451,19 @@ export function createLibraryApi({storage, backups = null, importRoots = null, d
         // 定点写能说清改了哪些资产 → 按 uid 细粒度广播，客户端不必整库失效。
         for (const change of result.changes || []) {
           events.emit({kind: 'asset', uid: change.uid, rev: change.rev, actor: identity.member_id});
+        }
+        // 标签 / 备注 / 收藏改了，资产旁边的 <资产名>.info.json 也要跟着改，
+        // 否则 sidecar 和库里的说法会不一致。尽力而为：失败只当没同步，不影响这次写入结果。
+        const touched = (result.changes || []).map(change => change.uid).filter(Boolean).slice(0, 200);
+        if (touched.length) {
+          storage.withDb(conn => conn.all(
+            `SELECT payload FROM assets WHERE uid IN (${touched.map(() => '?').join(',')})`, touched))
+            .then(rows => {
+              for (const row of rows || []) {
+                try { const model = JSON.parse(row.payload); writeAssetSidecar(model.filePath, model); } catch {}
+              }
+            })
+            .catch(() => {});
         }
         const stale = (result.conflicts || []).some(item => item.code === 'rev_conflict');
         return send(res, stale ? 409 : 200, {
@@ -606,7 +633,7 @@ export function createLibraryApi({storage, backups = null, importRoots = null, d
       if (u.pathname === '/api/library/import/eagle') {
         if (method !== 'POST') { send(res, 405, {error: '只支持 POST'}); return true; }
         try {
-          const report = await importEagleLibrary({folder: input.folder, dataDir, importRoots, storage});
+          const report = await importEagleLibrary({folder: input.folder, dataDir, archiveRoot, importRoots, storage});
           // 新导入根不进白名单的话，缩略图与预览会被 403 挡住。
           if (report?.libraryRoot) allowLocalRoot(report.libraryRoot);
           events.emit({kind: 'assets', actor: identity.member_id});
@@ -761,7 +788,7 @@ export function createLibraryApi({storage, backups = null, importRoots = null, d
         const data = await dataset();
         const byUid = new Map(data.rows.map(row => [row.uid, row]));
         const pick = row => row ? {
-          uid: row.uid, name: row.name, thumbnail: text(row.thumbnail),
+          uid: row.uid, name: row.name, thumbnail: text(row.thumbnail||row.model?.thumbnail||row.model?.previewUrl),
           platform: text(row.platform), assetType: text(row.model?.assetType) || text(row.kind) || '',
         } : null;
         const previews = {};
@@ -791,7 +818,11 @@ export function createLibraryApi({storage, backups = null, importRoots = null, d
           if (board.coverAssetId && byUid.has(board.coverAssetId)) {
             uids = [board.coverAssetId, ...uids.filter(uid => uid !== board.coverAssetId)];
           }
-          const items = uids.slice(0, limit + 1).map(uid => pick(byUid.get(uid))).filter(Boolean);
+          const items = uids.slice(0, limit + 1).flatMap(uid => {
+            const row=byUid.get(uid),pkg=row?.model?.albumPackage;
+            const covers=pkg?albumPreviewItems(pkg,1):[];
+            return covers.length?covers.map(cover=>({...pick(row),...cover})):pick(row)||[];
+          }).filter(item=>item.thumbnail).slice(0,limit+1);
           previews[id] = {items, total, cover: items[0] || null};
         }
         return send(res, 200, {previews});

@@ -1,3 +1,4 @@
+import {assembleLibraryStyles} from '../scripts/lib/library-styles.mjs';
 import test from 'node:test';import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -36,7 +37,7 @@ test('卡片变体换的是样式与短文案，判定逻辑不变',()=>{
 test('Blender 键与下载键同底色，logo 用 Blender 橙',()=>{
  // 2026-10-16：原先是一块紫底，和下载键并排很跳；现在底色走 .card-download，
  // 只把图标颜色换成 Blender 官方橙。
- const css=fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)),'..','src','library','app.css'),'utf8');
+ const css=assembleLibraryStyles();
  assert.equal(/\.blender-download\{background:#3/.test(css),false,'不再自带深色背景（改用下载键的淡绿底）');
  assert.ok(/\.blender-download\{color:#e87d2b!important\}/.test(css),'logo 为 Blender 橙');
  assert.ok(/\.blender-download:hover:not\(:disabled\)\{color:#ffa14d!important\}/.test(css),'悬停亮一档');

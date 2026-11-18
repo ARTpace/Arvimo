@@ -90,7 +90,7 @@ const provenanceUrl=item=>canonicalPictureUrl(item.url)||item.url;
  *  `maxBytes` 是体积上限，**边下边判**：1923 张 4K 原图有 8GB，等全部下完再检查体积、发现超限，
  *  等于白跑两小时。到上限就停止派发新任务并如实报告还剩几张没下（`truncated`）。
  */
-async function collectFiles(work,items,{client,open,signal,progress,startedAt,onFile,existing=null,throttle=null,maxBytes=Infinity}={}){
+async function collectFiles(work,items,{client,platform,open,signal,progress,startedAt,onFile,existing=null,throttle=null,maxBytes=Infinity}={}){
   const dir=path.join(work,'images');
   await fsp.mkdir(dir,{recursive:true});
   const results=new Array(items.length).fill(null);
@@ -168,9 +168,12 @@ async function collectFiles(work,items,{client,open,signal,progress,startedAt,on
       noteFailure(index,item,Error(`图片内容不完整：${e.message}`));
       return;
     }
+    // 文件名前带平台标识（如 flickr_01-Twin Suns.png），一眼看出来自哪个图站。
+    // platform 取 info.json 的 platform id（flickr / 500px / pinterest ...）；未识别到的下载不硬加。
+    const tag=platform?`${imageStem(platform,'')}_`:'';
     const stem=imageStem(item.title,`image-${index+1}`);
-    let name=`${pad2(index+1)}-${stem}.${sniffed.extension}`;
-    for(let n=2;used.has(name);n++)name=`${pad2(index+1)}-${stem}-${n}.${sniffed.extension}`;
+    let name=`${tag}${pad2(index+1)}-${stem}.${sniffed.extension}`;
+    for(let n=2;used.has(name);n++)name=`${tag}${pad2(index+1)}-${stem}-${n}.${sniffed.extension}`;
     used.add(name);
     const relative=`images/${name}`;
     try{
@@ -395,7 +398,7 @@ export async function runImageJob({uid,name,author,platform,url,assetId,tags,out
       await writeLive(liveFiles.length===1);
       progress({stage:'transferring',message:`已写入本机 ${outWritten?Math.round(outWritten/1024):0} KB`,bytesWritten:outWritten,totalBytes:null,transferRate:Math.round(outWritten/Math.max(.001,(Date.now()-outBegin)/1000))});
     };
-    const collected=await collectFiles(work,assets,{client:plan.client,open,signal,progress,startedAt,onFile:copyOut,existing:resumed,throttle,maxBytes:totalBytes});
+    const collected=await collectFiles(work,assets,{client:plan.client,platform:plan.platform,open,signal,progress,startedAt,onFile:copyOut,existing:resumed,throttle,maxBytes:totalBytes});
     const files=collected.files;
     failed=collected.failed;
     // 一张都没取回来 → 这不是「少了几张」，是整条链路都不通，必须如实失败（错误消息带上真实原因）。

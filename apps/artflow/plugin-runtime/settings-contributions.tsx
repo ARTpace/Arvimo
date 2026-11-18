@@ -13,6 +13,8 @@ export interface SettingsSectionProps {
   /** Settings extensions collaborate through services; they never import App or sibling builtins. */
   kernel: Kernel;
   language: SettingsSectionLanguage;
+  /** 宿主把 section 并进通用页时为真：此时应渲染扁平结构，不再自带标题条与卡片底。 */
+  embedded?: boolean;
 }
 
 export interface SettingsSectionContribution {

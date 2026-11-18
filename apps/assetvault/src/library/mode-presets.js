@@ -21,12 +21,12 @@ import {ALL, LINK_PLATFORM, platformsForMode} from './platforms.js';
 
 export const MODE_PRESETS = Object.freeze([
   {
-    id: 'images', label: '图片', icon: 'image', legacyMode: 'image',
+    id: 'images', groupId: 'image-assets', localKinds: Object.freeze(['images']), label: '图片', icon: 'image', legacyMode: 'image',
     platformKind: 'image', allLabel: '', defaultPlatform: 'artstation',
     gallery: true, modelOnly: false, localOnly: false, localKind: 'images',
   },
   {
-    id: 'models', label: '模型', icon: 'cube', legacyMode: 'model',
+    id: 'models', groupId: 'three-d', localKinds: Object.freeze(['models', 'textures', 'hdris', 'packs']), label: '3D 资产', icon: 'cube', legacyMode: 'model',
     // 默认停在纯 3D 站：点「模型」立刻看到模型卡片，不会因某个两栖平台先返回而混进作品图。
     // 「全部 3D 平台」仍在下拉里，用户要跨站检索可主动选。
     platformKind: 'model', allLabel: '全部 3D 平台', defaultPlatform: 'sketchfab',
@@ -35,7 +35,7 @@ export const MODE_PRESETS = Object.freeze([
   {
     // UI 元素是第三类产物：不是 3D 模型也不是图片，落盘是 index.html + style.css。
     // 单开一档而不是塞进模型 / 图片 —— 塞进去就会出现「选了 Uiverse 却搜不到模型」的困惑。
-    id: 'ui', label: 'UI', icon: 'grid', legacyMode: '',
+    id: 'ui', groupId: 'ui-assets', localKinds: Object.freeze(['uielement']), label: 'UI', icon: 'layout', legacyMode: '',
     platformKind: 'ui', allLabel: '', defaultPlatform: 'uiverse',
     gallery: false, modelOnly: false, localOnly: false, localKind: 'uielement',
   },
@@ -43,16 +43,23 @@ export const MODE_PRESETS = Object.freeze([
     // 视频 / 文本：没有可搜关键词的公开聚合源，但发现页仍留在原地 —— 只给「链接解析」一枚入口。
     // localOnly 仍为 true，因为它在资产库页还要按本地文件类型筛（documents / videos），
     // 两者不冲突：路由决定走哪一面，见 app.js 的 applyModeTab。
-    id: 'documents', label: '文本', icon: 'type', legacyMode: '',
+    id: 'documents', groupId: 'document-assets', localKinds: Object.freeze(['documents']), label: '文档', icon: 'type', legacyMode: '',
     platformKind: '', allLabel: '', defaultPlatform: '',
     gallery: false, modelOnly: false, localOnly: true, linkOnly: true, localKind: 'documents',
   },
   {
     // 视频：已在线的四站（Pexels / Coverr / Civitai / Pixabay）→ 正常平台池，能搜词、能逐站浏览。
     // 资产库页仍按本地文件类型筛（localKind:'videos'），那一面与 localOnly 无关。
-    id: 'videos', label: '视频', icon: 'play', legacyMode: '',
+    id: 'videos', groupId: 'video-assets', localKinds: Object.freeze(['videos']), label: '视频', icon: 'play', legacyMode: '',
     platformKind: 'video', allLabel: '', defaultPlatform: 'pexels-video',
     gallery: false, modelOnly: false, localOnly: false, localKind: 'videos',
+  },
+  {
+    // 音频单开一档（原来是「影音」母类下的子类）：音频没有公开聚合源，与文档同规格 ——
+    // 发现页只给「链接解析」，资产库页按本地文件类型筛（localKind:'audio'）。
+    id: 'audio', groupId: 'audio-assets', localKinds: Object.freeze(['audio']), label: '音频', icon: 'music', legacyMode: '',
+    platformKind: '', allLabel: '', defaultPlatform: '',
+    gallery: false, modelOnly: false, localOnly: true, linkOnly: true, localKind: 'audio',
   },
 ].map(Object.freeze));
 

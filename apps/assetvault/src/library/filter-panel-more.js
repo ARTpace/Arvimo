@@ -44,6 +44,7 @@ export function morePanel(host, ctx) {
         ${iconButton({icon: 'rotate', cls: 'fd-collection-reorder', title: '按当前顺序重排合集', esc})}
         ${iconButton({icon: 'trash', cls: 'fd-clear-all-panel', title: '清除全部筛选', esc})}
         ${iconButton({icon: 'shield', cls: 'fd-local-health', title: '本地库体检：占用排行 / 疑似重复 / 空包', esc})}
+        ${iconButton({icon: 'scan', cls: 'fd-asset-audit', title: '工具检测：库内记录与磁盘目录是否对得上（可修复）', esc})}
       </div></div>`;
 
   const q = host.querySelector('.fd-q');
@@ -109,6 +110,8 @@ export function morePanel(host, ctx) {
     if (event.target.closest?.('.fd-clear-all-panel')) controls.clear?.();
     // 体检是独立 dialog（数据量大、动作是删除），面板只负责喊一声。
     if (event.target.closest?.('.fd-local-health')) window.dispatchEvent(new CustomEvent('assetvault:local-health'));
+    // 资产检查是另一件事：体检看体积和重复包，这里看「记录和磁盘对不对得上」。
+    if (event.target.closest?.('.fd-asset-audit')) window.dispatchEvent(new CustomEvent('assetvault:asset-audit'));
   });
 
   host.querySelector('.fv-range-field').addEventListener('change', () => {

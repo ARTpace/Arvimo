@@ -4,6 +4,7 @@ import {openLibraryDb} from './library-db.mjs';
 import {mergeDomains, parseMainState} from './library-blob.mjs';
 import {MAIN_STATE_KEY, USER_STATE_KEY, PROBE_STATE_KEY, SESSION_STATE_KEY, STATE_KEYS, STATE_STAMP_PREFIX, stateStampKey} from './library-schema.mjs';
 import {validateValues, restoreLibraryCovers, mergeCatalog, stateFileFor} from './library-state-files.mjs';
+import {assertFileWriteProtocol} from './file-write-protocol.mjs';
 
 // 纯函数拆到 library-state-files.mjs，这里保持原有导出路径不变
 // （server/library.mjs 与所有测试都从本文件 import）。
@@ -142,17 +143,29 @@ export function createLibraryStorage(dataDir, downloads, options = {}) {
     try {
       await fs.mkdir(path.dirname(dbFile), {recursive: true});
       await backupBeforeMigration();
-      const conn = await openLibraryDb({file: dbFile, onWarn, importer: options.dbImporter});
+      const conn = await openLibraryDb({file: dbFile, onWarn, importer: options.dbImporter, throwOnError: true});
       dbProbed = true;
       if (!conn) { dbHealthy = false; dbFailure = 'SQLite 驱动未加载（详见服务端日志）'; }
       else dbFailure = null;
       return conn;
     } catch (error) {
-      // 一次失败就钉死降级：同一个进程里 ABI 不会自己变好，重试只会白烧一次 dlopen。
+      // 保留实际失败原因（迁移校验失败不能被误报为驱动未安装）。
       dbHealthy = false; dbProbed = true; dbFailure = error.message;
       onWarn(`资产库内核不可用，已退回文件模式：${error.message}`);
       return null;
     }
+  }
+  // 在同一写队列内核验，防止请求检查后才排队、期间另一个操作开启文件整理。
+  async function checkSnapshotClient(clientProtocol){
+    if(clientProtocol===undefined)return; // 内部服务不走 HTTP 快照协议，沿用原有内部调用。
+    await ensureIndexNow();
+    const conn=await openDb();
+    if(!conn){
+      // 从未创建过数据库的纯文件模式不可能开启过整理，保留原有降级契约。
+      // 已有 DB 却打不开时无法证明它未开启保护，禁止把未知定位状态当作旧空库。
+      try{await fs.lstat(dbFile);}catch(error){if(error.code==='ENOENT')return;throw error;}
+    }
+    try{assertFileWriteProtocol(conn,clientProtocol);}finally{conn?.close();}
   }
 
   /** 供 /api/health 暴露：让「SQLite 其实没在跑」变成一眼可见的事实。 */
@@ -420,9 +433,10 @@ export function createLibraryStorage(dataDir, downloads, options = {}) {
       }
       return result;
     },
-    save(values) {
+    save(values, {clientProtocol} = {}) {
       validateValues(values);
       const write = queue.then(async () => {
+        await checkSnapshotClient(clientProtocol);
         const current = await authoritative(await readSnapshot());
         const merged = {...current, ...values};
         // 目录域走合并：前端只持有它看到的那部分，直接替换会把服务端的目录缩小。
@@ -469,6 +483,7 @@ export function createLibraryStorage(dataDir, downloads, options = {}) {
     mutate(transform, options = {}) {
       if (typeof transform !== 'function') throw Error('缺少变更函数');
       const write = queue.then(async () => {
+        await checkSnapshotClient(options.clientProtocol);
         const current = await authoritative(await readSnapshot());
         const next = await transform(current);
         if (!next || next === current) return null;

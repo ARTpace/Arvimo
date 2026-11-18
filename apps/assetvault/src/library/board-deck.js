@@ -1,3 +1,4 @@
+import {boardPositions,animateBoardPositions} from './removal-motion.js';
 // 画板卡片区：主网格上方的一排「画板卡」——大封面 + 一排小图 + 名称计数，
 // 让画板 / 智能画板成为资产库里看得见、点得进的实体，而不是藏在侧栏列表里的一行字。
 //
@@ -29,7 +30,7 @@ export function createBoardDeck({
   let queued = null;
   let active = null;
 
-  const thumbUrl = item => thumbSrc(item?.thumbnail);
+  const thumbUrl = item => thumbSrc(item?.thumbnail,{card:true});
   // 底栏副行和资产卡的作者行等价：手动板报「N 个资产」，智能板说明内容是算出来的，
   // 否则一个「自动」孤零零挂在角上，读不出这块板到底装了多少东西。
   const metaText = row => {
@@ -42,18 +43,16 @@ export function createBoardDeck({
     const data = previews[row.id];
     const items = data?.items || [];
     const cover = items[0] ? thumbUrl(items[0]) : '';
-    // 小图只放 4 格，且跳过已经当封面的第 0 项：6 格挤在一条卡宽里每格只有 40px，
-    // 看不清是什么；4 格能到 60px+，同时不会跟大图重复同一张。
-    const strip = items.slice(1, 5);
+    // 独立画板区使用三张大预览，跳过封面；固定槽位避免少量成员改变卡片高度。
+    const strip = items.slice(1, 4);
     const cells = strip.length
       ? strip.map(item => `<span class="bd-card-thumb">${thumbUrl(item) ? `<img src="${esc(thumbUrl(item))}" alt="" loading="lazy" decoding="async">` : icon('cube')}</span>`).join('')
-      // 没成员时也撑出 4 格：空画板看起来仍是「一块画板」，而不是塌成一条线。
-      : '<span class="bd-card-thumb is-empty"></span>'.repeat(4);
+      : '<span class="bd-card-thumb is-empty"></span>'.repeat(3);
     return {
       cover: cover
         ? `<img src="${esc(cover)}" alt="" loading="lazy" decoding="async">`
         : `<span class="bd-card-void">${icon('layers')}</span>`,
-      strip: cells,
+      strip: cells+(strip.length?'<span class="bd-card-thumb is-empty"></span>'.repeat(Math.max(0,3-strip.length)):''),
     };
   }
 
@@ -77,13 +76,19 @@ export function createBoardDeck({
     </article>`;
   }
 
+  let paintedHtml='';
   function paint() {
-    host.innerHTML = store.flat().map(cardHtml).join('');
+    const html=store.flat().map(cardHtml).join('');
+    if(html===paintedHtml&&host.children.length)return;
+    paintedHtml=html;
+    const before=boardPositions(host);
+    host.innerHTML = html;
+    animateBoardPositions(host,before);
   }
 
   /** 预览只拉一次：签名（id + 成员数 + 智能位）没变就不重复请求。 */
   async function loadPreviews(boards) {
-    const key = boards.map(row => `${row.id}:${row.assetCount}:${row.smart ? 1 : 0}`).join('|');
+    const key = boards.map(row => `${row.id}:${row.assetCount}:${row.updatedAt||0}:${row.coverAssetId||''}:${row.smart ? 1 : 0}`).join('|');
     if (key === previewKey) return;
     // 拉取途中又变了（连续往几个画板里加资产），排一次重拉，别把最新一次变更丢掉。
     if (inflight) { queued = boards; return; }

@@ -3,6 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createPagedQuery, mergeRemoteModels, PAGE_SIZE} from '../src/library/library-page-fetch.js';
 import {saveLibrary} from '../src/library/library-state.js';
+import {tagsFor, tagPanel} from '../src/library/asset-tags.js';
 import {rowsFromState, queryAssets} from '../server/library-query.mjs';
 
 const uid = char => char.repeat(32);
@@ -12,6 +13,27 @@ const pages = [
   {uids: uids.slice(2, 4), items: uids.slice(2, 4).map((id, i) => ({uid: id, name: `资产${i + 2}`})), total: 5, engine: 'sqlite'},
   {uids: uids.slice(4), items: [{uid: uids[4], name: '资产4'}], total: 5, engine: 'sqlite'},
 ];
+
+test('刷新已有资产同步补标结果，区分来源并同步清空，不覆盖资产本体', async () => {
+  const model = {uid: uids[0], name: '本地名称', tags: ['平台原标签']};
+  const state = {models: [model], userTags: {[model.uid]: ['旧标签']}};
+  let tagKinds = {ai: ['建筑', '室外'], user: ['自定义']};
+  const paged = createPagedQuery({state, request: async () => ({
+    uids: [model.uid], total: 1,
+    items: [{uid: model.uid, name: '远端名称', tagKinds}],
+  })});
+  await paged.first({});
+  assert.deepEqual(state.aiTags[model.uid], ['建筑', '室外']);
+  assert.deepEqual(state.userTags[model.uid], ['自定义']);
+  assert.ok(tagsFor(state, model).includes('建筑'));
+  assert.match(tagPanel(state, model, value => value), /tag-chip ai[^>]*.*建筑/);
+  assert.deepEqual(model.tags, ['平台原标签']);
+  assert.equal(model.name, '本地名称');
+  tagKinds = {ai: []};
+  await paged.first({});
+  assert.equal(state.aiTags[model.uid], undefined);
+  assert.deepEqual(state.userTags[model.uid], ['自定义'], '未返回的分层不清空');
+});
 
 function pageRequest({status = 0} = {}) {
   const calls = [];

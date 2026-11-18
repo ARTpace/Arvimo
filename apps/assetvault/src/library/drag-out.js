@@ -335,12 +335,16 @@ export function setupDragOut({toast, jobs, download, send, targetById,
     hoverTimers.delete(card);
   }
 
-  // 兜底：桌面版不接受任何网页拖拽，把缩略图当文件交出去的动作一律掐断。
-  function onDragStart(event) { event.preventDefault(); }
+  // Category sorting stays inside the app; asset thumbnails still use native file drag.
+  function onDragStart(event) {
+    if (event.target?.closest?.('[data-category-order]')) return;
+    event.preventDefault();
+  }
 
   document.addEventListener('pointerdown', onPointerDown, true);
   document.addEventListener('pointermove', onPointerMove, true);
   document.addEventListener('pointerup', onPointerUp, true);
+  document.addEventListener('assetvault:selection-start', onPointerUp);
   document.addEventListener('pointercancel', onPointerUp, true);
   document.addEventListener('pointerover', onPointerOver, true);
   document.addEventListener('pointerout', onPointerOut, true);
@@ -350,6 +354,7 @@ export function setupDragOut({toast, jobs, download, send, targetById,
     document.removeEventListener('pointerdown', onPointerDown, true);
     document.removeEventListener('pointermove', onPointerMove, true);
     document.removeEventListener('pointerup', onPointerUp, true);
+    document.removeEventListener('assetvault:selection-start', onPointerUp);
     document.removeEventListener('pointercancel', onPointerUp, true);
     document.removeEventListener('pointerover', onPointerOver, true);
     document.removeEventListener('pointerout', onPointerOut, true);

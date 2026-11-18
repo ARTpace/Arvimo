@@ -243,7 +243,7 @@ export function resolveUiChrome(tokens: ResolvedSkinTokens, settings: UiThemeSet
   // 画布点阵（圆点网格）：迁移前 CanvasBackdrop 写死的 radial-gradient，现由主题提供。
   // 皮肤可声明 canvas.dots='off' 关闭；用户 setting canvasDots=false 强制关闭；关闭时写入 none。
   const skinDotMode = tokens.canvas.dots;
-  const dotsEnabled = skinDotMode !== 'off' && settings.canvasDots !== false;
+  const dotsEnabled = settings.canvasDots ?? skinDotMode !== 'off';
   let dotImage = 'none';
   if (dotsEnabled) {
     const rawDotColor = settings.dotColor ?? tokens.canvas.dotColor ?? DEFAULT_CANVAS_DOT_COLOR;

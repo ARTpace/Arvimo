@@ -146,7 +146,7 @@ export const useCanvasState = () => {
     /** Legacy Board[] and Project Document v2 are both accepted at the renderer ingress. */
     const loadBoardData = useCallback((serializedProject: unknown): boolean => {
         const normalizedBoards = deserializeProjectDocument(serializedProject);
-        if (normalizedBoards.length === 0) return false;
+        // A valid empty document means the library intentionally deleted its last board.
         pendingBaseElementsRef.current.clear();
         importHistoryGroupsRef.current.clear();
         documentState.replaceProject(normalizedBoards);

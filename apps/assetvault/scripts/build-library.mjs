@@ -2,6 +2,7 @@ import esbuild from 'esbuild';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
+import {assembleLibraryStyles} from './lib/library-styles.mjs';
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const output=path.join(root,'dist/library');await fs.mkdir(output,{recursive:true});
 const wasm=await fs.readFile(path.join(root,'vendor/upstream-src/lib/wasm/decrypt.wasm'));
@@ -38,6 +39,10 @@ const threeResolver={
 await esbuild.build({entryPoints:[path.join(root,'src/library/doc-render.js')],outfile:path.join(output,'doc-render.js'),bundle:true,format:'esm',platform:'browser',target:'chrome110',logLevel:'info'});
 await esbuild.build({entryPoints:[path.join(root,'src/library/engine.js')],outfile:path.join(output,'engine.js'),bundle:true,format:'esm',platform:'browser',target:'chrome110',plugins:[shims],logLevel:'info'});
 await esbuild.build({entryPoints:[path.join(root,'src/library/gltf-preview.js')],outfile:path.join(output,'gltf-preview.js'),bundle:true,format:'esm',platform:'browser',target:'chrome110',plugins:[threeResolver],logLevel:'info'});
+// 3D 封面渲染器也是独立 bundle：只有卡片封面加载失败（模型格式）时才按需加载，
+// 不让 three.js 进主包首屏。与 gltf-preview.js 共用 threeResolver。
+await esbuild.build({entryPoints:[path.join(root,'src/library/image-decoders.js')],outfile:path.join(output,'image-decoders.js'),bundle:true,format:'esm',platform:'browser',target:'chrome110',plugins:[threeResolver],logLevel:'info'});
+await esbuild.build({entryPoints:[path.join(root,'src/library/model-thumb.js')],outfile:path.join(output,'model-thumb.js'),bundle:true,format:'esm',platform:'browser',target:'chrome110',plugins:[threeResolver],logLevel:'info'});
 // 画板视图加载的是 Artflow 完整应用（独立 Vite 产物，iframe 嵌入）。
 // 这里不打包它，只把 artflow 工程的构建产物搬过来 —— artflow 自己是应用，
 // 有自己的 Tailwind 编译、插件系统与构建链，混进 esbuild 只会两头不讨好。
@@ -77,8 +82,9 @@ try{
 }catch(error){
   console.warn('[build:library] 未找到 artflow 产物（'+artflowSrc+'），画板视图将显示未构建提示：'+error.message);
 }
-await esbuild.build({entryPoints:[path.join(root,'src/library/app.js')],outfile:path.join(output,'app.js'),bundle:true,format:'esm',platform:'browser',target:'chrome110',external:['./engine.js','./gltf-preview.js','./doc-render.js','./artflow-embed.js'],plugins:[threeResolver],logLevel:'info'});
+await esbuild.build({entryPoints:[path.join(root,'src/library/app.js')],outfile:path.join(output,'app.js'),bundle:true,format:'esm',platform:'browser',target:'chrome110',external:['./image-decoders.js','./engine.js','./gltf-preview.js','./doc-render.js','./model-thumb.js','./artflow-embed.js'],plugins:[threeResolver],logLevel:'info'});
 for(const f of ['index.html','app.css','viewer.css','content-kind-tabs.css','settings-controls.css','favicon.svg','worker.html','splash.html','splash.js','sidebar-boot.js','mascot.png','login.html','login.css','login.js','login-peek.js','login-backdrop.svg','account-chip.js','artflow-embed.js'])await fs.copyFile(path.join(root,'src/library',f),path.join(output,f));
+await fs.writeFile(path.join(output,'app.css'),assembleLibraryStyles());
 // viewer.css 构建时内联进 index.html：静态资源白名单是服务进程启动时固化的常量，
 // 新增的 /viewer.css 在旧进程里会 404 —— app.css 的全局 svg{width:100%} 就会把
 // 材质栏图标撑成巨图，并把 canvas 挤出可视区。内联后不必重启服务即可生效。
@@ -97,6 +103,14 @@ for(const f of ['index.html','app.css','viewer.css','content-kind-tabs.css','set
   const prepared=html.replace('正在准备 Arvimo · 艺团界面…</div>',startup+'</div>');
   await fs.writeFile(path.join(output,'index.html'),prepared.replace(marker,'<style data-viewer-css>\n'+css+'\n</style>'));
 }
+// ponytail: embed the existing viewer markup and bundle, never maintain a second toolbar.
+{
+ const html=await fs.readFile(path.join(root,'src/library/index.html'),'utf8');
+ const dialog=html.match(/<dialog id="preview-dialog"[\s\S]*?<\/dialog>/)?.[0];
+ if(!dialog)throw Error('Missing shared 3D viewer markup');
+ await fs.writeFile(path.join(output,'model-preview.html'),`<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="app.css"><link rel="stylesheet" href="viewer.css"><style>html,body{margin:0;width:100%;height:100%;overflow:hidden}#preview-dialog[open]{position:fixed;inset:0;margin:0;width:100%;height:100%;max-width:none;max-height:none;padding:0;border:0;border-radius:0;display:block}#preview-dialog>.dialog-header,.model-details{display:none!important}#preview-dialog .preview-layout{display:block;height:100%}#preview-dialog .viewer-wrap{height:100%}.viewer-tools{flex-wrap:wrap;max-width:calc(100% - 16px)}</style>${dialog}<script type="module" src="model-preview.js"></script></html>`);
+}
+await esbuild.build({entryPoints:[path.join(root,'src/library/model-preview.js')],outfile:path.join(output,'model-preview.js'),bundle:true,format:'esm',platform:'browser',target:'chrome110',external:['./gltf-preview.js'],logLevel:'info'});
 await fs.appendFile(path.join(output,'app.css'),'\n'+await fs.readFile(path.join(root,'src/library/search-motion.css'),'utf8'));
 // 资源指纹：给 app.css / app.js 的引用带上内容 hash（?v=xxxxxxxx）。
 // Tauri 的 WebView2 会按 URL 做启发式缓存 —— 没有 stamp 时「改完样式、刷新还是旧界面」
@@ -118,7 +132,7 @@ const desktopRoot=path.join(root,'sketchfab-exporter-tauri');
 const desktopSrc=path.join(desktopRoot,'src');
 try{
   await fs.access(path.join(desktopRoot,'src-tauri','tauri.conf.json'));
-  const syncFiles=['index.html','app.css','viewer.css','content-kind-tabs.css','settings-controls.css','app.js','engine.js','gltf-preview.js','doc-render.js','artflow-embed.js','favicon.svg','worker.html','splash.html','splash.js','sidebar-boot.js','mascot.png','login.html','login.css','login.js','login-peek.js','login-backdrop.svg','account-chip.js'];
+  const syncFiles=['model-preview.html','model-preview.js','index.html','app.css','viewer.css','content-kind-tabs.css','settings-controls.css','app.js','engine.js','gltf-preview.js','doc-render.js','model-thumb.js','image-decoders.js','artflow-embed.js','favicon.svg','worker.html','splash.html','splash.js','sidebar-boot.js','mascot.png','login.html','login.css','login.js','login-peek.js','login-backdrop.svg','account-chip.js'];
   for(const f of syncFiles)await fs.copyFile(path.join(output,f),path.join(desktopSrc,f));
   // Artflow 产物同步过去：桌面版同样要把完整画布装进画板视图。
   // 用 fs.cp 覆盖同名文件（默认行为），不清目录 —— 整目录删会把历史构建的残留一起带走，

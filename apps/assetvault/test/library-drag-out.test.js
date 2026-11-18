@@ -87,6 +87,17 @@ function mount({post, jobs = () => [], download = async () => {}, deferNativeDra
 
 const flush = () => new Promise(resolve => setTimeout(resolve, 30));
 
+test('桌面拦截器放行分类内部排序，仍阻止资产缩略图的网页拖动',()=>{
+  const h=mount();let prevented=0;
+  try{
+    const category={closest:selector=>selector==='[data-category-order]'?{}:null};
+    h.fire('dragstart',{target:category,preventDefault(){prevented++;}});
+    assert.equal(prevented,0,'分类 dragstart 必须能继续触发 dragover/drop');
+    h.fire('dragstart',{target:fakeTarget({card:fakeCard('a'.repeat(32))}),preventDefault(){prevented++;}});
+    assert.equal(prevented,1,'资产仍交给原生真实文件拖出');
+  }finally{h.teardown();}
+});
+
 test('原文件解析出错不能向外部软件拖出文件名文字', async () => {
   const target = fakeTarget({card:fakeCard('a'.repeat(32))});
   const h = mount({post:async()=>{throw Error('storage is not defined');}});
@@ -174,6 +185,18 @@ test('已经松手才解析完的，不会再补一个「立刻取消」的拖�
     await flush();
     assert.equal(calls.length, 0, '手已经松开，这时候拖放只会当场取消');
   } finally { teardown(); }
+});
+
+test('长按进入多选后取消待拖出状态，继续移动不触发系统拖放', async () => {
+  const target=fakeTarget({card:fakeCard('f'.repeat(32))});
+  const h=mount();
+  try{
+    h.fire('pointerdown',{target});
+    h.fire('assetvault:selection-start');
+    h.fire('pointermove',{target,clientX:80});
+    await flush();
+    assert.equal(h.calls.length,0);
+  }finally{h.teardown();}
 });
 
 test('解析好的路径会被缓存，同一张卡第二次拖不再回源', async () => {

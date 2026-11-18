@@ -1,3 +1,4 @@
+import {assembleLibraryStyles} from '../scripts/lib/library-styles.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -7,7 +8,7 @@ import {createCardView} from '../src/library/card-view.js';
 import {platformLabel} from '../src/library/platforms.js';
 import {favoriteUid,registerFavoriteTarget,favoriteTarget,favoriteSkipsCollect,favoriteButtonHtml} from '../src/library/favorite-targets.js';
 
-const css=fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)),'..','src','library','app.css'),'utf8');
+const css=assembleLibraryStyles();
 
 // 卡片 meta 单行化后只渲染「标题 · 作者（与来源不同名时） · 许可」，统计/平台标签行已移除。
 // 这里用最小桩构造视图，验证单行结构与许可渲染，不牵动真正的 state / Blender 桥。
@@ -365,4 +366,24 @@ test('收藏链路与选择方块：findModel 兜底、skipCollect 生效、方�
  assert.match(app,/favorites:\(\)=>state\.favorites/,'素材包卡片要能读到收藏状态');
  assert.match(css,/\.card-media>\.card-select\{display:none!important\}/,'右上角方块不再显示');
  assert.match(src('card-view.js'),/data-select=/,'DOM 与 data-select 契约仍保留给框选 / Shift 连选');
+});
+
+// 本地资产的封面热区无可见文字，可访问名称仍跟随预览能力：图片给「查看图片」，能在内置 3D 查看器里
+// 转的模型给「3D 预览」，其余才是「打开文件」（2026-11-14 用户反馈本地模型点开被甩给系统）。
+test('本地资产整张封面可点击，无中间文字，保留准确的可访问名称',()=>{
+ const base={uid:'c'.repeat(32),platform:'local',name:'asset',thumbnail:'/api/local/thumb?w=512&root=x&rel=y'};
+ const label = model => {
+  const html=build().card(model);
+  const hit=html.match(/class="preview-hit"[^>]*aria-label="([^"]+)"[^>]*>(.*?)<\/button>/s);
+  assert.ok(hit);assert.equal(hit[2],'');
+  return hit[1].replace(/ asset$/,'');
+ };
+ assert.equal(label({...base,assetType:'image',ext:'png'}),'查看图片');
+ assert.equal(label({...base,assetType:'model',ext:'glb'}),'3D 预览');
+ assert.equal(label({...base,assetType:'model',ext:'fbx'}),'3D 预览');
+ // .blend / .usd 只能出封面图，内置查看器打不开，文案要老实
+ assert.equal(label({...base,assetType:'model',ext:'blend'}),'打开文件');
+ assert.equal(label({...base,assetType:'other',ext:''}),'打开文件');
+ // 老记录 assetType 还是 other，但格式已经能认出是 glb：也按能预览处理
+ assert.equal(label({...base,assetType:'other',ext:'glb'}),'3D 预览');
 });

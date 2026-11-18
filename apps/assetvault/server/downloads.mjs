@@ -1,8 +1,8 @@
+import {revealInFileManager} from './reveal-path.mjs';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import {randomUUID} from 'node:crypto';
-import {execFile} from 'node:child_process';
 import {processIdentity,lockOwnerAlive,replaceLibraryOwner} from './process-lock.mjs';
 import {runExportWorker,browserPath} from './export-worker.mjs';
 import {runArtstationWorker} from './artstation-worker.mjs';
@@ -21,8 +21,10 @@ import {isPictureSite} from './picture-sites.mjs';
 import {inspectFolder,nativeFolderPicker} from './folder-dialog.mjs';
 import {commitFolder,commitArchive,reserveFolder} from './local-commit.mjs';
 import {assetStorageCategory,storageRoot} from './asset-storage.mjs';
+import {assetFolder} from './asset-folders.mjs';
 import {canonicalPath,recoverDownloads,recoveredOptionsMatch} from './download-recovery.mjs';
-import {cleanFilename,cleanFolderName} from './folder-name.mjs';
+import {cachePlatformCover} from './platform-cover.mjs';
+import {cleanFilename,cleanFolderName,assetStem} from './folder-name.mjs';
 import {findRemoteBoardDir} from './picture-board.mjs';
 import {TransferProgress} from './transfer-progress.mjs';
 import {mapLimit} from './bounded-map.mjs';
@@ -107,7 +109,11 @@ export function modelSnapshot(m,kind){
  if(!uidPattern.test(m?.uid))throw Error('模型 ID 无效');
  // 标签随任务一起落库：源站不提供标签的平台（Kenney / Poly Pizza / 花瓣…）靠这一份，
  // 下载完成时写进 info.json 的就是「资产库里看到的那组标签」，不会出现下载包里一个标签都没有。
- const common={uid:m.uid,name:String(m.name||m.uid).slice(0,240),author:String(m.author||'未知作者').slice(0,100),license:String(m.license||'许可请查看原页面').slice(0,200),thumbnail:typeof m.thumbnail==='string'&&m.thumbnail.startsWith('https://')?m.thumbnail.slice(0,2048):null,tags:tagList(m.tags)};
+ // 平台官方缩略图（材质球 / 渲染图）。它和 uid 是两回事：uid 是本地主键（标签/收藏按它关联），
+ // 这里存的是「平台眼里这个资产长什么样」。历史教训：只存本地缩略图，包一旦被重扫，
+ // 卡片就退成包内 Color.jpg（一块平铺贴图），和平台搜索里的材质球完全对不上。
+ const platformThumb=typeof m.thumbnail==='string'&&m.thumbnail.startsWith('https://')?m.thumbnail.slice(0,2048):null;
+ const common={uid:m.uid,name:String(m.name||m.uid).slice(0,240),author:String(m.author||'未知作者').slice(0,100),license:String(m.license||'许可请查看原页面').slice(0,200),thumbnail:platformThumb,platformThumbnail:platformThumb,tags:tagList(m.tags)};
  // UI 元素（Uiverse）落的是代码而不是图片：html + css 写成一个目录。
  // 元素链接必须留着 —— 下载时要从里面读出用户名与 slug 才能取到代码。
  if(kind==='uielement'){
@@ -145,7 +151,7 @@ export function modelSnapshot(m,kind){
  if(kind==='artstation'){
   const artwork=String(m.artworkUrl||m.url||'').replace(/\/$/,'');
   if(!ARTSTATION_URL.test(artwork))throw Error('ArtStation 作品地址无效');
-  return {...common,kind:'artstation',downloadable:false,url:artwork,artId:String(m.artId||'').slice(0,20),
+  return {...common,kind:'artstation',platform:'artstation',downloadable:false,url:artwork,artId:String(m.artId||'').slice(0,20),
   // 有内嵌 Marmoset 场景的作品转 GLB/FBX；没有场景的只能把作品图片存下来。这个标记决定 worker
   // 走哪条 runner，所以必须随任务一起持久化——恢复队列时不能靠再问一次网络。
   hasMarmoset:m.hasMarmoset!==false};
@@ -167,7 +173,11 @@ export function modelSnapshot(m,kind){
   return {...common,kind:'kenney',platform:'kenney',downloadable:true,url:String(m.url||`https://kenney.nl/assets/${m.assetId}`),assetId:String(m.assetId).slice(0,80),assetType:'pack'}; }
  if(kind==='freestylized'){
   if(!m.assetId)throw Error('FreeStylized 资产 ID 缺失');
-  const assetType=['skybox','textures','packs','alphas','smart'].includes(m.assetType)?m.assetType:'models';
+  // 天空盒在库里可能被归一成 hdris（跨平台统一值），而 FreeStylized 的打包分支只认 skybox：
+  // 不折回来就会被当成 models，导出时去抓 3D 模型包而不是天空盒包。
+  const raw=String(m.assetType||'');
+  const type=['hdris','hdri','env','environment'].includes(raw)?'skybox':raw;
+  const assetType=['skybox','textures','packs','alphas','smart'].includes(type)?type:'models';
   return {...common,kind:'freestylized',platform:'freestylized',downloadable:true,url:String(m.url||''),assetId:String(m.assetId).slice(0,80),assetType};
  }
  // Polyfork：assetId 就是它的资产 id（`windmill-3aad49` 这种），随任务持久化，
@@ -188,7 +198,7 @@ export function modelSnapshot(m,kind){
   if(!m.assetId)throw Error('Fab 资产 ID 缺失');
   return {...common,kind:'fab',platform:'fab',downloadable:true,url:String(m.url||`https://www.fab.com/listings/${m.assetId}`),assetId:String(m.assetId).slice(0,120),engineVersion:String(m.engineVersion||'').slice(0,20)};
  }
- return {...common,kind:'sketchfab',downloadable:m.downloadable===true,url:`https://sketchfab.com/models/${m.uid}`};
+ return {...common,kind:'sketchfab',platform:'sketchfab',downloadable:m.downloadable===true,url:`https://sketchfab.com/models/${m.uid}`};
 }
 /** 命名规则搬到了 folder-name.mjs：远程收藏卡也用同一套，才能原地接管同一个目录。 */
 export {cleanFilename,cleanFolderName};
@@ -199,9 +209,11 @@ function optionKey(value){
 }
 const sameFolder=(a,b)=>canonicalPath(a)===canonicalPath(b);
 export class DownloadManager{
- constructor({dataDir,defaultFolder,runner=runExportWorker,artRunner=runArtstationWorker,imageRunner=runImageJob,polyRunner=runPolyhavenJob,simreadyRunner=runSimreadyJob,pizzaRunner=runPolypizzaJob,kenneyRunner=runKenneyJob,freestyleRunner=runFreestylizedJob,polyforkRunner=runPolyforkJob,materialRunner=runAmbientcgJob,uiverseRunner=runUiverseJob,fabRunner=runFabJob,verify=verifyArchive,browser=browserPath,blender=blenderPath,fbxConverter=convertGlbToFbx,blenderImporter=launchBlenderImport,materialImporter=launchBlenderMaterialImport,hdriImporter=launchBlenderHdriImport,folderPicker=nativeFolderPicker,autoStart=true}={}){
+ constructor({dataDir,defaultFolder,runner=runExportWorker,artRunner=runArtstationWorker,imageRunner=runImageJob,polyRunner=runPolyhavenJob,simreadyRunner=runSimreadyJob,pizzaRunner=runPolypizzaJob,kenneyRunner=runKenneyJob,freestyleRunner=runFreestylizedJob,polyforkRunner=runPolyforkJob,materialRunner=runAmbientcgJob,uiverseRunner=runUiverseJob,fabRunner=runFabJob,verify=verifyArchive,browser=browserPath,blender=blenderPath,fbxConverter=convertGlbToFbx,blenderImporter=launchBlenderImport,materialImporter=launchBlenderMaterialImport,hdriImporter=launchBlenderHdriImport,folderPicker=nativeFolderPicker,autoStart=true,legacyRoots=[]}={}){
   this.instanceId=randomUUID();this.dataDir=path.resolve(dataDir);this.defaultFolder=path.resolve(defaultFolder);this.runner=runner;this.artRunner=artRunner;this.imageRunner=imageRunner;this.polyRunner=polyRunner;this.pizzaRunner=pizzaRunner;this.simreadyRunner=simreadyRunner;this.kenneyRunner=kenneyRunner;this.freestyleRunner=freestyleRunner;this.polyforkRunner=polyforkRunner;this.materialRunner=materialRunner;this.uiverseRunner=uiverseRunner;this.fabRunner=fabRunner;this.verify=verify;this.browser=browser;this.blender=blender;this.fbxConverter=fbxConverter;this.blenderImporter=blenderImporter;this.materialImporter=materialImporter;this.hdriImporter=hdriImporter;this.folderPicker=folderPicker;this.autoStart=autoStart;this.jobs=[];this.workers=new Map();this.transfers=new Map();this.closed=false;this.baseUrl=null;this.revision=0;this.timer=null;this.persistTimer=null;this.warning='';
   this.settings={folder:this.defaultFolder,concurrency:1,retryLimit:1,paused:false};
+  // 历史扫描根：落点迁到库内后，旧 downloadDir 里还有大量老任务文件，重启恢复要继续认它们。
+  this.legacyRoots=legacyRoots.map(folder=>path.resolve(folder));
   this.dismissedDownloads=new Set();
  }
  async init(){
@@ -225,9 +237,17 @@ export class DownloadManager{
    }
   }
   try{
+   // 落点现在跟着库名走（<库名>/分组/子类型），第一次启动时这个资产根还不存在。
+   // 先建出来 —— 否则 inspectFolder 判 missing，前端每次打开下载页都弹「请重新设置下载路径」。
+   try{fs.mkdirSync(this.defaultFolder,{recursive:true});}catch{/* 真不可写时下面 folderStatus 会如实报错 */}
    this.store=path.join(this.dataDir,'tasks.json');let saved;
    if(fs.existsSync(this.store)){try{saved=JSON.parse(fs.readFileSync(this.store,'utf8'));}catch{try{saved=JSON.parse(fs.readFileSync(this.store+'.bak','utf8'));this.warning='任务记录损坏，已从上次备份恢复；原损坏文件已保留。';fs.copyFileSync(this.store,this.store+'.damaged-'+Date.now());fs.copyFileSync(this.store+'.bak',this.store);}catch{throw Error('任务记录损坏，已停止启动，未覆盖原文件');}}}
    if(saved){if(saved.version!==1||!Array.isArray(saved.jobs)||!saved.settings)throw Error('任务记录格式无效，未重置');this.settings={...this.settings,...saved.settings};this.jobs=saved.jobs;
+    // 落点由库决定（<库名>/分组/子类型），存档里的旧 folder 不能反过来把落点拽回去。
+    // 旧目录改当历史扫描根留着：那里还有之前下好的文件，卡片不能因此消失。
+    const savedFolder=this.settings.folder;
+    this.settings.folder=this.defaultFolder;
+    if(savedFolder&&path.resolve(savedFolder)!==path.resolve(this.defaultFolder)&&!this.legacyRoots.includes(path.resolve(savedFolder)))this.legacyRoots.push(path.resolve(savedFolder));
     for(const j of this.jobs){
      if(!uidPattern.test(j.uid)||!j.id)throw Error('任务记录含无效模型');
      if(ACTIVE.has(j.state)){
@@ -246,7 +266,7 @@ export class DownloadManager{
    for(const j of this.jobs){if(j.state==='interrupted'&&/^[a-f0-9-]{36}$/.test(j.id)&&Number.isSafeInteger(j.attempts)&&j.attempts>0){const key=`${j.id}-${j.attempts}`;await fsp.rm(path.join(this.dataDir,'workers',key),{recursive:true,force:true,maxRetries:5,retryDelay:150}).catch(()=>{});await fsp.rm(path.join(this.dataDir,'staging',key+'.zip.part'),{force:true}).catch(()=>{});await fsp.rm(path.join(this.dataDir,'staging',key+'.dir'),{recursive:true,force:true}).catch(()=>{});}}
    this.dismissedDownloads=new Set((Array.isArray(saved?.dismissedDownloads)?saved.dismissedDownloads:[]).filter(value=>typeof value==='string').map(canonicalPath));
    const skipped=[];
-   const recovered=await recoverDownloads(this.jobs,[...new Set([this.settings.folder,...this.jobs.map(storageRoot).filter(Boolean)])],{dismissed:this.dismissedDownloads,onSkipped:(file,error)=>skipped.push(`${path.basename(file)}：${error}`)});
+   const recovered=await recoverDownloads(this.jobs,[...new Set([this.settings.folder,...this.jobs.map(storageRoot).filter(Boolean),...this.legacyRoots])],{dismissed:this.dismissedDownloads,onSkipped:(file,error)=>skipped.push(`${path.basename(file)}：${error}`)});
    if(recovered&&fs.existsSync(this.store))fs.copyFileSync(this.store,this.store+'.before-recovery-'+Date.now());
    if(skipped.length)this.warning=[this.warning,`${skipped.length} 个本地文件未通过恢复校验：${skipped.slice(0,3).join('；')}`].filter(Boolean).join('；');
    await fsp.mkdir(path.join(this.dataDir,'staging'),{recursive:true});this.save();return this;
@@ -315,7 +335,21 @@ export class DownloadManager{
   if(input.concurrency!==undefined){if(![1,2].includes(input.concurrency))throw Error('并发数仅支持 1 或 2');next.concurrency=input.concurrency;}
   if(input.retryLimit!==undefined){if(![0,1,2].includes(input.retryLimit))throw Error('自动重试次数仅支持 0–2');next.retryLimit=input.retryLimit;}
   if(input.paused!==undefined){if(typeof input.paused!=='boolean')throw Error('暂停参数无效');next.paused=input.paused;}
-  this.settings=next;this.save();this.pump();return this.snapshot();
+  this.settings=next;this.save();
+  if(input.paused===true){
+   const stopping=[];
+   for(const [id,worker] of this.workers){
+    const job=this.jobs.find(j=>j.id===id);
+    // Saving is an atomic commit: let it finish rather than interrupting published files.
+    if(!job||!ACTIVE.has(job.state)||['saving','cancelling'].includes(job.state)||worker.controller.signal.aborted)continue;
+    const reason=Object.assign(Error('全部任务已暂停'),{code:'DOWNLOAD_PAUSED'});
+    worker.controller.abort(reason);stopping.push(worker.promise);
+   }
+   await Promise.allSettled(stopping);
+  }else if(input.paused===false){
+   for(const job of this.jobs)if(job.state==='held'&&job.pausedByQueue)this.update(job,{state:'queued',pausedByQueue:false,message:'等待后台处理',finishedAt:null,nextAttemptAt:null});
+  }
+  this.pump();return this.snapshot();
  }
  async enqueue(input,{folder=this.settings.folder}={}){
   if(input.authorized===true){
@@ -352,7 +386,9 @@ export class DownloadManager{
     duplicates.push({uid:m.uid,name:m.name,state:previous.state});continue;
    }
    const source=input.models.find(model=>model.uid===m.uid)||m;
-   const storageCategory=assetStorageCategory({...source,...m});
+   // 统一物理目录：与导入共用「分组/子类型」两级中文目录（asset-folders.mjs 是唯一真相源）。
+   // storageCategory 保留新值，downloadDir 直接落在 folder/<分组>/<子类型> 下；不再用旧的题材三级分类。
+   const storageCategory=assetFolder({...source,...m});
    const job={...m,id:randomUUID(),state:'queued',stage:'queued',message:openInBlender?'等待下载并发送到 Blender':'等待后台处理',options,downloadRoot:folder,storageCategory,downloadDir:path.join(folder,storageCategory),retryLimit:this.settings.retryLimit,attempts:0,retryCount:0,authorizedAt:Date.now(),createdAt:Date.now(),openInBlender,logs:[]};this.jobs.push(job);added.push(job.id);
   }
   for(const {uid,job} of reopen){
@@ -499,7 +535,13 @@ export class DownloadManager{
    signal.throwIfAborted();
    if(verification.warning)j.warning='部分 CDN 贴图需检查；文件结构校验不代表材质视觉一致';
    this.update(j,{state:'saving',stage:'saving',message:folderDelivery?'正在提交导出文件夹（不会覆盖同名文件夹）':'正在提交已校验的文件（不会覆盖同名文件）'});
-   const name=folderDelivery?cleanFolderName(meta.zipName||j.name,j.uid):cleanFilename(meta.zipName||j.name,j.uid);
+   // 3D 模型类交付名统一「标题 - 作者」、不带 uid 尾巴；图片包 / 材质 / HDRI / UI 元素
+  // 仍走各自 runner 的 zipName（含 -material/-hdri/-pack 语义）并保留 uid 尾巴防重名。
+  // ArtStation 模型沿用 runner 里已算好的 meta.zipName（标题 - 作者），其余平台用 j.name/j.author 生成。
+  const modelDelivery=!imageBundle&&j.kind!=='uielement';
+  const artModel=art&&modelDelivery;
+  const deliverStem=artModel?(meta.zipName||j.name):modelDelivery?assetStem(j.name,meta.author||j.author):(meta.zipName||j.name);
+  const name=folderDelivery?cleanFolderName(deliverStem,j.uid,!modelDelivery):cleanFilename(deliverStem,j.uid,!modelDelivery);
    const filePath=directFolder?liveDir:folderDelivery?await commitFolder(deliverable,j.downloadDir,name):await commitArchive(deliverable,j.downloadDir,name);
    let blender=null;
    if(j.openInBlender&&imageBundle&&!materialJob&&!hdriJob){
@@ -516,6 +558,12 @@ export class DownloadManager{
    if(meta.truncatedCount>0)j.warning=(j.warning?j.warning+'；':'')+`已达本机体积上限，还有 ${meta.truncatedCount} 张未下载`;
    this.log(j,(materialJob?'材质已保存并通过校验：':imageBundle?'图片已保存并通过校验：':'导出已保存并通过校验：')+filePath);
    const savedMessage=j.openInBlender&&(!imageBundle||materialJob)?(blender?.ok?(materialJob?'已保存并已把材质导入 Blender':'已保存并已发送到 Blender'):(materialJob?'已保存到本机，但未能导入 Blender':'已保存到本机，但未能发送到 Blender')):(folderDelivery?(materialJob?'材质已保存到本机，内容校验通过':imageBundle?'图片已保存到本机，内容校验通过':'已保存到本机，内容校验通过'):'已保存到本机，文件完整性校验通过');
+   // 平台官方封面（材质球 / 模型场景图）先落进包，再宣布「已保存」：
+   // 资产库是在 saved 之后读目录的，晚一步写就会被包内 Color 贴图抢了封面
+   // （2026-11-16「库里的图和平台搜索不一样」就是这么来的）。失败静默跳过。
+   let coverDir=null;
+   try{if(filePath&&fs.statSync(filePath).isDirectory())coverDir=filePath;}catch{}
+   if(coverDir)await cachePlatformCover(coverDir,j.platformThumbnail||j.thumbnail);
    this.update(j,{state:'saved',stage:'saved',message:savedMessage,filePath,filename:path.basename(filePath),bytes:verification.bytes,verification,blender,finishedAt:Date.now(),nextAttemptAt:null});
   }catch(e){
    // 直写最终目录的图片任务即使失败也留下了半成品目录；把它的清单从「下载中」改成「未完成」，
@@ -532,11 +580,12 @@ export class DownloadManager{
    // 图片任务的重试次数放宽：续传会跳过已落盘的图，重试只补剩下的，失败一次不再等于整包白下。
    const retryLimit=j.kind==='images'?Math.max(j.retryLimit,3):j.retryLimit;
    if(this.closed)this.update(j,{state:'interrupted',message:'本地服务已关闭；重启后可手动重试',finishedAt:Date.now()});
+   else if(signal.reason?.code==='DOWNLOAD_PAUSED')this.update(j,{state:'held',pausedByQueue:true,message:'已暂停，继续后重新执行当前任务',finishedAt:null,nextAttemptAt:null});
    else if(transient&&j.retryCount<retryLimit){j.retryCount++;const waitMs=rateLimited?30000*j.retryCount:5000*j.retryCount;this.update(j,{state:'retry_wait',message:`${rateLimited?'图站限流':'临时网络错误'}，${Math.round(waitMs/1000)} 秒后自动重试 ${j.retryCount}/${retryLimit}：${message}`,nextAttemptAt:Date.now()+waitMs});}
    else this.update(j,{state:signal.aborted?'cancelled':'failed',message,finishedAt:Date.now()});
   }finally{this.transfers.delete(networkToken);clearTimeout(timeout);await fsp.rm(staged,{recursive:true,force:true}).catch(()=>{});await fsp.rm(packed,{recursive:true,force:true}).catch(()=>{});}
  }
  file(id){const j=this.jobs.find(j=>j.id===id);if(!j||!j.filePath||path.dirname(j.filePath)!==path.resolve(j.downloadDir)||!exists(j.filePath))throw Error('文件不存在，可能已被移动或删除');return {job:j,path:j.filePath};}
- async reveal(id){if(!id)await fsp.mkdir(this.settings.folder,{recursive:true});const location=id?this.file(id).path:this.settings.folder;await fsp.access(location);const args=process.platform==='win32'?(id?['/select,',location]:[location]):[id?path.dirname(location):location];const app=process.platform==='win32'?'explorer.exe':process.platform==='darwin'?'open':'xdg-open';const child=execFile(app,args,{windowsHide:false},()=>{});child.unref();return {opened:true};}
+ async reveal(id){if(!id)await fsp.mkdir(this.settings.folder,{recursive:true});const location=id?this.file(id).path:this.settings.folder;await fsp.access(location);await revealInFileManager(location,{isDir:(await fsp.stat(location)).isDirectory()});return {opened:true};}
  async close(){this.closed=true;clearTimeout(this.timer);for(const {controller} of this.workers.values())controller.abort(Error('本地服务已关闭'));await Promise.allSettled([...this.workers.values()].map(w=>w.promise));clearTimeout(this.persistTimer);this.save();if(fs.existsSync(this.lockPath))fs.unlinkSync(this.lockPath);}
 }

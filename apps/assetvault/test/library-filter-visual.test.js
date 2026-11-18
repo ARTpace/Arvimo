@@ -1,3 +1,4 @@
+import {assembleLibraryStyles} from '../scripts/lib/library-styles.mjs';
 // 筛选面板 v2 视觉契约：图标注册表、滑条映射、皮肤、控件工厂与「少文字」静态约束。
 // 面板涉及真实 DOM，这里用纯函数真值 + 源码静态断言 + 极小假 DOM 三层钉住，不引入 jsdom。
 import test from 'node:test';
@@ -138,7 +139,7 @@ test('dock 壳：图标头、清除本维度、皮肤缝、紧凑激活 chips', 
     /readSkin\(storage\)/, /setSkin/, /fd-clear-all/, /iconButton/])
     assert.match(dock, pattern, `dock 缺 ${pattern}`);
   assert.ok(!dock.includes('已启用筛选'), '激活条不再有说明文字');
-  const css = read('app.css');
+  const css = assembleLibraryStyles();
   for (const pattern of [/--fd-hi:/, /data-skin="violet"/, /::-webkit-slider-thumb/,
     /\.fv-swatches/, /\.fv-slider/, /--fd-fill/, /\.fv-ratio/, /\.fd-swatch\.is-on/])
     assert.match(css, pattern, `样式缺 ${pattern}`);

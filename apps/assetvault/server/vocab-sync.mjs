@@ -11,7 +11,7 @@
 //   4. 别名 + **合并**：库里如果已经有「木头」「wood」这类 pending 词条，
 //      把它们标成 merged 并把 asset_tags 迁移到 canonical term —— 这是「同义词合并可见」的实现点。
 import {FACETS, VOCAB_REV, TERMS} from './library-vocab.seed.mjs';
-import {normOf} from './library-vocab.mjs';
+import {normOf,validateVocab} from './library-vocab.mjs';
 
 /** 物化标签计数：标签面板一次查询拿到全部数字，不必每次 GROUP BY 三百万行。 */
 export function refreshTagCounts(db, stamp = Date.now()) {
@@ -30,6 +30,8 @@ export function syncVocab(db, {rev = VOCAB_REV, terms = TERMS, facets = FACETS, 
   if (current !== null && String(current) === String(rev)) {
     return {applied: false, rev, created: 0, merged: 0, aliases: 0};
   }
+  const errors=validateVocab(terms,facets);
+  if(errors.length)throw Error('词表校验失败：'+JSON.stringify(errors));
 
   const stamp = now();
   const stats = {applied: true, rev, created: 0, merged: 0, aliases: 0};
@@ -52,13 +54,26 @@ export function syncVocab(db, {rev = VOCAB_REV, terms = TERMS, facets = FACETS, 
   const pending = [];
 
   const run = db.transaction(() => {
+    const seedKeys=new Set();
     for (const raw of terms) {
       const value = String(raw?.value ?? '').trim();
       const norm = normOf(value);
       if (!norm) continue;
-      const hit = selTerm.get(norm);
+      const seedKey=String(raw.id||norm);
+      if(seedKeys.has(seedKey))throw Error('重复的内置词条 ID：'+seedKey);
+      seedKeys.add(seedKey);
+      const stable=db.prepare('SELECT term_id,status,norm FROM tag_terms WHERE seed_key=?').get(seedKey);
+      const named=selTerm.get(norm);
+      if(stable&&named&&stable.term_id!==named.term_id)throw Error('内置词条改名与现有词条冲突：'+value);
+      const hit = stable||named;
       if (hit && hit.status === 'merged') continue;
       if (hit) {
+        if(stable&&stable.norm!==norm){
+          const alias=db.prepare('SELECT term_id FROM tag_aliases WHERE alias_norm=?').get(norm);
+          if(alias&&alias.term_id!==stable.term_id)throw Error('内置词条改名与别名冲突：'+value);
+          db.prepare('UPDATE tag_terms SET norm=? WHERE term_id=?').run(norm,hit.term_id);
+          insAlias.run(stable.norm,hit.term_id,stamp);
+        }
         actTerm.run(value, hit.term_id);
         canonicalIds.set(norm, hit.term_id);
       } else {
@@ -66,13 +81,14 @@ export function syncVocab(db, {rev = VOCAB_REV, terms = TERMS, facets = FACETS, 
         canonicalIds.set(norm, id);
         stats.created++;
       }
+      db.prepare('UPDATE tag_terms SET seed_key=? WHERE term_id=? AND (seed_key IS NULL OR seed_key=?)').run(seedKey,canonicalIds.get(norm),seedKey);
       pending.push({raw, norm});
     }
 
     for (const {raw, norm} of pending) {
       const id = canonicalIds.get(norm);
       const parent = raw.parent ? canonicalIds.get(normOf(raw.parent)) : null;
-      if (parent) setParent.run(parent, id);
+      setParent.run(parent||null, id);
     }
 
     for (const {raw, norm} of pending) {
@@ -96,6 +112,8 @@ export function syncVocab(db, {rev = VOCAB_REV, terms = TERMS, facets = FACETS, 
         // 先尝试改指向（PK 冲突的会被 OR IGNORE 跳过），再把剩下的重复行删掉。
         moveTags.run(id, stale.term_id);
         dropTags.run(stale.term_id);
+        db.prepare('UPDATE OR IGNORE tag_rejections SET term_id=? WHERE term_id=?').run(id,stale.term_id);
+        db.prepare('DELETE FROM tag_rejections WHERE term_id=?').run(stale.term_id);
         stats.merged++;
       }
     }

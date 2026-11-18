@@ -252,7 +252,7 @@ export async function renderPsd(file, maxSize) {
       pixels = hasAlpha ? [planes[0], planes[1], planes[2], planes[3]] : [planes[0], planes[1], planes[2]];
     }
 
-    const scale = Math.min(1, maxSize / Math.max(width, height));
+    const scale = maxSize === 0 ? 1 : Math.min(1, maxSize / Math.max(width, height));
     const outW = Math.max(1, Math.round(width * scale));
     const outH = Math.max(1, Math.round(height * scale));
     const finalPlanes = pixels.map(plane => downscale(plane, width, height, outW, outH));

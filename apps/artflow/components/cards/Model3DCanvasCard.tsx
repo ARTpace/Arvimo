@@ -20,6 +20,7 @@ import type { Model3DElement } from '../../types';
 import { load3DModel, LoadModelResult, isPreviewable3DFile } from '../../utils/model3dUtils';
 import { createModel3DRenderLoop, disposeModel3DObject, observeModel3DSize } from '../../utils/model3dLifecycle';
 import { formatBytes } from '../../utils/docUtils';
+import { canvasMessage } from '../../utils/canvas-messages';
 import { useTranslation } from '../../utils/language-store';
 
 interface Model3DCanvasCardProps {
@@ -40,12 +41,12 @@ const setMeshWireframe = (material: THREE.Material | THREE.Material[], enabled: 
     }
 };
 
-export const Model3DCanvasCard: React.FC<Model3DCanvasCardProps> = React.memo(({
+const StandaloneModel3DCanvasCard: React.FC<Model3DCanvasCardProps> = React.memo(({
     element,
     isSelected,
     onUpdate,
 }: Model3DCanvasCardProps) => {
-    const { t } = useTranslation();
+    const { t, language } = useTranslation();
     const containerRef = useRef<HTMLDivElement>(null);
     const sceneRef = useRef<THREE.Scene | null>(null);
     const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
@@ -325,7 +326,7 @@ export const Model3DCanvasCard: React.FC<Model3DCanvasCardProps> = React.memo(({
                     {/* Auto-Rotate Toggle */}
                     <button
                         onClick={handleToggleAutoRotate}
-                        title={autoRotate ? "Pause Auto-Rotation" : "Enable Auto-Rotation"}
+                        title={language === 'zho' ? (autoRotate ? '暂停自动旋转' : '开启自动旋转') : (autoRotate ? 'Pause Auto-Rotation' : 'Enable Auto-Rotation')}
                         className={`p-1 rounded hover:bg-white/10 transition-colors ${
                             autoRotate ? 'text-[var(--bp-card-accent-3d,var(--bp-accent))]' : 'text-white/50'
                         }`}
@@ -336,7 +337,7 @@ export const Model3DCanvasCard: React.FC<Model3DCanvasCardProps> = React.memo(({
                     {/* Wireframe Toggle */}
                     <button
                         onClick={handleToggleWireframe}
-                        title={wireframe ? "Solid Mesh Mode" : "Wireframe Mode"}
+                        title={language === 'zho' ? (wireframe ? '实体模式' : '线框模式') : (wireframe ? 'Solid Mesh Mode' : 'Wireframe Mode')}
                         className={`p-1 rounded hover:bg-white/10 transition-colors ${
                             wireframe ? 'text-emerald-400 bg-emerald-500/10' : 'text-white/50'
                         }`}
@@ -347,7 +348,7 @@ export const Model3DCanvasCard: React.FC<Model3DCanvasCardProps> = React.memo(({
                     {/* Theme Toggle */}
                     <button
                         onClick={handleCycleTheme}
-                        title={`Environment: ${bgTheme}`}
+                        title={language === 'zho' ? `环境：${({dark:'深色',light:'浅色',studio:'摄影棚'})[bgTheme]}` : `Environment: ${bgTheme}`}
                         className="p-1 rounded text-white/60 hover:text-white hover:bg-white/10 transition-colors"
                     >
                         {bgTheme === 'light' ? <Sun className="w-3.5 h-3.5" /> : <Moon className="w-3.5 h-3.5" />}
@@ -414,7 +415,7 @@ export const Model3DCanvasCard: React.FC<Model3DCanvasCardProps> = React.memo(({
                 {error && !loading && (
                     <div className="absolute inset-0 flex flex-col items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm text-center z-20">
                         <AlertCircle className="w-8 h-8 text-rose-400 mb-2" />
-                        <div className="text-xs font-semibold text-rose-200">{error}</div>
+                        <div className="text-xs font-semibold text-rose-200">{canvasMessage(error, language)}</div>
                         <a
                             href={element.fileUrl}
                             download={element.name}
@@ -649,3 +650,30 @@ const ModalViewer: React.FC<{
         </div>
     );
 };
+
+
+// AssetVault owns the viewer; standalone Artflow retains its local renderer.
+export const Model3DCanvasCard: React.FC<Model3DCanvasCardProps> = React.memo(props => {
+    const frame = useRef<HTMLIFrameElement>(null);
+    const [ready, setReady] = useState(false);
+    const embedded = window.parent !== window && /\/artflow\//.test(location.pathname);
+    useEffect(() => {
+        if (!embedded) return;
+        const receive = (event: MessageEvent) => {
+            if (event.source === frame.current?.contentWindow && event.origin === location.origin && event.data?.type === 'assetvault:model-preview-ready') setReady(true);
+        };
+        window.addEventListener('message', receive);
+        return () => window.removeEventListener('message', receive);
+    }, [embedded]);
+    useEffect(() => {
+        if (!ready) return;
+        const {fileUrl, name, fileExtension} = props.element;
+        const filename = name.toLowerCase().endsWith('.' + fileExtension.toLowerCase()) ? name : name + '.' + fileExtension;
+        frame.current?.contentWindow?.postMessage({type:'assetvault:model-preview',url:new URL(fileUrl, location.href).href,name:filename}, location.origin);
+    }, [ready, props.element.fileUrl, props.element.name, props.element.fileExtension]);
+    if (!embedded) return <StandaloneModel3DCanvasCard {...props} />;
+    return <div className="w-full h-full flex flex-col overflow-hidden rounded-xl bg-[#0c1118]" style={{minWidth:260,minHeight:200}}>
+        <div className="flex items-center gap-2 px-3 py-2 text-xs text-white/80 cursor-move shrink-0" title="拖动标题栏移动卡片"><Box size={14}/><span className="truncate">{props.element.name}</span></div>
+        <iframe ref={frame} src={new URL('../model-preview.html',location.href).href} title={props.element.name + ' · 3D 预览'} allow="fullscreen" className="w-full flex-1 min-h-0 border-0" style={{pointerEvents:props.isSelected?'auto':'none'}} />
+    </div>;
+});

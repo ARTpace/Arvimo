@@ -1,3 +1,4 @@
+import {assembleLibraryStyles} from '../scripts/lib/library-styles.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
@@ -9,7 +10,7 @@ import {SERVER_CAPABILITIES,SERVER_VERSION} from '../server/capabilities.mjs';
 const read=path=>readFileSync(path,'utf8');
 const app=read('src/library/app.js');
 const html=read('src/library/index.html');
-const css=read('src/library/app.css');
+const css=assembleLibraryStyles();
 
 /** 抓一次 Sketchfab 搜索真正发出去的 URL。 */
 async function sketchfabUrl(input){

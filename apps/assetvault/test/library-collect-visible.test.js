@@ -1,3 +1,4 @@
+import {assembleLibraryStyles} from '../scripts/lib/library-styles.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -12,7 +13,7 @@ const read = file => fs.readFileSync(path.join(root, file), 'utf8');
 const html = read('src/library/index.html');
 const app = read('src/library/app.js');
 const view = read('src/library/library-view.js');
-const css = read('src/library/app.css');
+const css = assembleLibraryStyles();
 
 test('结果区常驻批量入库入口，不再只靠卡片 hover 勾选', () => {
   assert.ok(html.includes('id="result-actions"'), '要有独立的结果操作条');

@@ -2,6 +2,9 @@ import React from 'react';
 import { BpIcon } from './BpIcon';
 import { RecentProjectsMenu } from './RecentProjectsMenu';
 import { HoverReveal } from './HoverReveal';
+import { CanvasColorNavigator } from './CanvasColorNavigator';
+import type { Element } from '../types';
+import type { CanvasFinderResult } from '../utils/canvasFinder';
 
 interface TopBarProps {
   // Updated t signature to match useSettings hook for better type compatibility
@@ -10,9 +13,8 @@ interface TopBarProps {
   setIsBoardPanelOpen: (val: boolean | ((prev: boolean) => boolean)) => void;
   handleStartPresentation: () => void;
   framesCount: number;
-  handleToggleSidePanel: (tab: 'layers' | 'frames') => void;
-  selectedElementCount: number;
-  onOpenTags: () => void;
+  elements: Element[];
+  onFocusCard: (result: CanvasFinderResult) => void;
   commandCount: number;
   onOpenCommandPalette: () => void;
   pluginPanelCount: number;
@@ -36,9 +38,8 @@ export const TopBar: React.FC<TopBarProps> = ({
   setIsBoardPanelOpen,
   handleStartPresentation,
   framesCount,
-  handleToggleSidePanel,
-  selectedElementCount,
-  onOpenTags,
+  elements,
+  onFocusCard,
   commandCount,
   onOpenCommandPalette,
   pluginPanelCount,
@@ -130,20 +131,7 @@ export const TopBar: React.FC<TopBarProps> = ({
             <BpIcon name="topbar.present" size={20} strokeWidth={2.5} />
           </button>
           <div className="w-px h-5 bg-[var(--ui-border)] mx-1"></div>
-          <button onClick={() => handleToggleSidePanel('layers')} title={t('toolbar.layers')} className="p-2 rounded-full text-[var(--ui-text)] hover:bg-[var(--ui-hover)] transition-colors">
-            <BpIcon name="topbar.layers" size={20} />
-          </button>
-          <button onClick={() => handleToggleSidePanel('frames')} title={t('toolbar.frames')} className="p-2 rounded-full text-[var(--ui-text)] hover:bg-[var(--ui-hover)] transition-colors">
-            <BpIcon name="topbar.frames" size={20} />
-          </button>
-          <button
-            onClick={onOpenTags}
-            title={selectedElementCount > 0 ? t('topBar.tagSelected', selectedElementCount) : t('topBar.selectCardsToTag')}
-            disabled={selectedElementCount === 0}
-            className="relative p-2 rounded-full text-[var(--ui-text)] hover:bg-[var(--ui-hover)] transition-colors disabled:cursor-not-allowed disabled:opacity-30"
-          >
-            <BpIcon name="topbar.tags" size={20} />
-          </button>
+          <CanvasColorNavigator elements={elements} onFocus={onFocusCard} />
           {onOpenAppearance && (
             <button
               type="button"

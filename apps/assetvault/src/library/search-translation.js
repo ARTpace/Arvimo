@@ -99,13 +99,13 @@ export function createThemeBrainstorm({fetchImpl=fetch}={}){
 }
 
 export function createTagSuggester({fetchImpl=fetch}={}){
- return async function suggest({name,author='',kind='',existing=[],meta=null,probe=null}){
+ return async function suggest({name,author='',kind='',existing=[],meta=null,probe=null,image=''}){
   if(!name||!name.trim())return {name,author,kind,existing,tags:[],tagged:false,reason:'缺少资产名称'};
   // meta 是采集时抓到的来源信息（画板 / 类目 / 出处 / 话题），probe 是封面采样出的颜色与构图。
   // 两者都可能为空：为空时不进请求体，服务端提示词与旧版逐字一致。
   const extra={...(meta&&typeof meta==='object'?{meta}:{}),...(probe&&typeof probe==='object'?{probe}:{})};
   try{
-   const response=await fetchImpl('/api/ai/tags',{method:'POST',headers:{'Content-Type':'application/json','X-SFX-Local':'1'},body:JSON.stringify({name,author,kind,existing,...extra}),signal:AbortSignal.timeout(35000)});
+   const response=await fetchImpl('/api/ai/tags',{method:'POST',headers:{'Content-Type':'application/json','X-SFX-Local':'1'},body:JSON.stringify({name,author,kind,existing,...extra,...(image?{image}:{})}),signal:AbortSignal.timeout(image?125000:35000)});
    if(!response.ok)throw Error();const data=await response.json();
    if(data.tagged===true&&Array.isArray(data.tags))return data;
    return {name,author,kind,existing,tags:[],tagged:false,reason:data.reason||'未能生成标签'};

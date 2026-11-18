@@ -60,21 +60,32 @@ test('asynchronous download snapshots preserve file/directory status and detect 
 });
 
 test('masonry measures only changed/new cards, then invalidates all heights when width changes',()=>{
- const source=readFileSync(new URL('../src/library/masonry.js',import.meta.url),'utf8').replaceAll('export function','function');
+ // masonry.js 从 gallery-view.js 取「横版跨两列」的判定，vm 不认 import 语句，
+ // 所以把两个模块拼成一段脚本跑（export 改成普通声明，import 行去掉）。
+ const stripModule=s=>s.replaceAll('export function','function').replaceAll('export const','const');
+ const gallerySource=stripModule(readFileSync(new URL('../src/library/gallery-view.js',import.meta.url),'utf8'));
+ const source=gallerySource+'\n'+stripModule(readFileSync(new URL('../src/library/masonry.js',import.meta.url),'utf8')).replace(/^import\s.*$/gm,'');
  let frame,mutate,reads=0,writes=0,styleReads=0;const listeners={};
  const style=()=>{const values=new Map();return {getPropertyValue:key=>{styleReads++;return values.get(key)||'';},setProperty:(key,value)=>{writes++;values.set(key,value);}};};
  const root={children:[],clientWidth:800,style:style(),matches:selector=>selector.includes('model-grid'),querySelectorAll:()=>[],addEventListener:(name,fn)=>listeners[name]=fn,closest:()=>root};
- const card=height=>({height,style:style(),closest(){return this;},getBoundingClientRect(){reads++;return {height:this.height};}});
+ const card=height=>({height,classList:{contains:()=>false},style:style(),closest(){return this;},getBoundingClientRect(){assert.equal(this.style.contentVisibility,'visible','重新测量前必须退出屏幕外占位模式');reads++;return {height:this.height};}});
  root.children=Array.from({length:1000},(_,i)=>card(200+i%5*50));
+ root.children[0].querySelector=()=>({dataset:{w:'1200',h:'400'}});
  const context={window:{innerWidth:1000,addEventListener(){}},document:{},
   // 不要把 el.style 交给 getComputedStyle：那会把 CSS 变量读取计进 styleReads，
   // 而这条用例只统计卡片 rect 的读取次数。
-  getComputedStyle:()=>({getPropertyValue:()=>''}),requestAnimationFrame:fn=>{frame=fn;return 1;},
+  getComputedStyle:node=>node===root?{getPropertyValue:()=>''}:{paddingTop:'3px',paddingBottom:'5px',borderTopWidth:'2px',borderBottomWidth:'4px'},requestAnimationFrame:fn=>{frame=fn;return 1;},
   MutationObserver:class{constructor(fn){mutate=fn;}observe(){}},ResizeObserver:class{observe(){}},root};
  vm.runInNewContext(source+';observeMasonry(root);',context);
  // masonry.js 在列宽变化时会先读一次首卡强制 reflow，每次 resized 多 1 次 rect 读取。
  const reflowReads=1;
  frame();assert.equal(reads,1000+reflowReads);
+ assert.equal(root.children[0].style.getPropertyValue('--masonry-content-height'),'186px','占位高度扣除内边距和边框，避免离屏卡片变高');
+ assert.equal(root.children[0].style.getPropertyValue('--masonry-paint'),'auto');
+ assert.equal(root.children[0].style.contentVisibility,'','测量后交给浏览器跳过屏幕外绘制');
+ assert.equal(root.children[0].style.getPropertyValue('--masonry-width'),root.children[1].style.getPropertyValue('--masonry-width'),'landscape cards must not bridge columns and create holes');
+ const rightEdge=parseFloat(root.children[3].style.getPropertyValue('--masonry-left'))+parseFloat(root.children[3].style.getPropertyValue('--masonry-width'));
+ assert.ok(Math.abs(rightEdge-root.clientWidth)<0.01,'columns must fill the available width');
  const initialWrites=writes;frame();assert.equal(reads,1000+reflowReads);assert.equal(writes,initialWrites);
  const initialStyleReads=styleReads;
  listeners.load({target:root.children[1]});frame();
@@ -82,8 +93,9 @@ test('masonry measures only changed/new cards, then invalidates all heights when
  assert.equal(reads,1001+reflowReads);
  root.children[1].height=280;listeners.load({target:root.children[1]});frame();assert.equal(reads,1002+reflowReads);
  root.children.push(card(150));mutate([{type:'childList',target:root}]);frame();assert.equal(reads,1003+reflowReads);
- // 改宽度会再触发一次 resized：全量重测之外又多一次 reflow 探针。
- root.clientWidth=1100;frame();assert.equal(reads,2004+reflowReads*2);
+ // Filling a changed container width changes card widths and requires new heights.
+ const beforeResize=reads;
+ root.clientWidth=1100;frame();assert.equal(reads,beforeResize+root.children.length+1);
  const first=root.children[0],second=root.children[1];
  root.children[0]=second;root.children[1]=first;
  mutate([{type:'childList',target:root}]);frame();

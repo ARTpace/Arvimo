@@ -12,7 +12,47 @@ const blob = (over = {}) => JSON.stringify({
 const local = {getItem: () => null, setItem() {}};
 const tick = () => new Promise(resolve => setTimeout(resolve, 0));
 
+test('保存失败保留后端具体原因，不只显示笼统提示',async()=>{
+ const warnings=[];
+ const request=async(url,options={})=>options.method==='POST'
+  ?{ok:false,status:400,json:async()=>({error:'资产库迁移 v8 的 checksum 不匹配'})}
+  :{ok:true,json:async()=>({values:{}})};
+ const storage=await createPersistentStorage(local,request,{onWarn:message=>warnings.push(message)});
+ storage.setItem('sfx-library-ui','{}');await tick();await tick();
+ assert.ok(warnings.some(message=>message.includes('迁移 v8 的 checksum 不匹配')));
+});
+
+test('服务端文件移动更新读视图，不再次入库；晚到的目录页应用最新定位',async()=>{
+ const b='b'.repeat(32);let finishPage;
+ const second=new Promise(resolve=>{finishPage=resolve;});
+ const request=async url=>{
+  if(url.startsWith('/api/library-state'))return {ok:true,json:async()=>({values:{'sfx-library-v2':blob({models:[]})},catalogPaged:true,catalogTotal:2,recovered:[]})};
+  if(url.includes('offset=0'))return {ok:true,json:async()=>({items:[{uid:a,name:'a.png',localRoot:'H:/素材',localRel:'a.png'}],total:2,nextOffset:1})};
+  return {ok:true,json:()=>second};
+ };
+ const storage=await createPersistentStorage(local,request,{catalogPaged:true});
+ storage.applyFileMoves({root:'H:/素材',changes:[{uid:a,from:'a.png',to:'new-a.png'},{uid:b,from:'b.png',to:'new-b.png'}]});
+ assert.equal(JSON.parse(storage.getItem('sfx-library-v2')).models[0].localRel,'new-a.png');
+ finishPage({items:[{uid:b,name:'b.png',localRoot:'H:/素材',localRel:'b.png'}],total:2,nextOffset:2});await storage.catalogReady;
+ const late=storage.catalogModels.find(model=>model.uid===b);assert.equal(late.name,'new-b.png');assert.equal(late.localRel,'new-b.png');
+});
+
 // 默认关掉 ADR-02 分域通道：下面这一组守的是「旧差量通道 + 整块降级链」仍然可用。
+test('协议升级拒绝不整块重放、不再发送后续写入，提示刷新；所有持久化 POST 携带协议',async()=>{
+ const calls=[],warnings=[];
+ const request=async(url,options={})=>{
+  if(!options.method)return new Response(JSON.stringify({values:{'sfx-library-v2':blob()}}));
+  calls.push({url,headers:options.headers});
+  return new Response(JSON.stringify({error:'请刷新页面',code:'client_upgrade_required'}),{status:426});
+ };
+ const storage=await createPersistentStorage(local,request,{collections:false,onWarn:message=>warnings.push(message)});
+ storage.setItem('sfx-library-v2',blob({userMeta:{[a]:{rating:5,note:''}}}));await tick();
+ assert.equal(calls.length,1);assert.equal(calls[0].headers['X-AV-File-Protocol'],'1');
+ assert.equal(calls[0].url,'/api/library/mutations');assert.match(warnings[0],/刷新/);
+ storage.setItem('sfx-library-v2',blob({userMeta:{[a]:{rating:3,note:''}}}));await tick();
+ assert.equal(calls.length,1,'被拒绝后不再写入，也不回传整块快照');
+});
+
 // 新通道的行为由文件后半段单独的用例覆盖。
 function harness(initial, {mutationsStatus = 200, mutationsThrows = false, collections = false, collectionsThrows = false} = {}) {
   const calls = [], warnings = [], commits = [];

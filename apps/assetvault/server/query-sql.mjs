@@ -10,7 +10,7 @@
 import {parseSearchExpression} from './search-expression.mjs';
 import {normalizeFilters} from './library-filter-semantics.mjs';
 import {formatRegistry} from '../src/library/format-registry.js';
-import {vocab} from './library-vocab.mjs';
+import {vocab,normOf} from './library-vocab.mjs';
 import {NUMERIC_EXPR, searchPredicate} from './query-sql-search.mjs';
 
 /** 参数上限：留足余量给 SQLite 的变量数限制，超了就退回内存而不是冒绑定失败的风险。 */
@@ -141,11 +141,18 @@ function tagPredicate(candidate, negate = false) {
   const needle = String(candidate).toLocaleLowerCase();
   const expanded = vocab.descendantValues(candidate);
   const join = negate ? 'a.uid NOT IN' : 'a.uid IN';
+  // 数据库层级包括用户自定义关系；UNION 去重也能阻止旧脏环无限递归。
+  const dynamic=`SELECT at4.uid FROM asset_tags at4 WHERE at4.term_id IN (
+    WITH RECURSIVE descendants(id) AS (
+      SELECT term_id FROM tag_terms WHERE status<>'merged' AND (norm=? OR term_id IN (SELECT term_id FROM tag_aliases WHERE alias_norm=?))
+      UNION SELECT child.term_id FROM tag_terms child JOIN descendants d ON child.parent_id=d.id WHERE child.status<>'merged'
+    ) SELECT id FROM descendants)`;
+  const dynamicParams=[normOf(candidate),normOf(candidate)];
   if (!expanded.length) {
     // 词表外的词：按原始标签文本做子串（与 tagHit 的字符串分支逐字对齐）
     return {
-      sql: `${join} (SELECT uid FROM tags WHERE instr(lower(tag), ?) > 0)`,
-      params: [needle],
+      sql: `${join} (SELECT uid FROM tags WHERE instr(lower(tag), ?) > 0 UNION ${dynamic})`,
+      params: [needle,...dynamicParams],
     };
   }
   const norms = [...new Set(expanded.map(value => vocab.entryOf(value)?.norm).filter(Boolean))];
@@ -153,8 +160,8 @@ function tagPredicate(candidate, negate = false) {
   return {
     sql: `${join} (SELECT at3.uid FROM asset_tags at3 JOIN tag_terms t3 ON t3.term_id = at3.term_id
       WHERE (t3.norm IN (${placeholders(norms)})
-        OR (t3.status = 'pending' AND instr(lower(t3.value), ?) > 0)))`,
-    params: [...norms, needle],
+        OR (t3.status = 'pending' AND instr(lower(t3.value), ?) > 0)) UNION ${dynamic})`,
+    params: [...norms, needle,...dynamicParams],
   };
 }
 

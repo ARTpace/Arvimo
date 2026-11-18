@@ -3,11 +3,29 @@
  * 通用宿主（CanvasSettings）与插件 section（builtin.core-settings 等）共用，
  * 避免插件反向 import components/。
  */
-import React, { useState } from 'react';
+import React, { createContext, useContext, useState } from 'react';
 
-/** Blender 风格可折叠区块：▼ 标题条 + 内容。 */
+/**
+ * 画布设置注入宿主设置窗口时置 true：SectionBlock 收敛成扁平分区，
+ * 去掉自带的可折叠标题条、半透明底与描边，外观交给宿主卡片统一承载。
+ * 这样所有画布 section 都不会和宿主叠成卡中卡、出现背景色差。
+ */
+export const FlatSettingsContext = createContext(false);
+
+/** Blender 风格可折叠区块：▼ 标题条 + 内容。注入宿主时自动扁平。 */
 export const SectionBlock: React.FC<{ title: string; children: React.ReactNode }> = ({ title, children }) => {
     const [open, setOpen] = useState(true);
+    const flat = useContext(FlatSettingsContext);
+    if (flat) {
+        // 注入宿主时：只出一行灰色小标题 + 内容，不带折叠箭头 / 半透明底 / 描边，
+        // 外观由宿主设置卡片统一承载，避免卡中卡与背景色差。
+        return (
+            <section data-bp-ui-section="" data-flat="" className="space-y-1.5">
+                <h3 data-bp-ui-section-title="" className="px-0.5 text-[11px] font-medium tracking-wide text-neutral-500">{title}</h3>
+                <div data-bp-ui-section-body="" className="space-y-1">{children}</div>
+            </section>
+        );
+    }
     return (
         <section data-bp-ui-section="" className="overflow-hidden rounded-lg border border-white/[0.06] bg-white/[0.02]">
             <button

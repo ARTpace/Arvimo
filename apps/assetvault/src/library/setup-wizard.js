@@ -1,14 +1,8 @@
 /**
- * 首次运行的「依赖准备」弹窗。
- *
- * 工作台第一次打开时自己弹出来，把三样东西摆到用户面前：后台浏览器、Blender、
- * Blender 桥接脚本。每一项只回答「有没有 / 缺了会怎样 / 点这里能补上」，
- * 缺的东西就地一键装，Blender 因为只能从官网拿，就给入口加手动路径。
- *
- * 它不是安装校验：点「完成」只是记下「用户已经看过」，缺的依赖之后还能在设置里回来补。
- * 「以后再说」延后七天；只有真正缺失的依赖才会触发自动提醒。
+ * 首次运行的「依赖准备」弹窗：只确认资产保存位置和后台浏览器。
+ * 点「进入工作台」只是记下用户已经看过；「以后再说」延后七天。
+ * Blender 与桥接保留在设置页的独立入口，不占首次准备的篇幅。
  */
-import {openExternal} from './open-url.js';
 import {MARK,progressMarkup} from './install-panel.js';
 
 const ROUTE='/api/setup';
@@ -37,9 +31,7 @@ async function pollJob(route,jobId){
 
 export function createSetupWizard({$,esc,icon,toast,downloads}){
  const dialog=$('#setup-dialog'),list=$('#setup-list'),note=$('#setup-note'),
-       finishButton=$('#setup-finish'),skipButton=$('#setup-skip'),
-       pathInput=$('#setup-blender-path'),pathSave=$('#setup-save-blender'),
-       pathHint=$('#setup-blender-hint'),recheckButton=$('#setup-recheck');
+       finishButton=$('#setup-finish'),skipButton=$('#setup-skip'),recheckButton=$('#setup-recheck');
  let report=null,busyId=null,token=0;
  const folderInput=$('#setup-download-folder'),folderBrowse=$('#setup-browse-folder'),
        folderSave=$('#setup-save-folder'),folderHint=$('#setup-folder-hint');
@@ -56,7 +48,7 @@ export function createSetupWizard({$,esc,icon,toast,downloads}){
     folderInput.value=downloads.settings.folder;folderInput.dataset.saved=folderInput.value;
    }
    folderLoaded=true;folderInput.disabled=false;folderBrowse.disabled=false;folderSave.disabled=false;
-   folderHint.textContent='新下载按类型归入子文件夹；已有文件和已创建的任务不会自动迁移。';
+   folderHint.textContent='新文件按类型归档，旧文件不受影响。';
   }catch(e){folderHint.textContent='读取保存位置失败：'+String(e.message||e);}
  }
  async function saveFolder(){
@@ -69,7 +61,7 @@ export function createSetupWizard({$,esc,icon,toast,downloads}){
    if(!folder)throw Error('请选择资产保存文件夹');
    await downloads.saveSettings({folder});
    folderInput.value=downloads.settings.folder;folderInput.dataset.saved=folderInput.value;
-   folderHint.textContent='已保存，新下载将使用此位置并按类型分类。';return true;
+   folderHint.textContent='已保存。';return true;
   }catch(e){folderHint.textContent='保存失败：'+String(e.message||e);return false;}
   finally{folderBusy=false;folderInput.disabled=folderBrowse.disabled=folderSave.disabled=false;}
  }
@@ -102,49 +94,23 @@ export function createSetupWizard({$,esc,icon,toast,downloads}){
  function actionButton(item){
   if(busyId===item.id)return `<button class="secondary" disabled><i class="spinner"></i>正在处理…</button>`;
   if(item.action==='install'||item.action==='reinstall')return `<button class="secondary" data-setup-install="${item.id}">${icon('download')}${esc(item.actionLabel)}</button>`;
-  if(item.action==='manual')return `<button class="secondary" data-setup-open="${item.id}">${icon('globe')}${esc(item.actionLabel)}</button>`;
   return '';
  }
 
  function render(){
   if(!list||!report)return;
-  const items=report.items||[];
-  const renderItem=(item,grouped=false)=>`<${grouped?'div':'li'} class="${grouped?'setup-blender-part':'setup-item'}" data-id="${item.id}">`
+  list.innerHTML=(report.items||[]).map(item=>`<li class="setup-item" data-id="${item.id}">`
    +`<div class="bridge-status" data-tone="${TONE[item.state]||'idle'}"><span class="bridge-dot ${TONE[item.state]||'idle'}"></span>`
-   +`<div class="bridge-copy"><strong>${esc(grouped?(item.id==='blender'?'程序路径':'场景桥接'):item.title)}</strong>${grouped?'':`<small>${esc(item.why)}</small>`}</div>`
+   +`<div class="bridge-copy"><strong>${esc(item.title)}</strong><small>${esc(item.why)}</small></div>`
    +`<span class="setup-badge ${TONE[item.state]||''}">${esc(BADGE[item.state]||'待检查')}</span></div>`
    +`<p class="setup-detail">${esc(item.detail||'')}</p>`
-   +(item.id==='blender'?`<div class="setup-path"><input id="setup-blender-path" aria-label="Blender 程序路径" type="text" spellcheck="false" placeholder="自动检测，或输入 blender.exe 完整路径" value="${esc(report.blenderOverride||'')}"><button class="secondary" id="setup-save-blender" type="button">${icon('check')}保存</button></div><p class="setup-hint" id="setup-blender-hint" role="status"></p>`:'')
    +(actionButton(item)?`<div class="setup-item-actions">${actionButton(item)}</div>`:'')
    +`<div class="bridge-progress" data-progress="${item.id}" hidden></div>`
-   +`</${grouped?'div':'li'}>`;
-  const blender=items.find(item=>item.id==='blender'),bridge=items.find(item=>item.id==='bridge');
-  list.innerHTML=items.filter(item=>item.id!=='bridge'||!blender).map(item=>{
-   if(item.id!=='blender')return renderItem(item);
-   return `<li class="setup-item setup-blender"><strong class="setup-blender-title">Blender</strong><p class="setup-detail">用于模型导出与一键发送到 Blender 场景。</p>`
-    +renderItem(blender,true)+(bridge?renderItem(bridge,true):'')+'</li>';
-  }).join('');
+   +`</li>`).join('');
   if(note)note.textContent=report.ready
-   ?'依赖已就绪，可以直接开始用。'
-   :`还有 ${report.pending} 项没就位 —— 现在补上最省事，也可以稍后在「设置 → 依赖准备」里再装。`;
+   ?'都齐了，可以直接开始。'
+   :'浏览器还没就位，可以现在装，也可以稍后在设置里补。';
   if(finishButton)finishButton.innerHTML=report.ready?`${icon('check')}进入工作台`:`${icon('arrow-right')}先这样，进入工作台`;
-  // 列表是重画的，输入框节点换了人，引用要跟着换，否则保存读到的是旧节点。
-  bindDynamic();
- }
-
- function bindDynamic(){
-  const input=list?.querySelector('#setup-blender-path');
-  const save=list?.querySelector('#setup-save-blender');
-  const hint=list?.querySelector('#setup-blender-hint');
-  if(save&&input)save.onclick=async()=>{
-   save.disabled=true;if(hint)hint.textContent='';
-   try{
-    const data=await request('',{action:'set-blender',path:input.value.trim()});
-    report=data.report||report;render();
-    toast(data.applied?'Blender 路径已保存':'已清除手动指定的 Blender 路径');
-   }catch(e){if(hint)hint.textContent=String(e.message||e);toast(String(e.message||e));}
-   finally{save.disabled=false;}
-  };
  }
 
  async function refresh(){
@@ -159,7 +125,7 @@ export function createSetupWizard({$,esc,icon,toast,downloads}){
   if(!item||!item.poll)return;
   busyId=id;const owner=++token;let failed=false;render();
   try{
-   const {jobId}=await request('',{action:id==='browser'?'install-browser':'install-bridge'});
+   const {jobId}=await request('',{action:'install-browser'});
    if(!jobId)throw Error('后端没有返回安装任务编号');
    let job=null;
    const deadline=Date.now()+INSTALL_TIMEOUT_MS;
@@ -174,9 +140,7 @@ export function createSetupWizard({$,esc,icon,toast,downloads}){
    failed=!ok;
    await refresh();
    // 装没装成要看任务状态，不能一律报「已就绪」——否则下载失败时界面会骗人。
-   toast(ok
-     ? (id==='browser'?'后台浏览器已就绪':'Blender 桥接脚本已安装')
-     : `没装成：${(job&&(job.error||job.message))||'原因未知'}`);
+   toast(ok?'后台浏览器已就绪':`没装成：${(job&&(job.error||job.message))||'原因未知'}`);
   }catch(e){
    toast(String(e.message||e));
   }finally{
@@ -207,7 +171,7 @@ export function createSetupWizard({$,esc,icon,toast,downloads}){
    const label=folderBrowse.innerHTML;
    folderBusy=true;folderInput.disabled=folderBrowse.disabled=folderSave.disabled=true;
    folderBrowse.innerHTML=`${icon('folder')}正在选择…`;
-   folderHint.textContent='请在文件夹面板中选择保存位置，取消将保留原路径。';
+   folderHint.textContent='请选择文件夹。';
    try{const folder=await downloads.pickFolder(folderInput.value.trim());if(folder)folderInput.value=folder;}
    catch(e){folderHint.textContent='选择失败：'+String(e.message||e);}
    finally{folderBusy=false;folderBrowse.innerHTML=label;folderInput.disabled=folderBrowse.disabled=folderSave.disabled=false;}
@@ -223,15 +187,6 @@ export function createSetupWizard({$,esc,icon,toast,downloads}){
   list?.addEventListener('click',e=>{
    const button=e.target.closest('[data-setup-install]');
    if(button){install(button.dataset.setupInstall);return;}
-   const go=e.target.closest('[data-setup-open]');
-   if(go){
-    const item=(report?.items||[]).find(i=>i.id===go.dataset.setupOpen);
-    const url=item?.downloadUrl;
-    if(!url)return;
-    // 桌面版里 window.open 不会唤起系统浏览器（见 open-url.js 的说明）。
-    openExternal(url);
-    toast('已用系统默认浏览器打开下载页；没反应就手动访问 blender.org/download');
-   }
   });
   // Manual open remains available even during the reminder cooldown.
   refresh().then(data=>{if(data?.remind&&!dialog.open)dialog.showModal();});

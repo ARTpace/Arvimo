@@ -1,5 +1,6 @@
 import {readOptions,selectedIndex,moveIndex,typeahead,isTypeaheadKey,isMenuKey} from './picker-model.js';
 import {esc} from './html-esc.js';
+import {icon} from './icon-set.js';
 
 // 自绘下拉：原生 <select> 的弹出层是操作系统画的，样式表碰不到，所以深色界面里总会弹出
 // 一块浅色系统菜单。这里的做法是**保留 select 本身作为唯一数据源**（`.value`、`options`、
@@ -13,6 +14,9 @@ import {esc} from './html-esc.js';
 //
 // 菜单挂到 body 上（position:fixed）：搜索框和搜索卡片都是 overflow:hidden，留在原地会被裁掉。
 const TYPEAHEAD_RESET=700;
+// 平台下拉在「全部 / 模型 / 图片」各模式下池子不同，按选项文字自适应会让宽度忽宽忽窄。
+// 平台菜单统一固定宽度（仍受窗口宽度约束），其他下拉保持自适应。
+const PLATFORM_MENU_WIDTH=460;
 
 function swapLabelHost(select){
  const host=select.parentElement;
@@ -56,19 +60,47 @@ export function enhanceSelect(select){
  const inside=node=>wrap.contains(node)||menu.contains(node);
  let options=[],open=false,highlight=-1,buffer='',bufferTimer=0;
 
- /** 选项变化、value 变化都汇到这里：按钮上的文字永远等于「select 现在选的是什么」。 */
- function sync(){
-  options=readOptions(select);
-  const current=options.find(option=>option.value===select.value)||options[0];
-  caption.textContent=current?current.label:'';
-  trigger.disabled=!options.length;
-  trigger.title=current?.hint||current?.label||'';
- }
+  /** 选项变化、value 变化都汇到这里：按钮上的文字永远等于「select 现在选的是什么」。 */
+  function sync(){
+   options=readOptions(select);
+   const current=options.find(option=>option.value===select.value)||options[0];
+   caption.textContent=current?current.label:'';
+   trigger.disabled=!options.length;
+   trigger.title=current?.hint||current?.label||'';
+  }
+  // 平台菜单的「置顶」：只有 select 标了 data-pinnable 才渲染图钉按钮。
+  // 置顶态从原生 <option data-pinned> 读（app 侧排序后写入），排除项由 data-pin-exclude 指定
+  // （通常是「全部平台」）。图钉是 option 内的独立按钮，点击派发 picker:pin 事件而非选中该项。
+  const pinnable=()=>select.dataset.pinnable==='true';
+  const pinExclude=()=>select.dataset.pinExclude||'';
+  function pinButton(option){
+   const native=select.options[option.index];
+   if(!native||native.value===pinExclude())return '';
+   const on=native.dataset.pinned==='true';
+   // 注意：外层 option 本身就是 <button>，HTML 不允许 button 嵌套 button（浏览器会把内层甩出去、
+   // 布局与点击全乱）。所以图钉用带 role 的 span，保留 [data-pin-stop] 供委托识别。
+   return `<span role="button" class="picker-pin${on?' on':''}" data-pin-stop data-pin-value="${esc(option.value)}" tabindex="-1"
+     title="${on?'取消置顶':'置顶此平台'}" aria-label="${on?'取消置顶':'置顶此平台'}">${icon('pin')}</span>`;
+  }
+  // 平台菜单的「账号登录」：data-loginable 才渲染，且只有登记过登录入口的平台（option 带
+  // data-login）才出图标——免登录的站不该多一枚点不动的键。状态从 option 的 data-login 读：
+  // ok＝cookie 仓里站点已确认登录（常亮主题绿 + 小圆点），have＝有 cookie 但站点没确认。
+  const loginable=()=>select.dataset.loginable==='true';
+  function loginButton(option){
+   const native=select.options[option.index];
+   if(!native||!native.dataset.login)return '';
+   const state=native.dataset.login;
+   const on=state==='ok';
+   const label=on?'已登录，点击切换账号':(state==='have'?'有登录记录但未确认，点击重新登录':'登录此平台');
+   return `<span role="button" class="picker-login${on?' on':''}${state==='have'?' have':''}" data-login-stop data-login-value="${esc(option.value)}" tabindex="-1"
+     title="${label}" aria-label="${label}">${icon('user')}</span>`;
+  }
  function renderMenu(){
   options=readOptions(select);
   menu.innerHTML=options.length?options.map((option,index)=>{
    const chosen=option.value===select.value;
-   return `<button type="button" role="option" tabindex="-1" id="${id}-option-${index}" class="picker-option${chosen?' current':''}" data-index="${index}" data-picker-option="${esc(option.value)}" aria-selected="${chosen}">${esc(option.label)}${option.hint?`<small>${esc(option.hint)}</small>`:''}</button>`;
+   const actions=(pinnable()?pinButton(option):'')+(loginable()?loginButton(option):'');
+   return `<button type="button" role="option" tabindex="-1" id="${id}-option-${index}" class="picker-option${chosen?' current':''}${pinnable()?' pinnable':''}${actions?' has-actions':''}" data-index="${index}" data-picker-option="${esc(option.value)}" aria-selected="${chosen}"><span class="picker-option-text">${esc(option.label)}${option.hint?`<small>${esc(option.hint)}</small>`:''}</span>${actions}</button>`;
   }).join(''):'<p class="picker-empty">暂无可选项</p>';
   nodes=[...menu.querySelectorAll('[data-index]')];painted=-1;
  }
@@ -78,7 +110,10 @@ export function enhanceSelect(select){
   if(!box.width||!box.height||box.bottom<=0||box.top>=window.innerHeight){close();return;}
   const below=Math.max(0,window.innerHeight-box.bottom-10),above=Math.max(0,box.top-10);
   const dropUp=below<Math.min(menu.scrollHeight,400)&&above>below;
-  const width=Math.min(Math.max(box.width,naturalWidth),window.innerWidth-16);
+  // 平台菜单固定宽度，保证各模式（全部 / 模型 / 图片）下拉宽度一致；其他下拉仍按内容自适应。
+  const width=pinnable()
+   ? Math.min(PLATFORM_MENU_WIDTH,window.innerWidth-16)
+   : Math.min(Math.max(box.width,naturalWidth),window.innerWidth-16);
   const left=Math.max(8,Math.min(box.left,window.innerWidth-width-8));
   menu.style.width=`${width}px`;
   menu.style.left=`${left}px`;
@@ -98,7 +133,15 @@ export function enhanceSelect(select){
   // 而「页面滚了」在下面是要把菜单重新定位的，菜单自己滚自己不该触发这件事。
   const top=active.offsetTop,bottom=top+active.offsetHeight;
   if(top<menu.scrollTop)menu.scrollTop=top;
-  else if(bottom>menu.scrollTop+menu.clientHeight)menu.scrollTop=bottom-menu.clientHeight;
+  else if(bottom>menu.scrollTop+menu.clientHeight){
+   const target=bottom-menu.clientHeight;
+   // 让可视区顶部落在某一项的边界上，避免把上一项腰斩成半截文字。
+   // 平台菜单副标题长、行高不一致，半截项看起来就像整个面板和按钮错位。
+   // 只有当对齐后当前项仍完整可见时才吸附；否则退回原始滚动量保证选中项可见。
+   let snapped=0;
+   for(const node of nodes){const nt=node.offsetTop;if(nt<=target)snapped=nt;}
+   menu.scrollTop=snapped+menu.clientHeight>=bottom?Math.max(0,snapped):Math.max(0,target);
+  }
  }
  function show(){
   if(!options.length)return;
@@ -137,7 +180,21 @@ export function enhanceSelect(select){
   clearTimeout(bufferTimer);bufferTimer=setTimeout(()=>{buffer='';},TYPEAHEAD_RESET);
   highlight=typeahead(options,buffer,highlight);paint();
  });
- menu.addEventListener('click',event=>{const node=event.target.closest('[data-index]');if(node)commit(Number(node.dataset.index));});
+ menu.addEventListener('click',event=>{
+  // 图钉点击：不关闭、不选中平台，派发事件让业务层改置顶状态后整表重绘。
+  if(event.target.closest?.('[data-pin-stop]')){
+   const value=event.target.closest('[data-pin-stop]').dataset.pinValue;
+   select.dispatchEvent(new CustomEvent('picker:pin',{detail:{value},bubbles:true}));
+   return;
+  }
+  // 登录图标点击：同理不选中平台，交给业务层开后台浏览器登录窗口，登完重绘登录标识。
+  if(event.target.closest?.('[data-login-stop]')){
+   const value=event.target.closest('[data-login-stop]').dataset.loginValue;
+   select.dispatchEvent(new CustomEvent('picker:login',{detail:{value},bubbles:true}));
+   return;
+  }
+  const node=event.target.closest('[data-index]');if(node)commit(Number(node.dataset.index));
+ });
  menu.addEventListener('pointermove',event=>{
   const node=event.target.closest('[data-index]');
   if(node&&Number(node.dataset.index)!==highlight){highlight=Number(node.dataset.index);paint({scroll:false});}

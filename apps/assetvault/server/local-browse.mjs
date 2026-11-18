@@ -1,3 +1,4 @@
+import {isPanoramicEnvironment} from '../src/library/asset-classification.js';
 // 本地文件夹索引：把一个磁盘目录摊平成可预览的文件清单。
 //
 // 这个库以前的资产都来自各平台 API，格式受平台约束；本地索引是第一个「用户自己的文件」
@@ -7,6 +8,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import {extensionOf, formatKind, formatMime, formatGroup} from '../src/library/format-registry.js';
+import {sniffImageExtension,inspectAssetFormat} from './image-sniff.mjs';
 
 /** 相对路径统一用正斜杠，前端不必再处理两种分隔符。 */
 const toPosix=value=>value.split(path.sep).join('/');
@@ -26,7 +28,11 @@ export function fileKind(name){
 }
 
 export function localMime(name){
- return formatMime(name);
+ const mime=formatMime(name);
+ // 无扩展名的图（下载下来的文件名不带后缀）：按魔数补一次，别让 <img> 收到 octet-stream。
+ if(mime!=='application/octet-stream')return mime;
+ const sniffed=sniffImageExtension(String(name||''));
+ return sniffed?formatMime(`thumb.${sniffed}`):mime;
 }
 
 function requireFolder(value){
@@ -70,15 +76,18 @@ export async function listLocalFolder({folder,limit=MAX_FILES}={}){
    if(entry.name.startsWith('.')){stats.skipped++;continue;}
    let stat=null;
    try{stat=await fs.promises.stat(path.join(dir,entry.name));}catch{stats.skipped++;continue;}
-   const ext=extensionOf(entry.name);
+   // 每个文件只读有限文件头；格式冲突保留依据，不更改原文件。
+   const formatCheck=inspectAssetFormat(path.join(dir,entry.name));
+   const ext=formatCheck.effective;
+   const formatName=`${entry.name}.${ext}`;
    files.push({
     rel:childRel,
     name:entry.name,
     ext,
     // format/group 是筛选用的稳定字段：前端不必自己再 parse 文件名，服务端与 UI 共用一份分组。
     format:ext,
-    group:formatGroup(entry.name),
-    kind:fileKind(entry.name),
+    group:formatGroup(formatName),
+    kind:isPanoramicEnvironment({filePath:path.join(dir,entry.name),formatCheck})?'env':fileKind(formatName),formatCheck,
     bytes:stat.size,
     mtime:Math.round(stat.mtimeMs),
    });
@@ -99,6 +108,17 @@ export async function listLocalFolder({folder,limit=MAX_FILES}={}){
 
 /** 把 {root, rel} 解析成真实文件路径，越界即拒。 */
 export function resolveLocalFile({root,rel}={}){
+ const resolved=resolveLocalTarget({root,rel});
+ if(resolved.isDir)throw Error('这个路径不是文件');
+ return {file:resolved.path,bytes:resolved.bytes,rel:resolved.rel};
+}
+
+/**
+ * 把 {root, rel} 解析成真实路径，文件和目录都收。越界、绝对路径、`..` 一律拒。
+ * 「在资源管理器里打开」既可能指向一个文件，也可能指向一个素材包目录（rel 本身就是目录），
+ * 所以校验逻辑只写这一份，由 resolveLocalFile 与它共用。
+ */
+export function resolveLocalTarget({root,rel}={}){
  const base=requireFolder(root);
  const target=String(rel||'').replace(/\\/g,'/');
  if(!target||target.includes('\0'))throw Error('缺少文件路径');
@@ -107,8 +127,7 @@ export function resolveLocalFile({root,rel}={}){
  if(full!==base&&!full.startsWith(base+path.sep))throw Error('路径不合法');
  let stat=null;
  try{stat=fs.statSync(full);}catch{throw Error('文件不存在或已被移动');}
- if(!stat.isFile())throw Error('这个路径不是文件');
- return {file:full,bytes:stat.size,rel:toPosix(path.relative(base,full))};
+ return {path:full,isDir:stat.isDirectory(),bytes:stat.isFile()?stat.size:0,rel:toPosix(path.relative(base,full))};
 }
 
 /** 解析 Range 头；返回 null 表示按整文件回（不支持的写法一律回整文件，比报错友好）。 */

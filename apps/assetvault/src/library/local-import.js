@@ -1,9 +1,16 @@
 // 资产库「导入文件夹」面板：把用户指定的本机目录登记成扫描根。
 // 扫描只读认领（不复制文件），移除也只改配置，磁盘上的素材原样留着。
+import {askConfirm, askNotice} from './ask-dialog.js';
+import {createFileOrganizeUi} from './file-organize-ui.js';
+import {createLocationMigrationUi} from './location-migration-ui.js';
+import {createThumbnailCacheUi} from './thumbnail-cache-ui.js';
+import {createTagBackfillUi} from './tag-backfill-ui.js';
+import {createTagManagementUi} from './tag-management-ui.js';
+
 const ROOTS = '/api/library/import-roots';
 
 async function post(url, payload) {
-  const response = await fetch(url, {method: 'POST', cache: 'no-store', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload || {})});
+  const response = await fetch(url, {method: 'POST', cache: 'no-store', headers: {'Content-Type': 'application/json','x-sfx-local':'1'}, body: JSON.stringify(payload || {})});
   const data = await response.json().catch(() => ({}));
   if (!response.ok) throw Error(data.error || `HTTP ${response.status}`);
   return data;
@@ -11,7 +18,12 @@ async function post(url, payload) {
 
 const samePath = (a, b) => String(a || '').replace(/\\/g, '/').toLowerCase() === String(b || '').replace(/\\/g, '/').toLowerCase();
 
-export function createLocalImport({$, esc, toast, visitor, onChanged, reload = () => globalThis.location?.reload()}) {
+export function createLocalImport({$, esc, toast, visitor, onChanged, onOrganized, reload = () => globalThis.location?.reload()}) {
+  const organizer=createFileOrganizeUi({esc,toast,onOrganized});
+  const locationMigration=createLocationMigrationUi({esc,onChanged});
+  const thumbnailCache=createThumbnailCacheUi({esc});
+  const tagBackfill=createTagBackfillUi({esc});
+  const tagManagement=createTagManagementUi({esc});
   let roots = [];
   let entries = [];
   let checking = null;
@@ -49,7 +61,7 @@ export function createLocalImport({$, esc, toast, visitor, onChanged, reload = (
       const code = state.get(root)?.reason;
       return code === 'denied' ? '没有读取权限' : '磁盘未连接或目录已移动';
     };
-    box.innerHTML = roots.map((root, index) => `<div class="li-root${offline(root) ? ' is-offline' : ''}"><span class="li-path" title="${esc(root)}">${esc(root)}</span><span class="li-meta" id="local-import-meta-${index}">${offline(root) ? esc(reason(root)) : '统计中…'}</span>${offline(root) ? `<button type="button" class="text-button" data-import-relink="${index}" title="选择素材搬家后的新位置，重新扫描">重新定位</button>` : ''}${offline(root) ? '' : `<button type="button" class="text-button" data-import-file="${index}">导入文件</button>`}<button type="button" class="text-button" data-import-check="${index}"${offline(root) ? ' disabled' : ''}>重复检查</button><button type="button" class="text-button" data-import-remove="${index}" aria-label="移除这个目录">移除</button></div>`).join('');
+    box.innerHTML = roots.map((root, index) => `<div class="li-root${offline(root) ? ' is-offline' : ''}"><span class="li-path" title="${esc(root)}">${esc(root)}</span><span class="li-meta" id="local-import-meta-${index}">${offline(root) ? esc(reason(root)) : '统计中…'}</span>${offline(root) ? `<button type="button" class="text-button" data-import-relink="${index}" title="选择素材搬家后的新位置，重新扫描">重新定位</button>` : ''}${offline(root) ? '' : `<button type="button" class="text-button" data-import-file="${index}">导入文件</button>`}<button type="button" class="text-button" data-organize-files="${index}">整理文件</button><button type="button" class="text-button" data-import-organize="${index}">整理预检</button><button type="button" class="text-button" data-identity-migration="${index}">旧路径迁移</button><button type="button" class="text-button" data-import-check="${index}"${offline(root) ? ' disabled' : ''}>重复检查</button><button type="button" class="text-button" data-import-remove="${index}" aria-label="移除这个目录">移除</button></div>`).join('');
     // 离线根不去读目录：那只会再失败一次，还把「统计中…」闪一下。
     roots.forEach((root, index) => { if (!offline(root)) describe(root, index, scan); });
   }
@@ -130,13 +142,13 @@ export function createLocalImport({$, esc, toast, visitor, onChanged, reload = (
     const addOptions = (select, rows) => rows.forEach(([value, text]) => {
       const option = document.createElement('option'); option.value = value; option.textContent = text; select.appendChild(option);
     });
-    addOptions(mode, [['linked', '链接原文件（默认，不复制）'], ['managed', '托管副本（复制入库，保留原件）']]);
+    addOptions(mode, [['linked', '链接原文件（默认，不复制）'], ['managed', '托管副本（复制入库，保留原件）'], ['move', '剪切（复制入库，成功后删除原件）']]);
     addOptions(duplicate, [['skip', '同内容重复：跳过（默认）'], ['keep-both', '同内容重复：保留两份']]);
     mode.value = 'linked'; duplicate.value = 'skip';
     const confirm = document.createElement('button'); confirm.type = 'button'; confirm.className = 'text-button'; confirm.textContent = '导入所选文件'; confirm.disabled = true;
     const cancel = document.createElement('button'); cancel.type = 'button'; cancel.className = 'text-button'; cancel.textContent = '取消选择';
     const note = document.createElement('p'); note.className = 'compact-note';
-    note.textContent = '按住 Ctrl / Command 或 Shift 多选，逐件串行导入。同名异内容始终保留两份，绝不覆盖。链接依赖原件路径；托管复制保留原件。取消只停止下一件，已完成不会回滚。';
+    note.textContent = '按住 Ctrl / Command 或 Shift 多选，逐件串行导入。同名异内容始终保留两份，绝不覆盖。链接依赖原件路径；托管复制保留原件；剪切在整件复制并经 SHA256 校验通过、入库成功后才删除原件，删除失败会明确报出来。取消只停止下一件，已完成不会回滚。';
     [file, mode, duplicate, confirm, cancel, note].forEach(node => panel.appendChild(node)); box?.appendChild(panel);
     const close = () => {panel.remove(); buttons.forEach((button, i) => {button.disabled = disabled[i];}); if (checking === controller) checking = null;};
     let submitting = false, stopRequested = false;
@@ -165,6 +177,15 @@ export function createLocalImport({$, esc, toast, visitor, onChanged, reload = (
         const queue = [...new Set(file.selectedOptions ? selected : [file.value])].filter(rel => files.some(row => row.rel === rel));
         if (!queue.length) return;
         const selectedMode = mode.value, selectedDuplicate = duplicate.value;
+        // 剪切会删原件（不进回收站），必须在动手前明确确认一次。
+        if (selectedMode === 'move') {
+          const ok = await askConfirm({
+            title: '剪切导入',
+            message: `将把选中的 ${queue.length} 个文件复制进资产库，SHA256 校验一致且入库成功后删除原件。\n\n原件不进系统回收站，删除后无法撤销；如果删除失败会在结果里写明路径。`,
+            confirmText: '剪切导入', cancelText: '取消', danger: true,
+          });
+          if (!ok || controller.signal.aborted) return;
+        }
         submitting = true;
         [file, mode, duplicate, confirm].forEach(node => {node.disabled = true;});
         cancel.textContent = '停止后续导入';
@@ -180,7 +201,10 @@ export function createLocalImport({$, esc, toast, visitor, onChanged, reload = (
             if (!result.ok || data.ok !== true) throw Error(data.error || `HTTP ${result.status}`);
             if (data.status !== 'imported' && data.status !== 'skipped') throw Error('导入状态未知，请刷新后核实。');
             stats[data.status]++; lastResult = data;
-            lastMessage = data.status === 'imported' ? `已${selectedMode === 'managed' ? '复制入库（原件保留）' : '链接入库（未复制）'}：${rel}`
+            const doneLabel = selectedMode === 'move'
+              ? (data.sourceRemoved ? '已剪切入库（原件已删除）' : '已复制入库（原件未能删除）')
+              : selectedMode === 'managed' ? '复制入库（原件保留）' : '链接入库（未复制）';
+            lastMessage = data.status === 'imported' ? `${doneLabel}：${rel}${data.warning ? `\n${data.warning}` : ''}`
               : data.reason === 'same-linked-path' ? '已跳过：这个原文件路径已链接入库，不重复创建。' : '已跳过同内容重复文件；需要另一份时请明确选择「保留两份」。';
           } catch (error) {
             stats.failed++;
@@ -192,7 +216,7 @@ export function createLocalImport({$, esc, toast, visitor, onChanged, reload = (
         refreshNotice?.remove();
         refreshNotice = document.createElement('div'); refreshNotice.className = 'team-form';
         const hint = document.createElement('span'); hint.className = 'compact-note';
-        hint.textContent = `${stats.imported || stats.skipped ? '已确认完成的导入结果已保存。' : '尚无已确认的成功结果。'}刷新资产库后显示新资产；请先保存其他未提交的编辑。失败项请先刷新核实，勿直接重复提交。`;
+        hint.textContent = `${stats.imported || stats.skipped ? '已确认完成的导入结果已保存。' : '尚无已确认的成功结果。'}新资产会自动更新到资产库，无需刷新页面。失败项请先核实，勿直接重复提交。`;
         const refreshButton = document.createElement('button'); refreshButton.type = 'button'; refreshButton.className = 'text-button'; refreshButton.textContent = '刷新资产库';
         refreshButton.addEventListener('click', () => reload());
         refreshNotice.appendChild(hint); refreshNotice.appendChild(refreshButton); box?.appendChild(refreshNotice);
@@ -232,7 +256,33 @@ export function createLocalImport({$, esc, toast, visitor, onChanged, reload = (
     finally {cancel.remove(); buttons.forEach((button,i) => {button.disabled = disabled[i];});checking = null;}
   }
 
+  async function organizePreflight(index) {
+    const folder = roots[index];
+    if (!folder) return;
+    say('正在检查稳定位置记录，不改动源文件…');
+    try {
+      const response = await fetch('/api/library/file-organize/preflight', {method:'POST',cache:'no-store',
+        headers:{'Content-Type':'application/json','x-sfx-local':'1'},body:JSON.stringify({action:'inspect',folder})});
+      const data = await response.json();
+      if (!response.ok) throw Error(data.error || `HTTP ${response.status}`);
+      const issues = data.issues || [];
+      const labels = {'invalid-location':'路径记录无效','location-conflict':'同路径身份冲突'};
+      const message = `${folder}\n已建立稳定位置：${data.registeredAssets || 0} 个资产。\n定位问题：${issues.length} 项。\n这里只核对数据库定位关系，不代表磁盘文件已全部存在。可在“整理文件”里启用权限后执行同根移动、改名和撤销；本次预检未改动源文件。`
+        + (issues.length ? '\n\n' + issues.slice(0,30).map(item => `${labels[item.code] || item.code}：${item.rel || item.uid}`).join('\n') : '');
+      say(`整理预检完成：${data.registeredAssets || 0} 个稳定位置，${issues.length} 项定位问题。`);
+      await askNotice({title:'真实目录整理预检',message});
+    } catch(error) {say(`整理预检失败：${error.message}`);}
+  }
+
   function setup() {
+    if(!visitor&&$('#local-import-add')){
+      const button=document.createElement('button');button.type='button';button.className='text-button';button.textContent='缩略图缓存';
+      button.addEventListener('click',()=>thumbnailCache.open());$('#local-import-add').insertAdjacentElement('afterend',button);
+      const labels=document.createElement('button');labels.type='button';labels.className='text-button';labels.textContent='标签升级与补标';
+      labels.addEventListener('click',()=>tagBackfill.open());$('#local-import-add').insertAdjacentElement('afterend',labels);
+      const manage=document.createElement('button');manage.type='button';manage.className='text-button';manage.textContent='标签分类管理';
+      manage.addEventListener('click',()=>tagManagement.open());$('#local-import-add').insertAdjacentElement('afterend',manage);
+    }
     if (visitor) $('#local-import')?.setAttribute('hidden', '');
     $('#local-import')?.addEventListener('click', () => {
       say('');
@@ -258,6 +308,12 @@ export function createLocalImport({$, esc, toast, visitor, onChanged, reload = (
       if (event.key === 'Enter') { event.preventDefault(); $('#local-import-add')?.click(); }
     });
     $('#local-import-roots')?.addEventListener('click', event => {
+      const filesButton = event.target.closest('[data-organize-files]');
+      if(filesButton)return organizer.open(roots[Number(filesButton.dataset.organizeFiles)]);
+      const migrationButton=event.target.closest('[data-identity-migration]');
+      if(migrationButton)return locationMigration.open(roots[Number(migrationButton.dataset.identityMigration)]);
+      const organizeButton = event.target.closest('[data-import-organize]');
+      if (organizeButton) return organizePreflight(Number(organizeButton.dataset.importOrganize));
       const importButton = event.target.closest('[data-import-file]');
       if (importButton) return importFile(Number(importButton.dataset.importFile));
       const checkButton = event.target.closest('[data-import-check]');

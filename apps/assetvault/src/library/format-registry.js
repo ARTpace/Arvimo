@@ -203,7 +203,17 @@ export const FORMATS = formatRegistry.formats;
 export const FORMAT_GROUPS = formatRegistry.groups;
 export const KNOWN_EXTS = formatRegistry.knownExts;
 export const formatOf = name => formatRegistry.get(name);
+
+// 能在资产库内置 3D 查看器里转的格式（gltf-preview.parseModelBuffer 支持的那几种）。
+// .blend / .usd* 只能出封面图，点开仍是「打开文件」——别让卡片写「3D 预览」却弹空白。
+const VIEWER_MODEL_EXTS = new Set(['glb', 'gltf', 'fbx', 'obj', 'stl', 'ply', '3mf']);
+/** 传 ext（'glb'）或文件名都行。卡片文案、预览分支、右键菜单共用这一处判断。 */
+export function canPreviewModelInViewer(nameOrExt) {
+  return VIEWER_MODEL_EXTS.has(extensionOf(nameOrExt));
+}
 export const formatKind = name => formatRegistry.kindOf(name);
+/** 封面能力独立于交互预览：Blender 工程可出封面，MTL/SBSAR 不是可渲染模型。 */
+export const hasModelThumbnail = name => formatKind(name)==='model'||/\.blend$/i.test(String(name||''));
 export const formatMime = name => formatRegistry.mimeOf(name);
 export const formatGroup = name => formatRegistry.groupOf(name);
 

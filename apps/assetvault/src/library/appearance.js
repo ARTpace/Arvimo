@@ -1,9 +1,6 @@
 // 外观：背景（纯色 / 图片）与面板不透明度。
 //
-// 为什么只动三个 CSS 变量而不做整套主题引擎：界面里几百处颜色是硬编码的深色设计，
-// 全量变量化要重写一整份样式表，收益（用户能改主色）与风险（对比度崩、每个面板都要重测）
-// 不成比例。用户真正想要的是「换成自己的图 / 让侧栏透一点看见壁纸」——这两个都能靠
-// 底色 + 背景图 + 面板 alpha 三个变量做到，且任何一处没覆盖到也只是保持原样。
+// 中性背景、边框与旧版组件别名统一由底色派生；成功、警告、选中等语义色独立保留。
 //
 // 存 localStorage 而不是跟资产库数据一起同步：外观属于「这台机器这块屏」，同一份库在
 // 台式机（大屏壁纸）和笔记本（纯色）上应该能不一样，也不该为一个背景图去改动库的 blob。
@@ -70,12 +67,21 @@ export function applyAppearance(view) {
   root.style.setProperty('--av-panel', fade(shift(rgb, 4), alpha));
   root.style.setProperty('--av-panel-raised', fade(shift(rgb, 18), alpha));
   root.style.setProperty('--av-panel-hover', fade(shift(rgb, 28), alpha));
+  root.style.setProperty('--av-line', fade(shift(rgb, 42), 0.65));
+  root.style.setProperty('--av-line-hover', fade(shift(rgb, 66), 0.8));
+  root.style.setProperty('--av-caption', fade(shift(rgb, -4), 0.94));
+  // Legacy surfaces and newer components share the same live theme palette.
+  root.style.setProperty('--bg', state.color);
+  root.style.setProperty('--surface', fade(shift(rgb, 4), alpha));
+  root.style.setProperty('--card', fade(shift(rgb, 18), alpha));
+  root.style.setProperty('--border', fade(shift(rgb, 42), 0.65));
   // 输入区比面板再深一档，保住「凹进去」的层次；聚焦时再亮一点。
   root.style.setProperty('--av-field', fade(shift(rgb, -4), alpha));
   root.style.setProperty('--av-field-focus', fade(rgb, alpha));
   root.style.setProperty('--av-panel-solid', fade(rgb, Math.max(alpha, 0.94)));
   root.style.setProperty('--av-modal', fade(rgb, 0.55 + alpha * 0.45));
   root.style.setProperty('--av-veil', state.image ? `linear-gradient(${fade(rgb, 0.7)},${fade(rgb, 0.7)})` : 'none');
+  globalThis.window?.dispatchEvent(new Event('assetvault:appearance-changed'));
 }
 
 /** 把图片缩到 1920 宽并转 JPEG：原图直接塞 localStorage 会因为 5MB 配额整块保存失败。 */
@@ -106,7 +112,7 @@ export function createAppearanceCard({ toast = () => {}, storage = globalThis.lo
   const card = document.createElement('section');
   card.className = 'settings-card';
   card.innerHTML = `
-    <div class="settings-section-title"><span>外观</span><small>背景与面板透明度，立即生效</small></div>
+    <div class="settings-section-title"><span>外观</span></div>
     <div class="appearance-row" data-appearance-presets></div>
     <div class="appearance-row">
       <label class="field appearance-color"><span>自定义底色</span><input type="color" data-appearance-color aria-label="自定义背景底色"></label>
@@ -117,7 +123,7 @@ export function createAppearanceCard({ toast = () => {}, storage = globalThis.lo
       <button class="text-button" type="button" data-appearance-clear-image>清除背景图</button>
       <button class="text-button" type="button" data-appearance-reset>恢复默认外观</button>
     </div>
-    <p class="compact-note">只影响这台机器的显示。背景图会缩到 1920 宽后保存在本地浏览器存储里，不上传。</p>`;
+    `;
 
   const presetBox = card.querySelector('[data-appearance-presets]');
   const colorInput = card.querySelector('[data-appearance-color]');

@@ -77,6 +77,7 @@ const RESIZE_CATCHUP_FRAMES = 4;
 interface MainCanvasProps {
     svgRef: React.RefObject<SVGSVGElement>;
     elements: Element[];
+    onSetElementColor?: (id: string, color: string) => void;
     selectedElementIds: string[];
     panOffset: Point;
     zoom: number;
@@ -90,6 +91,7 @@ interface MainCanvasProps {
     handleContextMenu: (e: React.MouseEvent<SVGSVGElement>) => void;
     showCanvasMenu: (x: number, y: number, elementId: string | null) => void;
     dismissCanvasMenu: () => void;
+    onCanvasBlankPointerDown?: () => void;
     windowPlatform: HostPlatformService | null;
     activeTool: Tool;
     focusImage: (id: string) => void;
@@ -167,6 +169,7 @@ interface MainCanvasProps {
 const MainCanvasBase: React.FC<MainCanvasProps> = ({
     svgRef,
     elements,
+    onSetElementColor,
     selectedElementIds,
     panOffset,
     zoom,
@@ -179,6 +182,7 @@ const MainCanvasBase: React.FC<MainCanvasProps> = ({
     handleContextMenu,
     showCanvasMenu,
     dismissCanvasMenu,
+    onCanvasBlankPointerDown,
     windowPlatform,
     activeTool,
     focusImage,
@@ -321,6 +325,15 @@ const MainCanvasBase: React.FC<MainCanvasProps> = ({
     useLayoutEffect(() => {
         const container = svgRef.current?.parentElement;
         if (!container) return;
+        let frame: number | null = null;
+        let pending: { width: number; height: number } | null = null;
+        const publish = () => {
+            frame = null;
+            if (!pending) return;
+            const size = pending;
+            pending = null;
+            setCanvasSize(previous => previous.width === size.width && previous.height === size.height ? previous : size);
+        };
         const measure = () => {
             const rect = container.getBoundingClientRect();
             setCanvasSize(previous => (
@@ -330,13 +343,26 @@ const MainCanvasBase: React.FC<MainCanvasProps> = ({
             ));
         };
         measure();
+        const scheduleMeasure = () => {
+            if (frame === null) frame = requestAnimationFrame(() => { frame = null; measure(); });
+        };
+        const cleanup = () => { if (frame !== null) cancelAnimationFrame(frame); };
         if (typeof ResizeObserver === 'undefined') {
-            window.addEventListener('resize', measure);
-            return () => window.removeEventListener('resize', measure);
+            window.addEventListener('resize', scheduleMeasure);
+            return () => { cleanup(); window.removeEventListener('resize', scheduleMeasure); };
         }
-        const observer = new ResizeObserver(measure);
+        const observer = new ResizeObserver(entries => {
+            const entry = entries[0];
+            if (!entry) return;
+            // The observer already owns the layout measurement. Read its border
+            // box instead of forcing another synchronous getBoundingClientRect.
+            const box = entry.borderBoxSize?.[0];
+            pending = box ? { width: box.inlineSize, height: box.blockSize }
+                : { width: entry.contentRect.width, height: entry.contentRect.height };
+            if (frame === null) frame = requestAnimationFrame(publish);
+        });
         observer.observe(container);
-        return () => observer.disconnect();
+        return () => { observer.disconnect(); cleanup(); };
     }, [svgRef]);
 
     // —— 可见查询范围的大跳变追赶 ——
@@ -644,6 +670,7 @@ const MainCanvasBase: React.FC<MainCanvasProps> = ({
     // the native app window, without mutating image or camera state.
     const windowMove = useCanvasWindowMove({
         svgRef, platform: windowPlatform, showMenu: showCanvasMenu, dismissMenu: dismissCanvasMenu,
+        viewportStore,
     });
     const imageAtEvent = (target: EventTarget): ImageElement | null => {
         const id = target instanceof globalThis.Element
@@ -716,6 +743,9 @@ const MainCanvasBase: React.FC<MainCanvasProps> = ({
             <svg
                 ref={svgRef}
                 className="relative z-10 w-full h-full block"
+                onPointerDownCapture={event => {
+                    if (event.button === 0 && event.target === event.currentTarget) onCanvasBlankPointerDown?.();
+                }}
                 onMouseDownCapture={handleCanvasDownCapture}
                 onDoubleClick={handleCanvasDoubleClick}
                 onMouseDown={handleMouseDown}
@@ -760,6 +790,7 @@ const MainCanvasBase: React.FC<MainCanvasProps> = ({
                                 >
                                     <CanvasElement
                                         element={el}
+                                        onSetElementColor={onSetElementColor}
                                         elements={el.type === 'group' ? presentElements : elements}
                                         selectedElementIds={selectedElementIds}
                                         zoom={elementZoom}

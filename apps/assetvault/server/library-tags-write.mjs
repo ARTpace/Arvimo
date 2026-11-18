@@ -231,9 +231,14 @@ export function createTagWriter({db, resolveTerm, searchTextOf, now = Date.now})
         const termId = resolveTerm(op.value, cache, stamp);
         if (!termId) { conflicts.push({uid: op.uid, code: 'term_unresolved'}); continue; }
         if (op.op === 'tag.add') {
+          if(actor!=='taxonomy-maintenance'&&db.prepare('SELECT retired FROM tag_terms WHERE term_id=?').get(termId)?.retired){conflicts.push({uid:op.uid,code:'term_retired'});continue;}
+          const rejected=db.prepare('SELECT 1 FROM tag_rejections WHERE uid=? AND term_id=? AND source=?').get(op.uid,termId,op.source);
+          if(['taxonomy-backfill','taxonomy-maintenance'].includes(actor)&&rejected)continue;
+          if(!['taxonomy-backfill','taxonomy-maintenance'].includes(actor))db.prepare('DELETE FROM tag_rejections WHERE uid=? AND term_id=? AND source=?').run(op.uid,termId,op.source);
           insAssetTag.run(op.uid, termId, op.source, null, stamp, op.by || actor);
           insTag.run(op.uid, op.source, op.value);
         } else {
+          if(op.source==='ai')db.prepare('INSERT OR REPLACE INTO tag_rejections VALUES (?,?,?,?)').run(op.uid,termId,op.source,stamp);
           delAssetTag.run(op.uid, termId, op.source);
           // 原始标签文本可能与归一化后的词条名不同（用户存的是 "wood"，词表标准名是 "木材"），
           // 两种写法都要删掉，否则界面上标签还在。
@@ -248,6 +253,10 @@ export function createTagWriter({db, resolveTerm, searchTextOf, now = Date.now})
 
       // 派生表同步：只重算受影响的资产。
       for (const uid of touched) {
+        if(kinds.get(uid)==='tags'){
+          const ownChannel=actor==='taxonomy-backfill'?ops.find(op=>op.uid===uid)?.by:null;
+          db.prepare('DELETE FROM asset_label_progress WHERE uid=? AND channel<>?').run(uid,ownChannel||'');
+        }
         const row = selAsset.get(uid);
         if (!row) continue;
         const text = refreshSearchText(uid, maps);
@@ -271,5 +280,16 @@ export function createTagWriter({db, resolveTerm, searchTextOf, now = Date.now})
     return {applied: changes.length, changes, conflicts};
   }
 
-  return {apply};
+  function refresh(uids){
+    const maps=vocabMaps(),stamp=now();
+    const run=db.transaction(()=>{
+      for(const uid of new Set(uids)){
+        const row=selAsset.get(uid);if(!row)continue;
+        const text=refreshSearchText(uid,maps);bumpAsset.run(text,stamp,uid);
+        delFts.run(row.rowid);insFts.run(row.rowid,uid,ftsBody(row,text));
+        for(const item of termsOf.all(uid))setCount.run(item.term_id,Number(countTerm.get(item.term_id)?.n)||0,stamp);
+      }
+    });run();
+  }
+  return {apply,refresh};
 }

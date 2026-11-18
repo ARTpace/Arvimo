@@ -1,5 +1,6 @@
 import { isSketchfabHost, validateUrl, publicJson, readPublic } from './public-http.mjs';
 import {searchParams,SORTS} from '../src/library/search-options.js';
+import {normalizePlatformCategories} from './platform-categories.mjs';
 export const UID=/^[a-f0-9]{32}$/i;
 export function modelUid(value, base) {
   try {
@@ -30,7 +31,8 @@ export function normalizeModel(m) {
     vertices:Number.isFinite(m.vertexCount)?m.vertexCount:null,faces:Number.isFinite(m.faceCount)?m.faceCount:null,
     likes:Number(m.likeCount)||0,views:Number(m.viewCount)||0,animations:Number(m.animationCount)||0,
     licenseUrl:licenseLink(m.license?.url),downloadable:m.isDownloadable===true,license:license?String(license).slice(0,200):'许可请查看原页面',
-    categories:(m.categories||[]).map(c=>String(c.name||c.slug||'')).filter(Boolean).slice(0,8),
+    platform:'sketchfab',platformCategories:normalizePlatformCategories('sketchfab',m.categories),
+    categories:normalizePlatformCategories('sketchfab',m.categories).map(c=>c.name||c.slug).filter(Boolean),
     tags:(m.tags||[]).map(t=>String(t.name||t.slug||'')).slice(0,20),publishedAt:m.publishedAt||null};
 }
 function validNext(next) {

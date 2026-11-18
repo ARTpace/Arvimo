@@ -1,3 +1,4 @@
+import {assembleLibraryStyles} from '../scripts/lib/library-styles.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -14,7 +15,7 @@ const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const read=file=>fs.readFileSync(path.join(root,file),'utf8');
 const picker=read('src/library/picker.js');
 const dock=read('src/library/filter-dock.js');
-const css=read('src/library/app.css');
+const css=assembleLibraryStyles();
 const motionCss=read('src/library/search-motion.css');
 
 test('自绘下拉不再生成箭头节点',()=>{

@@ -6,6 +6,7 @@ mod updates;
 mod data_path;
 mod process_group;
 mod dragout;
+mod window_drag;
 
 use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
@@ -333,7 +334,10 @@ fn start_backend(app: &AppHandle) -> Result<(), String> {
     let group = process_group::ProcessGroup::new().map_err(|e| format!("无法创建后台进程组：{e}"))?;
     cmd.arg(&backend.entry)
         .env("SFX_STATIC_ROOT", &backend.static_root)
-        .env("SFX_DATA_DIR", &backend.data_dir)
+        // 库数据目录不再钉死在这里：库是自包含的（<库>/.assetvault/data），
+        // 服务端按 libraries.json 自己找回。硬指应用数据目录会让整个库拷到
+        // 别的机器后打不开，也让"拔了硬盘就走"变成一句空话。
+        // 账号（SFX_ACCOUNTS_DIR）、浏览器、下载仍是机器级的，继续由下面几个变量钉住。
         .env("SFX_ACCOUNTS_DIR", &backend.accounts_dir)
         .env("SFX_REPLACE_LIBRARY_OWNER", "1")
         .env("SFX_DOWNLOAD_DIR", &backend.download_dir)
@@ -417,6 +421,7 @@ fn start_backend(app: &AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 fn desktop_window_action(window: tauri::WebviewWindow, action: String) -> Result<(), String> {
+    if action == "drag-right" { return window_drag::start(window); }
     let result = match action.as_str() {
         "drag" => window.start_dragging(),
         "minimize" => window.minimize(),
@@ -526,8 +531,8 @@ fn main() {
 
             // 常驻托盘：关窗口后后台服务继续运行。
             // 左键单击 = 唤起窗口；右键 = 弹出菜单（打开 / 重启 / 退出）。
-            let show_item = MenuItem::with_id(app, "show", "打开 Arvimo · 艺团", true, None::<&str>)?;
-            let restart_item = MenuItem::with_id(app, "restart", "重启应用（含后端）", true, None::<&str>)?;
+            let show_item = MenuItem::with_id(app, "show", "打开 Arvimo", true, None::<&str>)?;
+            let restart_item = MenuItem::with_id(app, "restart", "重启应用", true, None::<&str>)?;
             let quit_item = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&show_item, &restart_item, &quit_item])?;
             let mut tray = TrayIconBuilder::with_id("main-tray")

@@ -10,6 +10,7 @@ import { definePlugin } from '../../plugin-runtime/define-plugin';
 import type { SettingsSectionContribution, SettingsSectionProps } from '../../plugin-runtime/settings-contributions';
 import { HOST_PLATFORM_SERVICE, type HostPlatformService } from '../../plugin-runtime/host-platform';
 import { CANVAS_MUTATION_SERVICE, type CanvasMutationService } from '../../plugin-runtime/canvas-mutation';
+import { askConfirm } from '../../components/AskDialog';
 import type { AssetInventoryPage } from '../../types';
 import manifest from './manifest.json';
 
@@ -73,9 +74,15 @@ const AssetLibrarySection: React.FC<SettingsSectionProps> = ({ kernel, language 
       setMessage(zho ? '所选记录仍被工程或当前画板引用。' : 'Selected records are still referenced.');
       return;
     }
-    const confirmed = window.confirm(zho
-      ? `清理 ${targets.length} 条未被工程引用的资产？共享文件会保留。此操作不能撤销。`
-      : `Remove ${targets.length} unreferenced asset records? Shared files stay. This cannot be undone.`);
+    const confirmed = await askConfirm({
+      title: zho ? '清理资产记录' : 'Clean up asset records',
+      message: zho
+        ? `清理 ${targets.length} 条未被工程引用的资产？共享文件会保留。此操作不能撤销。`
+        : `Remove ${targets.length} unreferenced asset records? Shared files stay. This cannot be undone.`,
+      confirmText: zho ? '清理' : 'Remove',
+      cancelText: zho ? '取消' : 'Cancel',
+      danger: true,
+    });
     if (!confirmed) return;
     setBusy(true);
     const host: HostPlatformService = kernel.use(HOST_PLATFORM_SERVICE);

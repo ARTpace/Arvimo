@@ -1,0 +1,40 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {parseHTML} from 'linkedom';
+import {syncLocalFilterMarkup,toggleLocalFilterBranch} from '../src/library/local-filter-dom.js';
+import {addCustomCategory,assignCustomCategory,removeCustomCategory,customCategoryOf} from '../src/library/custom-categories.js';
+
+const markup=(open,count=3,active=false)=>`<div class="ftree-group${open?' open':''}"><div class="ftree-group-heading"><button data-type-group="three-d" aria-label="${open?'收起':'展开'}3D 资产" aria-expanded="${open}">3D 资产</button></div><div class="ftree-body"${open?'':' inert'}><div class="ftree-kids"><button data-local-kind="models" class="ftree-branch${active?' active':''}" aria-pressed="${active}"><span>${count}</span></button></div></div></div>`;
+test('折叠连续反向与刷新计数、选中态均保留原节点',()=>{
+ const {document}=parseHTML('<div id="panel"></div>'),panel=document.querySelector('#panel');
+ syncLocalFilterMarkup(panel,markup(true));
+ const group=panel.firstElementChild,button=panel.querySelector('[data-local-kind]'),body=panel.querySelector('.ftree-body');
+ toggleLocalFilterBranch(group,false);
+ assert.equal(group.classList.contains('open'),false);assert.equal(body.inert,true);
+ assert.equal(panel.querySelector('[data-type-group]').getAttribute('aria-expanded'),'false');
+ toggleLocalFilterBranch(group,true);
+ assert.equal(body.inert,false);assert.equal(panel.firstElementChild,group);
+ syncLocalFilterMarkup(panel,markup(true,8,true));
+ assert.equal(panel.querySelector('[data-local-kind]'),button);
+ assert.equal(button.textContent,'8');assert.equal(button.getAttribute('aria-pressed'),'true');
+ syncLocalFilterMarkup(panel,markup(false,8,true));
+ assert.equal(panel.firstElementChild,group);assert.equal(group.classList.contains('open'),false);
+ assert.equal(body.hasAttribute('inert'),true);
+});
+test('增删自定义分类时结构更新，删除清理关联且不改资产和其他分类',()=>{
+ const options={},model={uid:'asset-1',assetType:'model',name:'tree.glb'};
+ addCustomCategory(options,'three-d','角色','characters');addCustomCategory(options,'three-d','道具','props');
+ assignCustomCategory(options,model,'characters');
+ options.customCategoryByAsset['uid:other']='props';
+ const original=structuredClone(model);
+ removeCustomCategory(options,'characters');
+ assert.deepEqual(model,original);assert.equal(customCategoryOf(options,model),'');
+ assert.deepEqual(options.customCategories.map(row=>row.id),['props']);
+ assert.deepEqual(options.customCategoryByAsset,{'uid:other':'props'});
+ const {document}=parseHTML('<div id="panel"></div>'),panel=document.querySelector('#panel');
+ syncLocalFilterMarkup(panel,markup(true));
+ syncLocalFilterMarkup(panel,'<button data-custom-category="props">道具</button>');
+ assert.equal(panel.querySelector('[data-custom-category]').textContent,'道具');
+ syncLocalFilterMarkup(panel,markup(true));
+ assert.equal(panel.querySelector('[data-custom-category]'),null);
+});

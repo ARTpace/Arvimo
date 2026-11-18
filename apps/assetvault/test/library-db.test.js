@@ -18,6 +18,24 @@ const values = {
 };
 const temp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'assetvault-db-'));
 
+test('包内平台封面识别真实 rel，不受查询参数顺序和缓存参数影响', () => {
+  const db=createLibraryDb({Database,file:':memory:'});
+  try{
+    const remote='https://cdn.example.com/platform.jpg';
+    const previews=[
+      '/api/local/thumb?root=library&rel=pack%2Fpreview.jpg&w=384&v=123',
+      '/api/local/thumb?w=384&root=library&rel=pack%2Fpreview.jpg',
+      '/api/local/file?rel=pack%2FPREVIEW.PNG&root=library',
+    ];
+    for(const thumbnail of previews){
+      db.applyAssetOps([{op:'asset:add',uid:a,model:{uid:a,name:'材质',platform:'ambientcg',thumbnail,platformThumbnail:remote}}]);
+      const row=db.all('SELECT thumbnail,payload FROM assets WHERE uid=?',[a])[0];
+      assert.equal(row.thumbnail,thumbnail);
+      assert.equal(JSON.parse(row.payload).thumbnail,thumbnail);
+    }
+  }finally{db.close();}
+});
+
 test('写入后原字符串逐字节读回，派生索引同步生成', () => {
   const dir = temp();
   const db = createLibraryDb({Database, file: path.join(dir, 'library.db')});

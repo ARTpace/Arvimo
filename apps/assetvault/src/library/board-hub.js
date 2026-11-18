@@ -21,16 +21,18 @@ export function createBoardHub({
   const api = createBoardApi();
   const emit = (name, detail) => { try { win?.dispatchEvent(new CustomEvent(name, {detail})); } catch {} };
   const store = createBoardStore({api, storage, emit});
-  const picker = createBoardPicker({esc, icon, toast, store, document: doc});
+  const picker = createBoardPicker({esc, icon, toast, store, document: doc,
+    onRemoved: id => store.activeId === id ? controls?.applyCollection?.(id, {force:true, refresh:true}) : undefined,
+  });
   const collect = createBoardCollect({esc, icon, toast, api, store, state, mergeModels, persistNow, renderGrid, document: doc});
   // 画板就是合集实体：进入画板 = 把主网格限定到该合集的成员（服务端 filters.collection）。
   // 走 controls 的既有缝，不在这里另造一套过滤逻辑 —— 两处各写一套必然走样。
   const gotoLibrary = () => doc.querySelector('[data-route="library"]')?.click();
   // 进出画板都同步 store.activeId：它是「当前画板」的持久化真值，
   // 断线重开要能回到原处，删除当前板时也靠它判断要不要退回全部资产。
-  const openBoard = (id,options) => { store.setActive(id); gotoLibrary(); return controls?.applyCollection?.(id,options); };
-  const openAll = () => { store.setActive(''); gotoLibrary(); controls?.clearCollection?.(); };
-  const actions = createBoardActions({store, win, toast, openBoard});
+  const openBoard = (id,options) => { gotoLibrary();store.setActive(id);return controls?.applyCollection?.(id,{...options,force:true,refresh:true,board:store.byId?.(id)}); };
+  const openAll = () => { store.setActive('');const task=controls?.clearCollection?.();gotoLibrary();return task; };
+  const actions = createBoardActions({store, win, toast, openBoard,document:doc});
   // 智能画板规则：新建 / 用当前筛选覆盖，走同一个对话框；保存后按新规则重算并进入该板。
   const rule = createBoardRule({
     esc, icon, toast, store, controls,
@@ -110,7 +112,7 @@ export function createBoardHub({
   controls?.setOnBoardDirty?.(() => { store.refresh().catch(() => {}); });
 
   return {
-    api, store, picker, collect, deck, rule, actions, batchEdit, openBoard,
+    api, store, picker, collect, deck, rule, actions, batchEdit, openBoard, openAll,
     pickBoards: (uids, options) => picker.open(uids, options),
     openCollect: () => collect.open(),
     syncPending: sync,

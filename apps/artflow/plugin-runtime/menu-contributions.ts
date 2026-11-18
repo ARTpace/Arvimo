@@ -30,6 +30,8 @@ export interface ContextMenuContext {
 }
 
 export interface ContextMenuItem {
+  shortcut?: string;
+  enabled?: (ctx: ContextMenuContext) => boolean;
   /** 展示文案。 */
   label: (language: SettingsSectionLanguage) => string;
   /** 危险动作（红色调，如删除）。 */
@@ -39,7 +41,7 @@ export interface ContextMenuItem {
   /** 可见性谓词；不满足时该项整个不渲染。 */
   visible: (ctx: ContextMenuContext) => boolean;
   /** 动作；执行后宿主自动关闭菜单。 */
-  run: (ctx: ContextMenuContext) => void;
+  run: (ctx: ContextMenuContext) => void | Promise<unknown>;
 }
 
 export interface ContextMenuItemContribution {

@@ -1,4 +1,8 @@
+import {classifyAsset} from './asset-classification.js';
 import {findLocalJob} from './blender-send.js';
+import {categoryMatches} from './tag-facet-map.js';
+import {imageSubcategoryOf,isImageKind} from './image-subcategories.js';
+import {mediaSubcategoryOf} from './doc-media-subcategories.js';
 
 /** Asset-wide availability: an 8K file counts even when the card selects 2K. */
 export function localFileState(jobs,uid){
@@ -8,21 +12,14 @@ export function localFileState(jobs,uid){
 
 /** 采集来的资产 assetType 是单数（image / texture），而筛选条的值域是复数（images / textures）。
  *  不做这层归一，从平台收进库的图片资产按「图片」筛永远是 0 条 —— 与服务端 library-query 的别名表保持同一份。 */
-const KIND_ALIASES={image:'images',texture:'textures',material:'textures',hdri:'hdris',skybox:'hdris',alpha:'images',model:'models',pack:'packs',uielement:'uielement'};
-
-export function localAssetKind(model){
- if(model.platform==='artstation')return model.hasMarmoset===false?'images':'models';
- if(model.platform==='ambientcg')return model.assetType||'textures';
- if(model.platform==='kenney')return 'packs';
- // Uiverse 资产落盘是 index.html + style.css，不是 3D 模型也不是图片：
- // 不单独判就会走到下面的默认值 'models'，UI 模式永远筛不到（2026-11-12 用户反馈）。
- if(model.platform==='uiverse')return 'uielement';
- const raw=({skybox:'hdris',smart:'textures',alphas:'images'})[model.assetType]||model.assetType||'models';
- return KIND_ALIASES[raw]||raw;
-}
+export function localAssetKind(model){return classifyAsset(model).kind;}
 
 export function localAssetCategories(model){
- return [...new Set([...(Array.isArray(model.categories)?model.categories:[]),model.category,...(model.tags||[]),...(model.userTags||[])].map(value=>typeof value==='string'?value:value?.name||value?.label||'').map(value=>value.trim()).filter(Boolean))];
+ // 图片的用途子类由规则自动判定，和手动标签并列：既喂给侧栏计数，也让点子类时能筛出对应资产。
+ // 文档 / 视频 / 音频同样派生一格「用途子类」（教程指南、音乐配乐…），
+ // 侧栏类型树读的就是这个函数，所以计数与点选筛选天然同步，不用另开一条判据。
+ const auto=isImageKind(model)?imageSubcategoryOf(model):mediaSubcategoryOf(model);
+ return [...new Set([auto,...(Array.isArray(model.categories)?model.categories:[]),model.category,...(model.tags||[]),...(model.userTags||[])].map(value=>typeof value==='string'?value:value?.name||value?.label||'').map(value=>value.trim()).filter(Boolean))];
 }
 
 export function filterLocalAssets(models,{kind='',category='',status='',search='',english='',imageTerms=[]},jobs){
@@ -31,7 +28,7 @@ export function filterLocalAssets(models,{kind='',category='',status='',search='
  // 图搜：视觉模型给的关键词按命中的字段加权（名称 > 标签 > 作者），命中越多排得越前。
  const terms=(Array.isArray(imageTerms)?imageTerms:[]).map(item=>String(item||'').replace(/\s+/g,' ').trim().toLocaleLowerCase()).filter(item=>item.length>=2).slice(0,24);
  const rows=models.filter(model=>(!kind||localAssetKind(model)===kind)
-  &&(!category||localAssetCategories(model).includes(category))
+  &&(!category||categoryMatches(localAssetCategories(model),category))
   &&(!status||Array.isArray(jobs)&&localFileState(jobs,model.uid)===status)
   &&(!term||matches(model)));
  if(!terms.length)return rows;

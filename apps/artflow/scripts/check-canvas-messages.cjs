@@ -1,0 +1,11 @@
+require('./register-typescript.cjs');
+const assert = require('node:assert/strict');
+const { canvasMessage } = require('../utils/canvas-messages.ts');
+assert.equal(canvasMessage('Saving project…', 'zho'), '正在保存项目…');
+assert.equal(canvasMessage('Saving project…', 'en'), 'Saving project…');
+assert.equal(canvasMessage('Importing 2/8: My English Image.png', 'zho'), '正在导入 2/8：My English Image.png');
+assert.equal(canvasMessage('Failed to remove background: service timeout', 'zho'), '移除背景失败：service timeout');
+assert.equal(canvasMessage('Provider returned a custom error', 'zho'), 'Provider returned a custom error');
+assert.equal(canvasMessage('Imported 2/3 files (4 items). Stopped at "A.png". Unknown import error.', 'zho'), '已导入 2/3 个文件（4 个元素）。停止于“A.png”。导入发生未知错误。');
+assert.equal(canvasMessage('Imported 2/3 files · 4 canvas items · 1 skipped', 'zho'), '已导入 2/3 个文件 · 4 个画布元素 · 跳过 1 个文件');
+console.log('check-canvas-messages: OK');

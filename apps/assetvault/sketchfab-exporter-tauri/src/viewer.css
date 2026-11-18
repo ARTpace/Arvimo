@@ -3,10 +3,10 @@
    1) :root 变量挂到 .preview-dialog（不污染 AssetVault 全局色板）；
    2) 删掉 html,body 的页面级规则；
    3) [hidden] 收敛到 .preview-dialog 作用域内。 */
-.preview-dialog{--ui-panel:#202831;--ui-soft:#171f28;--ui-line:#27303d;--ui-line-strong:#3a4655;--ui-text:#d7e2ee;--ui-muted:#8e9eaf;--ui-accent:#a5c880;--ui-accent-soft:#141d12;--accent:var(--ui-accent)}
+.preview-dialog{--ui-panel:var(--av-panel-raised,#202831);--ui-soft:var(--av-panel-raised,#171f28);--ui-line:var(--av-line,#27303d);--ui-line-strong:var(--av-line,#3a4655);--ui-text:#d7e2ee;--ui-muted:#8e9eaf;--ui-accent:#a5c880;--ui-accent-soft:#141d12;--accent:var(--ui-accent)}
 
 *{box-sizing:border-box}.preview-dialog [hidden]{display:none!important}
-.viewer-wrap{position:relative;display:flex;flex-direction:column;width:100%;height:100%;min-height:0;background:#090e15}
+.viewer-wrap{position:relative;display:flex;flex-direction:column;width:100%;height:100%;min-height:0;background:var(--av-field,#090e15)}
 #viewer-canvas{display:block;flex:1;min-height:0;width:100%;touch-action:none;outline:none}
 button,select{font:inherit;cursor:pointer;color:inherit;background:var(--ui-panel);border:1px solid var(--ui-line-strong);border-radius:6px;padding:5px}
 button svg{width:20px;height:20px}.icon-button{padding:0}.viewer-help .icon-button{background:none;border:0}
@@ -42,10 +42,10 @@ button svg{width:20px;height:20px}.icon-button{padding:0}.viewer-help .icon-butt
 .viewer-material{position:absolute;left:12px;top:12px;z-index:4;display:flex;align-items:center;gap:8px;padding:4px 8px;border:1px solid var(--ui-line-strong);border-radius:10px;background:var(--ui-panel);backdrop-filter:blur(6px)}
 .viewer-material[hidden]{display:none}
 .vm-control{position:relative}.vm-button{display:flex;align-items:center;gap:7px;height:32px;padding:0 10px;color:var(--ui-text)}.vm-button svg,.vm-popover svg{width:18px;height:18px;flex:none}.vm-button[aria-expanded="true"]{color:var(--accent);border-color:var(--ui-accent)}
-.vm-popover{position:absolute;top:calc(100% + 8px);left:0;display:flex;flex-direction:column;gap:4px;padding:6px;background:var(--ui-panel);border:1px solid #33454f;border-radius:9px;box-shadow:0 8px 24px #0009;min-width:110px}
+.vm-popover{position:absolute;top:calc(100% + 8px);left:0;display:flex;flex-direction:column;gap:4px;padding:6px;background:var(--ui-panel);border:1px solid var(--av-line,#33454f);border-radius:9px;box-shadow:0 8px 24px #0009;min-width:110px}
 .vm-popover button{display:flex;align-items:center;gap:8px;white-space:nowrap;padding:7px 10px;border-color:transparent;background:transparent}.vm-popover button.on{color:var(--accent);background:#a5c88018}.vm-popover button:disabled{opacity:.35;cursor:default}.vm-repeat-popover{min-width:0;width:44px;align-items:center;padding:12px 8px;left:50%;transform:translateX(-50%)}
 #vm-repeat,#vm-height{writing-mode:vertical-lr;direction:rtl;appearance:auto;width:20px;height:150px;margin:0;accent-color:var(--accent);cursor:pointer}.vm-button output{min-width:28px;font-variant-numeric:tabular-nums}
-.viewer-textures{position:absolute;right:8px;top:62px;bottom:8px;width:clamp(96px,19%,190px);display:flex;flex-direction:column;gap:6px;padding:6px;background:#101722ee;border:1px solid var(--ui-line-strong);border-radius:10px;z-index:3}.viewer-textures figure{margin:0;flex:1;min-height:0;display:flex;flex-direction:column;gap:3px}.viewer-textures img{width:100%;flex:1;min-height:0;object-fit:contain;background:#080d13;border-radius:5px}.viewer-textures figcaption{flex:none;color:#9fb0c2;font-size:10px;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.viewer-wrap.textures-open .viewer-channels{right:clamp(104px,20%,202px)}.viewer-wrap.textures-open #viewer-canvas{width:calc(100% - clamp(104px,20%,202px))}
+.viewer-textures{position:absolute;right:8px;top:62px;bottom:8px;width:clamp(96px,19%,190px);display:flex;flex-direction:column;gap:6px;padding:6px;background:var(--av-panel-solid,#101722ee);border:1px solid var(--ui-line-strong);border-radius:10px;z-index:3}.viewer-textures figure{margin:0;flex:1;min-height:0;display:flex;flex-direction:column;gap:3px}.viewer-textures img{width:100%;flex:1;min-height:0;object-fit:contain;background:var(--av-field,#080d13);border-radius:5px}.viewer-textures figcaption{flex:none;color:#9fb0c2;font-size:10px;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.viewer-wrap.textures-open .viewer-channels{right:clamp(104px,20%,202px)}.viewer-wrap.textures-open #viewer-canvas{width:calc(100% - clamp(104px,20%,202px))}
 /* 通道预览覆盖层：标签条贴在各条左缘（竖排），统计照 mviewer 放左下角。
    pointer-events:none 是关键——覆盖层只是「标签」，点击切通道听的是 canvas 自己。 */
 .viewer-channels{position:absolute;inset:0;z-index:2;pointer-events:none}
@@ -53,12 +53,12 @@ button svg{width:20px;height:20px}.icon-button{padding:0}.viewer-help .icon-butt
 .viewer-channel-labels{position:absolute;inset:0;display:flex}
 .viewer-channel-labels span{flex:1;display:flex;align-items:flex-end;justify-content:center;padding:0 8px 38px;font-size:10px;letter-spacing:2px;color:#d5dde8;text-shadow:0 1px 3px #000c;writing-mode:horizontal-tb}
 .viewer-channel-labels span+span{border-left:1px solid #ffffff2e}
-.viewer-stats{position:absolute;left:12px;bottom:10px;font-size:10px;letter-spacing:.5px;color:#aab8c8;background:#0d1117b8;border:1px solid var(--ui-line-strong);border-radius:6px;padding:3px 9px}
+.viewer-stats{position:absolute;left:12px;bottom:10px;font-size:10px;letter-spacing:.5px;color:#aab8c8;background:var(--av-panel-solid,#0d1117b8);border:1px solid var(--ui-line-strong);border-radius:6px;padding:3px 9px}
 .viewer-stats[hidden]{display:none}
 .viewer-settings{position:relative;display:flex;z-index:6}.viewer-display{order:1}.viewer-settings .vm-popover{left:auto;right:0;top:calc(100% + 10px);width:min(240px,calc(100vw - 24px));min-width:0;padding:10px;gap:8px;max-height:calc(100vh - 80px);overflow:auto}.environment-actions,.environment-files{display:flex;align-items:center;gap:6px}.viewer-settings .lighting-check,.environment-files button{display:grid;place-items:center;width:30px;height:28px;margin:0;padding:4px;border:1px solid var(--ui-line-strong);border-radius:6px;cursor:pointer;color:#8796a8}.lighting-check:has(input:checked){color:var(--accent);background:#a5c88020;border-color:var(--ui-accent)}.lighting-check input{position:absolute;opacity:0;width:1px;height:1px}.lighting-check:focus-within{outline:2px solid var(--accent)}.viewer-settings svg{width:16px;height:16px;flex:none}.viewer-settings #environment-preview{display:grid;place-items:center;padding:0;background:#ffffff06;border:1px solid #ffffff12;border-radius:6px;height:88px}.viewer-settings #environment-thumb{width:80px;height:80px}.environment-parameters{display:grid;grid-template-columns:1fr 1fr;gap:8px}.environment-parameters label{display:grid;grid-template-columns:16px 1fr;align-items:center;gap:4px;min-width:0}.environment-parameters input{grid-row:2;grid-column:1 / -1;width:100%;margin:0;accent-color:var(--accent)}.environment-parameters output{text-align:right;font-size:11px;font-variant-numeric:tabular-nums}.viewer-settings p{font-size:10px;color:#8998a8;margin:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}.environment-files{position:absolute;right:10px;top:10px}.viewer-settings p:empty{display:none}
 .viewer-channel-labels span{min-width:0;letter-spacing:0;font-size:11px;white-space:nowrap}
 .viewer-display{display:flex;align-items:center;gap:0;padding:3px;border:1px solid var(--ui-line-strong);border-radius:10px;background:var(--ui-panel)}.viewer-tools .viewer-display .icon-button{width:30px;height:32px;border:0;border-radius:6px;background:transparent}.viewer-tools .viewer-display .icon-button.on{background:#a5c88030;color:var(--accent)}@media(max-width:620px){.viewer-material{top:62px}}
-.viewer-uv{position:absolute;right:8px;top:62px;bottom:8px;width:clamp(180px,30%,360px);z-index:3;background:var(--ui-panel);border:1px solid var(--ui-line-strong);border-radius:9px;padding:8px;display:flex;flex-direction:column;gap:8px}.viewer-uv header{display:flex;gap:8px;align-items:center}.viewer-uv select{min-width:0;flex:1}.viewer-uv canvas{width:100%;flex:1;min-height:0;background:#0a1018}.viewer-uv p{font-size:10px;color:var(--ui-muted);margin:0}.viewer-wrap.uv-open #viewer-canvas{width:calc(100% - clamp(196px,32%,376px))}.viewer-wrap.uv-open .viewer-channels{right:clamp(196px,32%,376px)}.viewer-views{position:absolute;right:12px;top:62px;width:min(250px,calc(100% - 24px));padding:10px;background:var(--ui-panel);border:1px solid var(--ui-line-strong);border-radius:9px;z-index:6;box-shadow:0 8px 24px #0008}.viewer-views form{display:flex;gap:6px;margin-top:8px}.viewer-views input{width:0;flex:1;min-width:0;background:var(--ui-soft);color:var(--ui-text);border:1px solid var(--ui-line-strong);border-radius:5px;padding:6px;font:inherit}.viewer-views-list{display:flex;flex-direction:column;gap:4px;max-height:220px;overflow:auto}.viewer-views-list>div{display:flex;gap:4px}.viewer-views-list .view-recall{flex:1;text-align:left;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.viewer-views p{margin:2px;color:var(--ui-muted);font-size:11px}
+.viewer-uv{position:absolute;right:8px;top:62px;bottom:8px;width:clamp(180px,30%,360px);z-index:3;background:var(--ui-panel);border:1px solid var(--ui-line-strong);border-radius:9px;padding:8px;display:flex;flex-direction:column;gap:8px}.viewer-uv header{display:flex;gap:8px;align-items:center}.viewer-uv select{min-width:0;flex:1}.viewer-uv canvas{width:100%;flex:1;min-height:0;background:var(--av-field,#0a1018)}.viewer-uv p{font-size:10px;color:var(--ui-muted);margin:0}.viewer-wrap.uv-open #viewer-canvas{width:calc(100% - clamp(196px,32%,376px))}.viewer-wrap.uv-open .viewer-channels{right:clamp(196px,32%,376px)}.viewer-views{position:absolute;right:12px;top:62px;width:min(250px,calc(100% - 24px));padding:10px;background:var(--ui-panel);border:1px solid var(--ui-line-strong);border-radius:9px;z-index:6;box-shadow:0 8px 24px #0008}.viewer-views form{display:flex;gap:6px;margin-top:8px}.viewer-views input{width:0;flex:1;min-width:0;background:var(--ui-soft);color:var(--ui-text);border:1px solid var(--ui-line-strong);border-radius:5px;padding:6px;font:inherit}.viewer-views-list{display:flex;flex-direction:column;gap:4px;max-height:220px;overflow:auto}.viewer-views-list>div{display:flex;gap:4px}.viewer-views-list .view-recall{flex:1;text-align:left;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.viewer-views p{margin:2px;color:var(--ui-muted);font-size:11px}
 /* ANCHOR-DIFF：预览器内统一用系统字体，和 art-canvas 独立窗口一致 */
 .viewer-wrap{font:12px system-ui}
 
@@ -90,10 +90,10 @@ button svg{width:20px;height:20px}.icon-button{padding:0}.viewer-help .icon-butt
 .preview-dialog .viewer-tools .viewer-display .icon-button.on{background:#a5c88022;color:var(--accent)}
 /* 分组框：三键一组留一条淡框，组内按键无框（避免框里套框） */
 .preview-dialog .viewer-display{padding:2px;gap:2px;border:1px solid #ffffff26;border-radius:10px;background:#ffffff08}
-.preview-dialog .viewer-material{border:1px solid #ffffff26;border-radius:10px;background:#0d1420d9}
+.preview-dialog .viewer-material{border:1px solid #ffffff26;border-radius:10px;background:var(--av-panel-solid,#0d1420d9)}
 /* 侧栏：一条低对比外框 + 标题下分隔线，内部控件不再描边 */
 .preview-dialog .viewer-uv,
-.preview-dialog .viewer-textures{border:1px solid #ffffff26;border-radius:12px;background:#0d1420d9;padding:10px}
+.preview-dialog .viewer-textures{border:1px solid #ffffff26;border-radius:12px;background:var(--av-panel-solid,#0d1420d9);padding:10px}
 .preview-dialog .viewer-uv header{padding-bottom:6px;border-bottom:1px solid #ffffff1a}
 .preview-dialog .viewer-textures figure+figure{border-top:1px solid #ffffff14;padding-top:6px}
 .preview-dialog .viewer-uv select,
@@ -101,7 +101,7 @@ button svg{width:20px;height:20px}.icon-button{padding:0}.viewer-help .icon-butt
 .preview-dialog .viewer-uv canvas,
 .preview-dialog .viewer-textures img{background:transparent}
 .preview-dialog .viewer-textures figcaption{color:#8c9bad}
-.preview-dialog .viewer-stats{border:1px solid #ffffff1a;border-radius:6px;background:#0d111799}
+.preview-dialog .viewer-stats{border:1px solid #ffffff1a;border-radius:6px;background:var(--av-panel-solid,#0d111799)}
 .preview-dialog .vm-popover,
 .preview-dialog .viewer-help{border-color:#ffffff33}
 /* UV 侧栏的手动关闭键：与工具条同一套无边框图标按钮 */
@@ -109,19 +109,19 @@ button svg{width:20px;height:20px}.icon-button{padding:0}.viewer-help .icon-butt
 .preview-dialog .uv-close:hover{color:var(--ui-text);background:#ffffff12}
 .preview-dialog .uv-close svg{width:14px;height:14px}
 /* ── ANCHOR-DIFF 8：贴图放大查看（与 art-canvas viewer.html 同构，整段可原样互相拷贝）── */
-.viewer-texture-zoom{position:absolute;inset:0;z-index:20;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;overflow:hidden;background:#05080cde;backdrop-filter:blur(4px)}
+.viewer-texture-zoom{position:absolute;inset:0;z-index:20;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;overflow:hidden;background:var(--av-panel-solid,#05080cde);backdrop-filter:blur(4px)}
 .viewer-texture-zoom[hidden]{display:none}
-.viewer-texture-zoom img{max-width:min(88%,960px);max-height:78%;object-fit:contain;background:#0d1420;border:1px solid #ffffff26;border-radius:8px;box-shadow:0 14px 44px #000a;transform:scale(var(--zoom-scale,1));transition:transform .12s ease;cursor:zoom-in;user-select:none}
+.viewer-texture-zoom img{max-width:min(88%,960px);max-height:78%;object-fit:contain;background:var(--av-panel-raised,#0d1420);border:1px solid #ffffff26;border-radius:8px;box-shadow:0 14px 44px #000a;transform:scale(var(--zoom-scale,1));transition:transform .12s ease;cursor:zoom-in;user-select:none}
 .viewer-texture-zoom .texture-zoom-caption{flex:none;color:#9fb0c2;font-size:11px;text-align:center;padding:0 16px;pointer-events:none}
-.viewer-texture-zoom .texture-zoom-close{position:absolute;top:10px;right:12px;width:30px;height:30px;padding:6px;border:1px solid #ffffff26;border-radius:8px;background:#0d1420cc;color:#e7eef7}
+.viewer-texture-zoom .texture-zoom-close{position:absolute;top:10px;right:12px;width:30px;height:30px;padding:6px;border:1px solid #ffffff26;border-radius:8px;background:var(--av-panel-solid,#0d1420cc);color:#e7eef7}
 .viewer-texture-zoom .texture-zoom-close:hover{background:#ffffff1a}
 .viewer-textures figure{cursor:zoom-in}
 .viewer-textures figure:hover img{outline:1px solid #a5c88088}
 /* ── ANCHOR-DIFF 9：加载过渡层（与 art-canvas viewer.html 同构，整段可原样互相拷贝）── */
-.viewer-loading{position:absolute;inset:0;z-index:3;display:flex;align-items:center;justify-content:center;pointer-events:none;background:#090e15a8;backdrop-filter:blur(2px);opacity:0;transition:opacity .22s ease}
+.viewer-loading{position:absolute;inset:0;z-index:3;display:flex;align-items:center;justify-content:center;pointer-events:none;background:var(--av-panel-solid,#090e15a8);backdrop-filter:blur(2px);opacity:0;transition:opacity .22s ease}
 .viewer-loading[hidden]{display:none}
 .viewer-loading.on{opacity:1}
-.viewer-loading-card{display:flex;flex-direction:column;align-items:center;gap:10px;padding:20px 26px;border:1px solid #ffffff1f;border-radius:14px;background:#0d1420e6;box-shadow:0 12px 36px #0008}
+.viewer-loading-card{display:flex;flex-direction:column;align-items:center;gap:10px;padding:20px 26px;border:1px solid #ffffff1f;border-radius:14px;background:var(--av-panel-solid,#0d1420e6);box-shadow:0 12px 36px #0008}
 .viewer-loading-ring{width:30px;height:30px;border:2px solid #ffffff1f;border-top-color:#a5c880;border-radius:50%;animation:viewer-spin .85s linear infinite}
 @keyframes viewer-spin{to{transform:rotate(360deg)}}
 .viewer-loading-text{color:#e7eef7;font-size:12px;letter-spacing:.02em}
@@ -133,7 +133,7 @@ button svg{width:20px;height:20px}.icon-button{padding:0}.viewer-help .icon-butt
 /* ── ANCHOR-DIFF 10：贴图缩略图铺满侧栏宽度（两个工具同构，整段可原样互相拷贝）──
  * 原来 figure / img 都是 flex:1，正方形贴图被压进「等高格子」再 contain 居中，
  * 左右各留一大片空白。改成宽度铺满、高度按原始比例，超出侧栏高度时滚动。 */
-.viewer-textures{overflow-y:auto;overflow-x:hidden;scrollbar-width:thin;scrollbar-color:#ffffff26 transparent}
+.viewer-textures{overflow-y:auto;overflow-x:hidden;}
 .viewer-textures figure{flex:none;margin:0}
 .viewer-textures img{width:100%;height:auto;flex:none;display:block;object-fit:contain}
 .viewer-textures figcaption{flex:none}

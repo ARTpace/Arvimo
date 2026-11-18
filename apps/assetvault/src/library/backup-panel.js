@@ -4,6 +4,7 @@
 // 这块只管「把库搬走」——换机、合并工作室库、事故后重建。语义全在 server/library-portable.mjs：
 // 导出是 DB 权威的一份可移植 JSON；导入走 asset:* 定点 op，新资产吃快照标注，已有资产保留本机标注。
 const LOCAL = {'X-SFX-Local': '1'};
+import {askConfirm} from './ask-dialog.js';
 
 const fmtBytes = value => {
   const bytes = Number(value) || 0;
@@ -60,7 +61,7 @@ export function createBackupPanel({toast, isVisitor = false} = {}) {
       if (!probeResponse.ok) throw Error(probe.error || `HTTP ${probeResponse.status}`);
       if (!probe.items) { sayEagle('这个库里没有条目。'); return; }
       const sample = (probe.samples || []).map(item => item.name).filter(Boolean).slice(0, 3).join('、');
-      const ok = confirm(`发现 Eagle 兼容库「${probe.name}」\n\n${probe.items} 个项目 · ${probe.folders} 个文件夹${sample ? `\n例如：${sample}` : ''}\n\n原图会复制到 Arvimo · 艺团 的 imports 目录，标签 / 星级 / 备注 / 文件夹一并导入。继续？`);
+      const ok = await askConfirm({title: '导入 Eagle 库', message: `发现 Eagle 兼容库「${probe.name}」\n\n${probe.items} 个项目 · ${probe.folders} 个文件夹${sample ? `\n例如：${sample}` : ''}\n\n原图会复制到 Arvimo · 艺团 的 imports 目录，标签 / 星级 / 备注 / 文件夹一并导入。继续？`, confirmText: '导入'});
       if (!ok) { sayEagle('已取消。'); return; }
       sayEagle(`正在复制并入库，共 ${probe.items} 项…（大库要几分钟，别关页面）`);
       const response = await post('/api/library/import/eagle', {folder});
@@ -110,7 +111,7 @@ export function createBackupPanel({toast, isVisitor = false} = {}) {
   async function importFile(file) {
     if (!file) return;
     const mode = q('#migrate-mode')?.value === 'replace' ? 'replace' : 'merge';
-    if (mode === 'replace' && !confirm('「替换整库」会先清空当前资产目录，只保留快照里的内容。\n\n系统会先自动备份一份现状，但请确认这是你要的结果。继续？')) return;
+    if (mode === 'replace' && !await askConfirm({title: '替换整库', message: '「替换整库」会先清空当前资产目录，只保留快照里的内容。\n\n系统会先自动备份一份现状，但请确认这是你要的结果。继续？', confirmText: '替换', danger: true})) return;
     say(`正在读取 ${file.name}…`);
     let snapshot;
     try {

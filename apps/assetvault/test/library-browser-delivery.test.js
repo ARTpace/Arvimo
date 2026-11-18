@@ -60,7 +60,10 @@ test('file retrieval streams ZIP files and packages folders without modifying or
 test('browser rejects server JSON instead of saving file.json',async()=>{
  await assert.rejects(fetchBrowserAsset('id',{fetch:async()=>new Response(JSON.stringify({error:'目录过大'}),{status:400,headers:{'Content-Type':'application/json'}})}),/目录过大/);
  const zip=Buffer.from([0x50,0x4b,0x03,0x04,1]);
- const result=await fetchBrowserAsset('id',{fetch:async()=>new Response(zip,{headers:{'Content-Type':'application/zip','Content-Disposition':"attachment; filename*=UTF-8''model.zip"}})});
+ const result=await fetchBrowserAsset('id',{fetch:async(url,init)=>{
+  assert.equal(url,'/api/downloads/tasks/id/file');assert.equal(new Headers(init.headers).get('x-sfx-local'),'1');
+  return new Response(zip,{headers:{'Content-Type':'application/zip','Content-Disposition':"attachment; filename*=UTF-8''model.zip"}});
+ }});
  assert.equal(result.filename,'model.zip');assert.equal(result.blob.size,zip.length);
 });
 

@@ -12,6 +12,14 @@ export interface Point {
   y: number;
 }
 
+export interface DrawingOptions {
+  strokeColor: string;
+  strokeWidth: number;
+  opacity: number;
+  penStyle?: 'solid' | 'dotted' | 'arrow';
+  eraseMode?: 'partial' | 'stroke';
+}
+
 interface CanvasElementBase {
   id: string;
   x: number;
@@ -24,6 +32,7 @@ interface CanvasElementBase {
   assetId?: string;
   /** R24 bounded, canonical labels persisted as ordinary Element metadata. */
   tags?: string[];
+  colorTag?: string;
 }
 
 export interface ImageElement extends CanvasElementBase {
@@ -76,6 +85,8 @@ export interface PathElement extends CanvasElementBase {
   strokeWidth: number;
   opacity?: number;
   rotation?: number; // degrees
+  penStyle?: DrawingOptions['penStyle'];
+  smooth?: boolean;
 }
 
 export interface ShapeElement extends CanvasElementBase {

@@ -10,7 +10,7 @@
 //   · 顶部浮出的「拖到画板」条（固定定位，跟着屏幕上沿，滚到哪都够得着）；
 //   · 资产库里的画板卡（.bd-card），在可见范围内依然可以直接拖上去。
 // 智能画板按规则取内容，不接收手拖进来的成员，因此只作展示、不作落点。
-const CARD = '.model-card[data-uid],.local-file-card[data-uid]';
+const CARD = '.model-card[data-uid],.local-file-card[data-uid],.model-card[data-package],.local-file-card[data-file],.model-card[data-card-group]';
 const BOARD = '.bd-card[data-bd-open]';
 const CHIP = '.bd-drop-chip';
 const TARGET = `${CHIP},${BOARD}`;
@@ -19,7 +19,7 @@ const THRESHOLD = 5;
 const MAX_CHIPS = 12;
 
 export function createBoardDrop({api, toast, selected = () => new Set(), onAdded = () => {},
-  boards = () => [], doc = document, win = window} = {}) {
+  boards = () => [], albumKey = () => null, onAlbumDrop, cardDrop, doc = document, win = window} = {}) {
   if (!api || typeof api.boardItems !== 'function') return {setup() {}, cancel() {}};
 
   let session = null;    // {x, y, x0, y0, uids, active}
@@ -34,7 +34,14 @@ export function createBoardDrop({api, toast, selected = () => new Set(), onAdded
     const set = selected();
     return set?.has?.(uid) ? [...set] : [uid];
   };
-  const hit = (x, y) => doc.elementFromPoint?.(x, y)?.closest?.(TARGET) || null;
+  const cardUids=card=>{const key=albumKey(card);return key&&onAlbumDrop?['album:'+encodeURIComponent(key)]:card.dataset.uid?uidsFor(card.dataset.uid):[];};
+  const hit = (x, y) => {
+    const target=doc.elementFromPoint?.(x,y);
+    const board=target?.closest?.(TARGET);
+    if(board&&session?.uids?.length)return board;
+    const card=target?.closest?.(`${CARD},.album-folder-card`);
+    return cardDrop?.canDrop(session?.source,card)?card:null;
+  };
   const droppable = node => !!node && !node.classList.contains('is-smart') && !node.classList.contains('is-off');
   const idOf = node => node?.dataset?.bdChip || node?.dataset?.bdOpen || '';
   const nameOf = node => {
@@ -112,7 +119,7 @@ export function createBoardDrop({api, toast, selected = () => new Set(), onAdded
       doc.body.append(ghost);
     }
     ghost.hidden = false;
-    ghost.textContent = count > 1 ? `${count} 个资产` : '加入画板';
+    ghost.textContent = hovered&&!idOf(hovered)&&session?.source ? cardDrop.label(session.source,hovered) : count > 1 ? `${count} 个资产` : '拖到卡片合并 / 拖到画板加入';
     ghost.style.transform = `translate(${x + 14}px,${y + 12}px)`;
   }
 
@@ -123,8 +130,8 @@ export function createBoardDrop({api, toast, selected = () => new Set(), onAdded
   function mark(node) {
     if (node === hovered) return;
     // 两种落点各用一套高亮类，清旧的时两个都摘掉，省得记错上一次是什么。
-    hovered?.classList.remove('is-over', 'bd-card--drop');
-    if (node) node.classList.add(node.dataset?.bdChip ? 'is-over' : 'bd-card--drop');
+    hovered?.classList.remove('is-over', 'bd-card--drop','card-group-drop');
+    if (node) node.classList.add(node.dataset?.bdChip ? 'is-over' : idOf(node)?'bd-card--drop':'card-group-drop');
     hovered = node;
   }
 
@@ -133,6 +140,7 @@ export function createBoardDrop({api, toast, selected = () => new Set(), onAdded
     if (!id || !uids?.length) return;
     const name = nameOf(node);
     try {
+      if(uids.length===1&&uids[0].startsWith('album:')&&onAlbumDrop){await onAlbumDrop(decodeURIComponent(uids[0].slice(6)),id);onAdded?.(id);return;}
       await api.boardItems(id, uids, 'add');
       toast?.(uids.length > 1 ? `已把 ${uids.length} 个资产加入「${name}」` : `已加入「${name}」`);
       onAdded?.(id);
@@ -159,11 +167,11 @@ export function createBoardDrop({api, toast, selected = () => new Set(), onAdded
       const card = target?.closest?.(CARD);
       if (!card) return;
       if (target.closest?.('button:not(.preview-hit),a,input,select,textarea,label')) return;
-      const uid = card.dataset.uid;
-      if (!uid) return;
-      const uids = uidsFor(uid);
+      const uids = cardUids(card);
+      const source=cardDrop?.source(card);
+      if (!uids.length&&!source) return;
       doc.body.classList.add('bd-drop-active');
-      session = {kind: 'pointer', x: event.clientX, y: event.clientY, x0: event.clientX, y0: event.clientY, uids, active: false};
+      session = {kind: 'pointer', source, x: event.clientX, y: event.clientY, x0: event.clientX, y0: event.clientY, uids, active: false};
     }, true);
 
     win.addEventListener('pointermove', event => {
@@ -177,8 +185,8 @@ export function createBoardDrop({api, toast, selected = () => new Set(), onAdded
         suppressClickUntil=Date.now()+1000;
         void openDock();
       }
-      moveGhost(session.x, session.y, session.uids.length);
       mark(hit(session.x, session.y));
+      moveGhost(session.x, session.y, session.uids.length);
       event.preventDefault();
     }, true);
 
@@ -186,9 +194,11 @@ export function createBoardDrop({api, toast, selected = () => new Set(), onAdded
       if (!session || session.kind !== 'pointer') return;
       const node = session.active ? hit(event.clientX, event.clientY) : null;
       const uids = session.uids;
+      const source=session.source;
       const moved = session.active;
       if(moved)suppressClickUntil=Date.now()+500;
       cleanup();
+      if(node&&!idOf(node)&&cardDrop?.canDrop(source,node)){void cardDrop.drop(source,node);return;}
       if (droppable(node)) { void addToBoard(node, uids); return; }
       if (node) { toast?.('智能画板按规则自动收集，不能手动加成员'); return; }
       // 拖着走了却没落在任何画板上：教一次「往哪儿松手」，别让人以为拖不动。
@@ -209,18 +219,18 @@ export function createBoardDrop({api, toast, selected = () => new Set(), onAdded
     /* 网页版：把 uid 塞进 dragstart 的 dataTransfer（与 board-canvas 用同一个 MIME）。 */
     doc.addEventListener('dragstart', event => {
       const card = event.target?.closest?.(CARD);
-      if (!card?.dataset?.uid || !event.dataTransfer) return;
+      if (!card || !event.dataTransfer) return;
       try {
-        const uids = uidsFor(card.dataset.uid);
-        event.dataTransfer.setData(MIME, uids.join(','));
+        const uids = cardUids(card),source=cardDrop?.source(card);if(!uids.length&&!source)return;
+        event.dataTransfer.setData(MIME, uids.join(',')||'card-group');
         event.dataTransfer.setData('text/plain', uids.join(','));
-        session = {kind: 'html5', uids, active: true, x: 0, y: 0, x0: 0, y0: 0};
+        session = {kind: 'html5', source, uids, active: true, x: 0, y: 0, x0: 0, y0: 0};
         void openDock();
       } catch { /* 个别壳不让写 */ }
     }, true);
 
     doc.addEventListener('dragover', event => {
-      const node = event.target?.closest?.(TARGET);
+      const node = hit(event.clientX,event.clientY);
       if (!droppable(node)) return;
       const types = event.dataTransfer?.types;
       if (!types || !Array.from(types).includes(MIME)) return;
@@ -237,13 +247,15 @@ export function createBoardDrop({api, toast, selected = () => new Set(), onAdded
     doc.addEventListener('dragend', () => { dragCard = null; cleanup(); }, true);
 
     doc.addEventListener('drop', event => {
-      const node = event.target?.closest?.(TARGET);
+      const node = hit(event.clientX,event.clientY);
       if (!droppable(node)) return;
       const raw = event.dataTransfer?.getData(MIME) || '';
       if (!raw) return;
       event.preventDefault();
+      const source=session?.source;
       dragCard = null;
       cleanup();
+      if(node&&!idOf(node)&&cardDrop?.canDrop(source,node)){void cardDrop.drop(source,node);return;}
       void addToBoard(node, raw.split(',').filter(Boolean));
     }, true);
   }

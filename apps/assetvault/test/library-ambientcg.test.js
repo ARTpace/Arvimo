@@ -57,8 +57,8 @@ test('queue forces SBSAR for substances and keeps environment/model categories',
    const result=await manager.enqueue({authorized:true,kind:'ambientcg',models:[model],options:{resolution:'2K'}});
    const job=manager.jobs.find(j=>j.id===result.added[0]);assert.equal(job.sourceType,type);
    if(type==='substance')assert.equal(job.options.textureFormat,'SBSAR');
-   if(type==='hdri')assert.equal(job.storageCategory,'环境');
-   if(type==='3d-model')assert.match(job.storageCategory,/模型/);
+   if(type==='hdri')assert.equal(job.storageCategory,path.join('3D资产','HDRI'));
+   if(type==='3d-model')assert.equal(job.storageCategory,path.join('3D资产','3D模型'));
   }
  }finally{await manager?.close();await fs.rm(dir,{recursive:true,force:true});}
 });

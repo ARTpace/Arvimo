@@ -30,7 +30,7 @@ export const bindingIdentity = (binding: CommandKeybinding): string => [
   binding.mod ? 'mod' : '',
   binding.alt ? 'alt' : '',
   binding.shift ? 'shift' : '',
-  binding.key.trim().toLowerCase(),
+  binding.key===' '?'space':binding.key.trim().toLowerCase(),
 ].filter(Boolean).join('+');
 
 /** 注册表：所有声明了 shortcut 的命令，按 priority DESC → id ASC 定序（裁决顺序即列表顺序）。 */

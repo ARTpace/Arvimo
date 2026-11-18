@@ -1,0 +1,64 @@
+/* 图集卡片：拼贴、4/6/9 宫、调节柄
+ * 每段通过 app.css 的占位符在原位置展开；请保留 @section 标记。
+ * 有作用域说明的段落由 app.css 外层提供 @media/@supports 条件。
+ * 修改本段内规则，或在本段末尾追加覆盖规则即可。
+ */
+/* 默认作用域 */
+/* @section part-001 */
+.model-card.pkg-collection{border-color:var(--av-line,#2c4a66)}
+.model-card.pkg-collection:hover{border-color:#4a90d9;box-shadow:0 12px 24px #0002}/* @endsection */
+/* 默认作用域 */
+/* @section part-003 */
+.model-card.pkg-collection .card-media{position:relative;aspect-ratio:1;height:auto;background:var(--av-field,#0c1118);content-visibility:visible;contain-intrinsic-size:none}
+.pkg-collage{position:absolute;inset:0;display:grid;grid-template-columns:1fr 1fr;grid-template-rows:1fr 1fr;gap:2px;background:var(--av-field,#0c1118)}/* @endsection */
+/* 默认作用域 */
+/* @section part-005 */
+.pkg-c6 .pkg-collage{grid-template-columns:repeat(3,1fr);grid-template-rows:repeat(2,1fr)}
+.pkg-c9 .pkg-collage{grid-template-columns:repeat(3,1fr);grid-template-rows:repeat(3,1fr)}/* @endsection */
+/* 默认作用域 */
+/* @section part-007 */
+.gallery .model-card.pkg-collection.pkg-c6 .card-media{aspect-ratio:2/3}
+.gallery .pkg-c6 .pkg-collage{grid-template-columns:repeat(2,1fr);grid-template-rows:repeat(3,1fr)}
+.model-card.pkg-collection.pkg-c6 .card-media{aspect-ratio:2/3}
+.model-card.pkg-collection.pkg-c9 .card-media{aspect-ratio:1}
+.pkg-c9 .pkg-collage{grid-template-columns:repeat(3,1fr);grid-template-rows:repeat(3,1fr)}
+.model-card.pkg-collection{position:relative}
+.model-card.pkg-collection>.pkg-resize{position:absolute;inset:auto 3px 3px auto;width:28px;height:28px;padding:0;border:0;z-index:10;cursor:ns-resize;touch-action:none;border-radius:6px;background:var(--av-panel-solid,#101820b8);opacity:0;pointer-events:none;transition:opacity .15s}
+.model-card.pkg-collection:hover>.pkg-resize,.model-card.pkg-collection:focus-within>.pkg-resize,.model-card.pkg-collection>.pkg-resize.is-resizing{opacity:1;pointer-events:auto}
+.model-card.pkg-collection>.card-bottom{margin-right:30px}
+.pkg-resize::after{content:'';position:absolute;right:5px;bottom:5px;width:11px;height:11px;background:repeating-linear-gradient(135deg,transparent 0 3px,#d2decf 3px 4px,transparent 4px 6px);clip-path:polygon(100% 0,100% 100%,0 100%)}
+.pkg-resize:hover{opacity:1;background:var(--av-panel-raised,#26352c)}
+.pkg-collage{overflow:hidden}
+.model-card.pkg-collection.pkg-c6.pkg-wide .card-media{aspect-ratio:3/2}
+.pkg-c6.pkg-wide .pkg-collage{grid-template-columns:repeat(3,minmax(0,1fr));grid-template-rows:repeat(2,minmax(0,1fr))}
+.pkg-resize-shield{position:fixed;inset:0;z-index:20000;cursor:ns-resize;touch-action:none;background:transparent}
+.pkg-resizing,.pkg-resizing *{cursor:ns-resize!important;user-select:none!important}
+.pkg-resizing .model-card:not(:has(.is-resizing)){pointer-events:none}
+.pkg-collage-switch{display:flex;gap:2px;align-items:center;padding-left:7px;margin-left:3px;border-left:1px solid var(--av-line,#293441)}
+.pkg-collage-switch .icon-button{width:auto;min-width:27px;height:27px;padding:0 7px;font-size:10px;font-weight:600;letter-spacing:.3px}
+.pkg-tile{position:relative;overflow:hidden;background:var(--av-panel-raised,#1a222c)}
+.pkg-tile-img{display:block;width:100%;height:100%;object-fit:cover}
+.pkg-tile-plus{position:absolute;inset:0;display:grid;place-items:center;background:var(--av-panel-solid,#070c12a6);color:#dbeeff;font-size:15px;font-weight:600;letter-spacing:.5px;font-variant-numeric:tabular-nums}
+.pkg-count-badge{position:absolute;left:8px;top:8px;z-index:3;display:inline-flex;align-items:center;gap:4px;padding:4px 7px;border-radius:6px;background:var(--av-panel-solid,#0d1f33e6);border:1px solid #4a90d94d;color:#8fc4ff;font-size:9px;letter-spacing:.3px;pointer-events:none}
+.pkg-count-badge i{width:10px;height:10px}
+.pkg-count-badge i svg{stroke:#8fc4ff}/* @endsection */
+/* 默认作用域 */
+/* @section part-032 */
+.gallery .model-card.pkg-collection .card-media{aspect-ratio:1}/* @endsection */
+/* 默认作用域 */
+/* @section part-033 */
+.model-card.pkg-foot{display:block}
+.model-card.pkg-foot .card-media{aspect-ratio:1}/* @endsection */
+
+/* UI 自定义覆盖：新增样式优先写在这一段内。 */
+/* @section custom */
+.drag-collection-card{position:relative;overflow:hidden;border-radius:16px;cursor:pointer;border:1px solid #8595a239;background:var(--av-panel-solid,#171e23);transition:border-color .18s,box-shadow .18s}
+.drag-collection-mosaic{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));grid-template-rows:repeat(2,minmax(0,1fr));aspect-ratio:1;gap:3px;padding:3px}
+.drag-collection-mosaic>div{min-width:0;min-height:0;overflow:hidden;display:grid;place-items:center;background:#0002}
+.drag-collection-mosaic img{width:100%;height:100%;object-fit:cover}
+.drag-collection-caption{position:absolute;bottom:0;left:0;right:0;padding:24px 12px 10px;background:linear-gradient(transparent,var(--av-caption,#10171fed));display:flex;align-items:center;gap:8px;justify-content:space-between}
+.drag-collection-caption strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.drag-collection-caption span{font-size:11px;color:#b5c399;white-space:nowrap}
+.drag-collection-folder{border-top:5px solid #9c956655;border-radius:18px 18px 14px 14px}
+.card-group-drop{outline:2px solid var(--accent,#c9f581);outline-offset:3px;box-shadow:0 0 24px #c9f58125!important}
+.drag-group-nav{display:flex;align-items:center;gap:12px;padding:8px 0}.drag-group-nav[hidden]{display:none}.drag-group-nav input{min-width:100px;max-width:260px;background:transparent;border:0;color:inherit;font:inherit}.drag-group-nav button{display:inline-flex;gap:6px;align-items:center;background:transparent;border:0;color:#a6b0bd;cursor:pointer}.drag-group-nav button:hover{color:var(--accent,#c9f581)}
+/* @endsection */

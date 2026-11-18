@@ -1,3 +1,4 @@
+import {assembleLibraryStyles} from '../scripts/lib/library-styles.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -66,7 +67,7 @@ test('收藏链路真的通：findModel 兜底、toggleFavorite 尊重 skipColle
 });
 
 test('选择方块只是隐藏，DOM / data-select 契约留给框选与 Shift 连选',()=>{
- const css=read('src/library/app.css');
+ const css=assembleLibraryStyles();
  const cardView=read('src/library/card-view.js');
  assert.match(css,/\.card-media>\.card-select\{display:none!important\}/);
  assert.ok(cardView.includes('class="card-select"')&&cardView.includes('data-select="${m.uid}"'),

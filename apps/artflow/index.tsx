@@ -25,6 +25,7 @@ import { createExtensionHost } from './plugin-runtime/extension-host';
 import { EXTENSION_RUNTIME_SERVICE } from './plugin-runtime/extension-service';
 import { bootstrapSkinEngine, createSkinEngine, SKIN_ENGINE_SERVICE } from './plugin-runtime/skin-engine';
 import { createHostPlatformService, HOST_PLATFORM_SERVICE } from './plugin-runtime/host-platform';
+import { askConfirm } from './components/AskDialog';
 import { MCP_EXPORT_REGISTRY } from './plugin-runtime/mcp-exports';
 import { listLocaleContributions } from './plugin-runtime/locale-contributions';
 import { setLocalePatches } from './utils/language-store';
@@ -159,7 +160,7 @@ const mcpBridge = window.artflowMcp;
 kernel.provide(HOST_PLATFORM_SERVICE, createHostPlatformService({
   ...window.artflowStorage,
   ...window.artflowApp,
-  confirm: message => window.confirm(message),
+  confirm: message => askConfirm({title: '请确认', message: String(message)}),
   setMcpEnabled: mcpBridge ? enabled => mcpBridge.setEnabled(enabled) : undefined,
   getMcpStatus: mcpBridge ? () => mcpBridge.getStatus() : undefined,
   createMcpCredential: mcpBridge ? request => mcpBridge.createCredential(request) : undefined,

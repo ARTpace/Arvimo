@@ -20,6 +20,27 @@ process.env.ASSETVAULT_THUMB_DIR = cacheDir;
 const sharp = (await import('sharp')).default;
 const { thumbFor, SHARP_EXT, FFMPEG_EXT } = await import('../server/thumb-cache.mjs');
 
+test('注册表所有图片与环境格式均有缩略图入口',async()=>{
+ const {FORMATS}=await import('../src/library/format-registry.js');
+ const {canThumb}=await import('../server/thumb-cache.mjs');
+ for(const item of Object.values(FORMATS).filter(item=>['image','env'].includes(item.kind)))assert.ok(canThumb('asset.'+item.ext),item.ext);
+});
+
+test('SVG与ICO实际生成PNG缩略图',async()=>{
+ const svg=path.join(cacheDir,'cover.svg');
+ await fsp.writeFile(svg,'<svg xmlns="http://www.w3.org/2000/svg" width="64" height="48"><rect width="64" height="48" fill="red"/></svg>');
+ const png=await sharp(svg).png().toBuffer();
+ const header=Buffer.alloc(22);header.writeUInt16LE(1,2);header.writeUInt16LE(1,4);header[6]=64;header[7]=48;header.writeUInt16LE(1,10);header.writeUInt16LE(32,12);header.writeUInt32LE(png.length,14);header.writeUInt32LE(22,18);
+ const ico=path.join(cacheDir,'cover.ico');await fsp.writeFile(ico,Buffer.concat([header,png]));
+ for(const file of [svg,ico]){const out=await thumbFor(file,{width:32});const size=pngSize(out.buffer);assert.ok(size.width<=32&&size.height<=32);}
+});
+
+test('BMP在原生解码不支持时仍能转成PNG和WebP',async()=>{
+ const data=Buffer.alloc(70);data.write('BM');data.writeUInt32LE(70,2);data.writeUInt32LE(54,10);data.writeUInt32LE(40,14);data.writeInt32LE(2,18);data.writeInt32LE(2,22);data.writeUInt16LE(1,26);data.writeUInt16LE(24,28);data.writeUInt32LE(16,34);data.fill(128,54);
+ const file=path.join(cacheDir,'cover.bmp');await fsp.writeFile(file,data);
+ for(const format of ['png','webp']){const out=await thumbFor(file,{width:32,format});assert.equal(out.mime,'image/'+format);assert.ok(out.buffer.length>0);}
+});
+
 function pngSize(buffer) {
   assert.equal(buffer.subarray(0, 8).toString('hex'), '89504e470d0a1a0a', 'PNG 签名');
   return { width: buffer.readUInt32BE(16), height: buffer.readUInt32BE(20) };
@@ -61,7 +82,7 @@ test('webp / tiff 同样走 sharp 产出缩略图', async () => {
   }
 });
 
-test('SHARP_EXT 分支只调 sharpThumb，sharp 不可用才回落 ffmpeg（防止 jpg 被指回 ffmpeg）', () => {
+test('SHARP_EXT 优先原生解码，失败再回落 ffmpeg', () => {
   const src = fs.readFileSync(new URL('../server/thumb-cache.mjs', import.meta.url), 'utf8');
   const start = src.indexOf('} else if (SHARP_EXT.test(name))');
   assert.ok(start >= 0, '应存在 SHARP_EXT 分支');
@@ -75,7 +96,6 @@ test('SHARP_EXT 分支只调 sharpThumb，sharp 不可用才回落 ffmpeg（防�
   assert.doesNotMatch(tryBlock, /ffmpegThumb\(/, 'SHARP_EXT 主路径不能调 ffmpegThumb');
 
   const catchBlock = sharpBlock.slice(sharpBlock.indexOf('catch'));
-  assert.match(catchBlock, /SHARP_UNAVAILABLE/, 'sharp 不可用时才回落 ffmpeg');
   assert.match(catchBlock, /ffmpegThumb\(/, 'sharp 不可用时回落 ffmpeg');
 });
 

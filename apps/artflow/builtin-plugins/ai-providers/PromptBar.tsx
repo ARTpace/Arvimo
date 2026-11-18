@@ -2,6 +2,7 @@
 import React from 'react';
 import { QuickPrompts } from './QuickPrompts';
 import type { UserEffect, GenerationMode, ImageAspectRatio, Hotkey } from '../../types';
+import { askPrompt } from '../../components/AskDialog';
 
 interface PromptBarProps {
     t: (key: string, ...args: any[]) => string;
@@ -129,8 +130,12 @@ export const PromptBar: React.FC<PromptBarProps> = ({
         }
     };
 
-    const handleSaveEffect = () => {
-        const name = window.prompt(t('myEffects.saveEffectPrompt'), t('myEffects.defaultName'));
+    const handleSaveEffect = async () => {
+        const name = await askPrompt({
+            title: t('myEffects.saveEffectPrompt'),
+            value: t('myEffects.defaultName'),
+            maxLength: 40,
+        });
         if (name && prompt.trim()) {
             onAddUserEffect({ id: `user_${Date.now()}`, name, value: prompt });
         }

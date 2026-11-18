@@ -6,6 +6,7 @@ import {
   type PluginProfileManagerSnapshot,
 } from '../../plugin-runtime/plugin-profile-manager';
 import type { SettingsSectionProps, SettingsSectionContribution } from '../../plugin-runtime/settings-contributions';
+import { askConfirm } from '../../components/AskDialog';
 import type { PluginPanelContribution, PluginPanelProps } from '../../plugin-runtime/panel-contributions';
 import { useLanguage } from '../../utils/language-store';
 import { HOST_PLATFORM_SERVICE, type HostPlatformService } from '../../plugin-runtime/host-platform';
@@ -237,7 +238,8 @@ const budgetLabel = (budget: { maxActiveInstances?: number; maxConcurrentJobs?: 
   return values.join(' · ') || (language === 'zho' ? '未声明' : 'Not declared');
 };
 
-const PluginManagerSettingsSection: React.FC<SettingsSectionProps> = ({ kernel, language }) => {
+/** flat：设置页已由外壳给出页面标题与说明，内容区不再自带头，也不铺列表外框。 */
+const PluginManagerSettingsSection: React.FC<SettingsSectionProps & { flat?: boolean }> = ({ kernel, language, flat = false }) => {
   const manager = kernel.use(PLUGIN_PROFILE_MANAGER_SERVICE) as PluginProfileManager;
   const hostPlatform = kernel.use(HOST_PLATFORM_SERVICE) as HostPlatformService;
   const packageService = kernel.has(EXTENSION_RUNTIME_SERVICE)
@@ -344,7 +346,7 @@ const PluginManagerSettingsSection: React.FC<SettingsSectionProps> = ({ kernel, 
 
   const uninstallExternal = async (id: string) => {
     if (typeof hostPlatform.uninstallExternalPlugin !== 'function') return;
-    if (!window.confirm(copy.uninstallConfirm(id))) return;
+    if (!await askConfirm({title: copy.uninstall, message: copy.uninstallConfirm(id), confirmText: copy.uninstall, cancelText: '取消', danger: true})) return;
     try {
       const result = await hostPlatform.uninstallExternalPlugin(id);
       if (!result.ok) {
@@ -433,9 +435,9 @@ const PluginManagerSettingsSection: React.FC<SettingsSectionProps> = ({ kernel, 
     return plugin ? displayName(plugin) : id;
   };
 
-  const applyEnabled = (id: string, enabled: boolean) => {
+  const applyEnabled = async (id: string, enabled: boolean) => {
     const dependentIds = enabled ? [] : manager.getDisableDependents(id);
-    if (dependentIds.length > 0 && !hostPlatform.confirm(copy.disableConfirm(
+    if (dependentIds.length > 0 && !await hostPlatform.confirm(copy.disableConfirm(
       pluginName(id), dependentIds.map(pluginName).join('、'),
     ))) return;
     const result = manager.setPluginEnabled(id, enabled,
@@ -487,14 +489,14 @@ const PluginManagerSettingsSection: React.FC<SettingsSectionProps> = ({ kernel, 
       {/* 单行工具栏：标题·来源切换·搜索·状态·安装动作全部压缩在同一行（窄屏才 flex-wrap 换行） */}
       <div data-bp-plugin-toolbar="" className="flex flex-wrap items-center gap-1.5">
         <div className="flex shrink-0 items-center gap-1">
-          <h2 className="text-[13px] font-semibold leading-7 text-neutral-100">{copy.heading}</h2>
+          {!flat && <h2 className="text-[13px] font-semibold leading-7 text-neutral-100">{copy.heading}</h2>}
           <HoverInfoButton label={copy.help} lines={[copy.intro, summaryText,
             ...(source === 'external' ? [copy.installHint] : []),
             ...(source === 'external' ? [copy.packageLive] : []),
             ...(lastSuccess ? [`${copy.lastAction}：${lastSuccess}`] : [])]} />
         </div>
         <select aria-label={copy.sourceFilter} value={source} onChange={event => { setSource(event.target.value as Exclude<CatalogSourceFilter, 'all'>); setActiveDetails(null); }}
-          className="h-7 shrink-0 rounded-lg border border-white/10 bg-[var(--bp-ui-surface-strong)] px-1.5 text-[11px] text-neutral-100 focus:border-sky-300/40 focus:outline-none">
+          className="h-7 shrink-0 rounded-lg border-0 bg-white/[0.06] px-1.5 text-[11px] text-neutral-100 hover:bg-white/[0.09] focus:outline-none focus:ring-1 focus:ring-sky-300/40">
           {/* 只分两档：内置（编译进本体）/ 外部（可编辑包 + 声明式包 + JSON 扩展包）。 */}
           <option value="builtin">{copy.builtinTab} · {sourceCount('builtin')}</option>
           <option value="external">{copy.externalTab} · {sourceCount('external')}</option>
@@ -506,11 +508,11 @@ const PluginManagerSettingsSection: React.FC<SettingsSectionProps> = ({ kernel, 
           </svg>
           <input type="search" value={query} onChange={event => { setQuery(event.target.value); setActiveDetails(null); }}
             placeholder={copy.search} aria-label={copy.search}
-            className="h-7 w-full rounded-lg border border-white/10 bg-white/[0.05] py-0 pl-7 pr-2 text-[11px] text-neutral-100 placeholder:text-neutral-500 focus:border-sky-300/40 focus:outline-none" />
+            className="h-7 w-full rounded-lg border-0 bg-white/[0.06] py-0 pl-7 pr-2 text-[11px] text-neutral-100 placeholder:text-neutral-500 hover:bg-white/[0.09] focus:bg-white/[0.09] focus:outline-none focus:ring-1 focus:ring-sky-300/40" />
         </div>
         <select value={statusFilter} onChange={event => { setStatusFilter(event.target.value as CatalogStatusFilter); setActiveDetails(null); }}
           aria-label={copy.statusFilter}
-          className="h-7 shrink-0 rounded-lg border border-white/10 bg-[var(--bp-ui-surface-strong)] px-1.5 text-[11px] text-neutral-100 focus:border-sky-300/40 focus:outline-none">
+          className="h-7 shrink-0 rounded-lg border-0 bg-white/[0.06] px-1.5 text-[11px] text-neutral-100 hover:bg-white/[0.09] focus:outline-none focus:ring-1 focus:ring-sky-300/40">
           <option value="all">{copy.allStatuses}</option>
           <option value="enabled">{copy.enabled}</option>
           <option value="disabled">{copy.disabled}</option>
@@ -518,9 +520,9 @@ const PluginManagerSettingsSection: React.FC<SettingsSectionProps> = ({ kernel, 
         </select>
         {source === 'builtin' && !advancedForced && (
           <button type="button" onClick={() => setShowAdvanced(value => !value)} aria-expanded={showAdvanced} title={copy.advancedHint}
-            className={`flex h-7 shrink-0 items-center gap-1 rounded-lg border px-1.5 text-[11px] ${showAdvanced
-              ? 'border-sky-300/30 bg-sky-400/10 text-sky-100 hover:bg-sky-400/15'
-              : 'border-white/10 bg-white/[0.05] text-neutral-400 hover:bg-white/10 hover:text-neutral-100'}`}>
+            className={`flex h-7 shrink-0 items-center gap-1 rounded-lg border-0 px-1.5 text-[11px] ${showAdvanced
+              ? 'bg-sky-400/[0.12] text-sky-100 hover:bg-sky-400/[0.18]'
+              : 'bg-white/[0.06] text-neutral-400 hover:bg-white/[0.09] hover:text-neutral-100'}`}>
             <svg viewBox="0 0 16 16" aria-hidden className="h-3 w-3"><path d="M2.5 4.5h11M2.5 8h11M2.5 11.5h11" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" /><circle cx="5.5" cy="4.5" r="1.5" fill="currentColor" stroke="none" /><circle cx="10" cy="8" r="1.5" fill="currentColor" stroke="none" /><circle cx="6.8" cy="11.5" r="1.5" fill="currentColor" stroke="none" /></svg>
             <span className="whitespace-nowrap">{copy.advancedToggle}</span>
             <span className="text-[10px] opacity-70">{advancedPlugins.length}</span>
@@ -534,12 +536,12 @@ const PluginManagerSettingsSection: React.FC<SettingsSectionProps> = ({ kernel, 
         )}
         <div className="relative flex shrink-0 items-center">
           <button type="button" onClick={() => { void installExternal(); }}
-            className="flex h-7 items-center gap-1 rounded-l-lg border border-r-0 border-white/10 bg-white/[0.07] px-2 text-[11px] text-neutral-100 hover:bg-white/10">
+            className="flex h-7 items-center gap-1 rounded-l-lg border-0 bg-white/[0.07] px-2 text-[11px] text-neutral-100 hover:bg-white/[0.11]">
             <svg viewBox="0 0 16 16" aria-hidden className="h-3.5 w-3.5"><path d="M8 2.8v7M4.8 6.6 8 9.8l3.2-3.2M2.8 12.8h10.4" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" /></svg>
             <span className="whitespace-nowrap">{copy.install}</span>
           </button>
           <button type="button" aria-haspopup="menu" aria-expanded={menuOpen} aria-label={copy.more} onClick={() => setMenuOpen(value => !value)}
-            className="flex h-7 items-center rounded-r-lg border border-white/10 bg-white/[0.07] px-1.5 text-neutral-300 hover:bg-white/10 hover:text-neutral-100">
+            className="flex h-7 items-center rounded-r-lg border-0 bg-white/[0.07] px-1.5 text-neutral-300 hover:bg-white/[0.11] hover:text-neutral-100">
             <svg viewBox="0 0 16 16" aria-hidden className="h-3 w-3"><path d="M4 6.5 8 10.5l4-4" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" /></svg>
           </button>
           {menuOpen && <>
@@ -581,7 +583,7 @@ const PluginManagerSettingsSection: React.FC<SettingsSectionProps> = ({ kernel, 
         </p>
       )}
       {notice && (
-        <p role="status" className="rounded-lg border border-white/10 bg-white/[0.045] px-2.5 py-1 text-[11px] leading-4 text-neutral-200">
+        <p role="status" className="rounded-lg border-0 bg-white/[0.05] px-2.5 py-1 text-[11px] leading-4 text-neutral-200">
           {notice}
         </p>
       )}
@@ -619,7 +621,7 @@ const PluginManagerSettingsSection: React.FC<SettingsSectionProps> = ({ kernel, 
       )}
       {source === 'external' && (
         <section aria-label={copy.externalTab} className="space-y-1">
-          {visibleExternal.length > 0 && <ul className="overflow-hidden rounded-lg border border-white/[0.08]">
+          {visibleExternal.length > 0 && <ul className="overflow-hidden rounded-lg">
           {visibleExternal.map(plugin => {
             const pending = !disabledIds.includes(plugin.id);
             const active = !appliedDisabled.includes(plugin.id);
@@ -687,7 +689,7 @@ const PluginManagerSettingsSection: React.FC<SettingsSectionProps> = ({ kernel, 
       )}
       {(source === 'builtin' || source === 'external') && visiblePlugins.length > 0 && (
         <section aria-label={isEditableTab ? copy.editableGroup : copy.builtinGroup}>
-          <ul className="overflow-hidden rounded-lg border border-white/[0.08]">
+          <ul className="overflow-hidden rounded-lg">
             {builtinGroups
               .filter(group => group.category !== '__advanced__' || showAdvanced || advancedForced)
               .flatMap(({ plugins }) => plugins.map(plugin => {
@@ -898,7 +900,7 @@ export function activatePluginManager(ctx: Kernel): Effect {
         priority: 20,
         value: {
           label: language => copyFor(language).label,
-          component: PluginManagerSettingsSection,
+          component: props => <PluginManagerSettingsSection {...props} flat />,
           navGroup: 'extensions',
         },
       }),

@@ -74,6 +74,7 @@ export function groupImageSequences(files){
    frames,
    count:frames.length,
    bytes:frames.reduce((sum,frame)=>sum+(Number(frame.bytes)||0),0),
+   addedAt:frames.reduce((max,frame)=>Math.max(max,Number(frame.addedAt||frame.mtime)||0),0),
    mtime:frames.reduce((max,frame)=>Math.max(max,Number(frame.mtime)||0),0),
    // 首帧当封面：缩略图接口按 rel 取，不需要额外字段。
    cover:first,

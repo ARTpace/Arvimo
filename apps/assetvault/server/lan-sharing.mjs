@@ -189,7 +189,7 @@ export function createLanSharing({file,interfaces=()=>os.networkInterfaces(),now
   }
   // A shared session can use AI without reading the host's saved API secret.
   if(pathname==='/api/ai/key')return reply(res,403,{error:'仅主机本地可以查看 API 密钥'});
-  const hostSettings=['/api/ai/settings','/api/ai/test','/api/downloads/settings','/api/downloads/pick-folder','/api/downloads/browse-folders','/api/downloads/reveal'];
+  const hostSettings=['/api/ai/settings','/api/ai/test','/api/ai/models','/api/ai/probe','/api/ai/probe-models','/api/downloads/settings','/api/downloads/pick-folder','/api/downloads/browse-folders','/api/downloads/reveal'];
   if(hostSettings.includes(pathname)||/^\/api\/(setup|browser)(\/|$)/.test(pathname)||/^\/api\/downloads\/blender-bridge(\/|$)/.test(pathname)||/^\/api\/downloads\/tasks\/[^/]+\/reveal$/.test(pathname))return reply(res,403,{error:'局域网访客不能访问或修改主机设置'});
   if(pathname==='/api/lan/logout'&&req.method==='POST'){
    sessions.delete(token);res.writeHead(303,{'Location':'/','Set-Cookie':'assetvault_lan=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0'});res.end();return true;

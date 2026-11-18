@@ -11,25 +11,16 @@ import { UiThemeControls } from './UiThemeControls';
 import { BoardBackgroundControls } from './BoardBackgroundControls';
 import { WallpaperControls } from './WallpaperControls';
 import { Panel } from './Panel';
-import { BpIcon } from '../../components/BpIcon';
 import { themeWallpaperStore, type WallpaperEntry } from '../../plugin-runtime/theme-wallpaper';
 import { resolveUiChrome, systemUiMode, type UiThemeMode, type UiThemeSettings } from '../../plugin-runtime/ui-theme-settings';
 import {
-  groupThemeFamilies, isSameAppearance, readFavorites, readThemeMixes,
-  restoreAppearance, saveFavorites, saveThemeMixes, snapshotAppearance,
+  groupThemeFamilies, readFavorites, readThemeMixes,
+  saveFavorites, saveThemeMixes, snapshotAppearance,
   type AppearanceSnapshot, type ThemeFamily,
 } from './theme-studio-model';
 
-type Section = 'gallery' | 'controls' | 'wallpaper' | 'mix' | 'mine';
-type Filter = 'all' | 'dark' | 'light' | 'styled';
-type UndoApplication = {
-  before: AppearanceSnapshot;
-  after: AppearanceSnapshot;
-  configBefore: Record<string, Record<string, unknown>>;
-  configAfter: Record<string, Record<string, unknown>>;
-  importedWallpapers: string[];
-};
-const recentApplications = new WeakMap<SkinEngine, UndoApplication>();
+type Section = 'gallery' | 'controls' | 'mix';
+type Filter = 'all' | 'dark' | 'light' | 'styled' | 'favorites';
 const PARTS: SkinCompositePart[] = ['card', 'chrome', 'canvas', 'typography', 'icons'];
 const PART_LABELS: Record<SkinCompositePart, [string, string]> = {
   card: ['卡片', 'Cards'], chrome: ['外壳', 'Chrome'], canvas: ['画布', 'Canvas'],
@@ -97,39 +88,17 @@ export const ThemeStudio: React.FC<PluginPanelProps> = ({ kernel, chromeless = f
   const [part, setPart] = useState<SkinCompositePart>('card');
   const [keepCss, setKeepCss] = useState(false);
   const [mixName, setMixName] = useState(text(zh, '我的混搭', 'My mix'));
-  const [undo, setUndo] = useState<UndoApplication | null>(() => recentApplications.get(engine) ?? null);
   const [config, setConfig] = useState<Record<string, unknown>>({});
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [uiSettings, setUiSettings] = useState<UiThemeSettings>(() => engine.getUiSettings());
   const sessionRef = useRef<SkinLivePreview | null>(null);
   const configBeforeRef = useRef<Map<string, Record<string, unknown>>>(new Map());
   const stagedWallpaperIdsRef = useRef<string[]>([]);
-  const applyingRef = useRef(false);
-  const [applying, setApplying] = useState(false);
-  const [applyError, setApplyError] = useState('');
 
   const selected = skins.find(skin => skin.id === selectedId) ?? skins[0];
   const selectedFamily = families.find(family => family.variants.some(skin => skin.id === selected?.id));
   const draft = skins.find(skin => skin.id === baseId) ? selectionFrom(baseId, overrides) : null;
-  const currentFamily = families.find(family => family.variants.some(skin => skin.id === (applied.cssSkinId ?? applied.composite?.baseSkinId ?? applied.skinId)));
   const configSkin = section === 'gallery' && selected?.customization ? selected : null;
-  // An applied System-mode pair may flip from dark to light after Apply. That is
-  // still the same user choice, so the recent Undo remains available.
-  const sameApplied = (actual: AppearanceSnapshot, recorded: AppearanceSnapshot): boolean => {
-    if (isSameAppearance(actual, recorded)) return true;
-    if (actual.uiSettings.mode !== 'system' || recorded.uiSettings.mode !== 'system'
-      || actual.composite || recorded.composite
-      || JSON.stringify(actual.uiSettings) !== JSON.stringify(recorded.uiSettings)) return false;
-    const family = (id: string | null) => skins.find(skin => skin.id === id)?.gallery?.family;
-    const tokenMatches = actual.skinId === recorded.skinId ||
-      (!!family(actual.skinId) && family(actual.skinId) === family(recorded.skinId));
-    const cssMatches = actual.cssSkinId === recorded.cssSkinId ||
-      (!!actual.cssSkinId && !!recorded.cssSkinId && !!family(actual.cssSkinId)
-        && family(actual.cssSkinId) === family(recorded.cssSkinId));
-    return tokenMatches && cssMatches;
-  };
-  const canUndo = !!undo && sameApplied(applied, undo.after);
-
   useEffect(() => {
     sessionRef.current = engine.startLivePreview();
     const sync = () => {
@@ -165,7 +134,15 @@ export const ThemeStudio: React.FC<PluginPanelProps> = ({ kernel, chromeless = f
     if (!sessionRef.current?.isActive()) sessionRef.current = engine.startLivePreview();
     return sessionRef.current;
   };
-  const syncDraft = () => { setEffective(snapshotAppearance(engine)); setDirty(session().isDirty()); };
+  // Controls take effect immediately; commit the same engine transaction so reopening retains them.
+  const syncDraft = () => {
+    const active = session();
+    if (active.isDirty()) active.commit();
+    configBeforeRef.current.clear();
+    const current = snapshotAppearance(engine);
+    setApplied(current); setEffective(current); setDirty(false);
+    sessionRef.current = engine.startLivePreview();
+  };
   const showSkin = (id: string, explicitMode = false) => {
     const choice = skins.find(skin => skin.id === id);
     if (!choice) return;
@@ -204,7 +181,12 @@ export const ThemeStudio: React.FC<PluginPanelProps> = ({ kernel, chromeless = f
   const stageWallpaper = async (file: File): Promise<WallpaperEntry> => {
     const entry = await themeWallpaperStore.stage(file);
     if (!sessionRef.current?.isActive()) { themeWallpaperStore.forgetDraft(entry.id); throw new Error('Preview closed'); }
-    stagedWallpaperIdsRef.current.push(entry.id);
+    try { await themeWallpaperStore.commitDrafts([entry.id]); }
+    catch (error) { themeWallpaperStore.forgetDraft(entry.id); throw error; }
+    if (!sessionRef.current?.isActive()) {
+      await themeWallpaperStore.removeCommitted([entry.id]);
+      throw new Error('Theme panel closed');
+    }
     const settings = engine.getUiSettings();
     const paired = settings.wallpaperAuto === 'system' || settings.wallpaperAuto === 'both';
     const key = resolveUiChrome(engine.currentTokens(), settings).mode === 'light' ? 'wallpaperLightId' : 'wallpaperDarkId';
@@ -220,80 +202,6 @@ export const ThemeStudio: React.FC<PluginPanelProps> = ({ kernel, chromeless = f
     }
     if (Object.keys(patch).length) previewUiSettings(patch);
     themeWallpaperStore.forgetDraft(id);
-  };
-  const resetDraft = () => {
-    if (applyingRef.current) return;
-    sessionRef.current?.cancel();
-    for (const id of stagedWallpaperIdsRef.current) themeWallpaperStore.forgetDraft(id);
-    stagedWallpaperIdsRef.current = [];
-    setApplyError('');
-    configBeforeRef.current.clear();
-    sessionRef.current = engine.startLivePreview();
-    const current = snapshotAppearance(engine);
-    setApplied(current); setEffective(current); setDirty(false);
-    setSelectedId(current.cssSkinId ?? current.composite?.baseSkinId ?? current.skinId);
-    setBaseId(current.composite?.baseSkinId ?? current.skinId);
-    setOverrides({ ...current.composite?.overrides });
-    setKeepCss(false);
-    setUiSettings(engine.getUiSettings());
-  };
-  const applyDraft = async () => {
-    const active = sessionRef.current;
-    if (applyingRef.current || !active?.isActive() || !active.isDirty()) return;
-    applyingRef.current = true; setApplying(true); setApplyError('');
-    const before = applied;
-    const beforeConfigs = Object.fromEntries(configBeforeRef.current);
-    const importedWallpapers = [...stagedWallpaperIdsRef.current];
-    let saved = false;
-    try {
-      await themeWallpaperStore.commitDrafts(importedWallpapers);
-      saved = importedWallpapers.length > 0;
-      if (!active.isActive() || !active.commit()) {
-        if (saved) await themeWallpaperStore.removeCommitted(importedWallpapers);
-        return;
-      }
-      stagedWallpaperIdsRef.current = [];
-      const after = snapshotAppearance(engine);
-      const afterConfigs = Object.fromEntries([...configBeforeRef.current.keys()].map(id => [id, engine.getSkinConfig(id)]));
-      const changedConfigs = Object.keys(beforeConfigs).some(id => JSON.stringify(beforeConfigs[id]) !== JSON.stringify(afterConfigs[id]));
-      const record = !isSameAppearance(before, after) || changedConfigs || saved ? {
-        before, after, configBefore: beforeConfigs, configAfter: afterConfigs, importedWallpapers,
-      } : null;
-      if (record) recentApplications.set(engine, record);
-      else recentApplications.delete(engine);
-      setUndo(record);
-      configBeforeRef.current.clear();
-      setApplied(after); setEffective(after); setDirty(false);
-      sessionRef.current = engine.startLivePreview();
-    } catch (error) {
-      if (saved) await themeWallpaperStore.removeCommitted(importedWallpapers).catch(() => {});
-      setApplyError(text(zh, `壁纸保存失败，外观未应用：${(error as Error).message}`, `Wallpaper storage failed; appearance not applied: ${(error as Error).message}`));
-    } finally { applyingRef.current = false; setApplying(false); }
-  };
-  const undoApply = () => {
-    if (!undo || applyingRef.current) return;
-    sessionRef.current?.cancel();
-    for (const id of stagedWallpaperIdsRef.current) themeWallpaperStore.forgetDraft(id);
-    stagedWallpaperIdsRef.current = [];
-    if (sameApplied(snapshotAppearance(engine), undo.after)) {
-      void themeWallpaperStore.removeCommitted(undo.importedWallpapers ?? []).catch(error => console.warn('[wallpapers] undo cleanup failed:', error));
-      restoreAppearance(engine, undo.before);
-      for (const id of Object.keys(undo.configBefore)) {
-        if (JSON.stringify(engine.getSkinConfig(id)) === JSON.stringify(undo.configAfter[id])) {
-          engine.setSkinConfig(id, undo.configBefore[id]);
-        }
-      }
-    }
-    recentApplications.delete(engine);
-    setUndo(null);
-    configBeforeRef.current.clear();
-    const current = snapshotAppearance(engine);
-    setApplied(current); setEffective(current); setDirty(false);
-    setSelectedId(current.cssSkinId ?? current.composite?.baseSkinId ?? current.skinId);
-    setBaseId(current.composite?.baseSkinId ?? current.skinId);
-    setOverrides({ ...current.composite?.overrides });
-    setUiSettings(engine.getUiSettings());
-    sessionRef.current = engine.startLivePreview();
   };
   const previewConfig = (id: string, patch: Record<string, unknown>) => {
     if (!configBeforeRef.current.has(id)) configBeforeRef.current.set(id, engine.getSkinConfig(id));
@@ -318,7 +226,7 @@ export const ThemeStudio: React.FC<PluginPanelProps> = ({ kernel, chromeless = f
     const name = mixName.trim().slice(0, 32) || text(zh, '我的混搭', 'My mix');
     const next = [{ id: `mix-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, name, selection: draft }, ...savedMixes];
     setSavedMixes(next); saveThemeMixes(next);
-    setSection('mine');
+    setSection('mix');
   };
   const loadMix = (selection: SkinCompositeSelection) => {
     setBaseId(selection.baseSkinId); setOverrides({ ...selection.overrides }); setSection('mix');
@@ -326,6 +234,7 @@ export const ThemeStudio: React.FC<PluginPanelProps> = ({ kernel, chromeless = f
   };
   const modeName = (mode: 'dark' | 'light') => mode === 'dark' ? text(zh, '深色', 'Dark') : text(zh, '浅色', 'Light');
   const filtered = families.filter(family => {
+    if (filter === 'favorites' && !favorites.includes(family.id)) return false;
     if (filter === 'styled' && !family.variants.some(skin => engine.hasCssSkin(skin.id))) return false;
     if ((filter === 'dark' || filter === 'light') && !family.variants.some(skin => skin.mode === filter)) return false;
     const query = [family.name, family.nameEn, ...family.variants.flatMap(skin => [skin.name, ...(skin.tags ?? [])])].join(' ').toLowerCase();
@@ -334,31 +243,16 @@ export const ThemeStudio: React.FC<PluginPanelProps> = ({ kernel, chromeless = f
 
   return (
     <div data-bp-theme-studio="" data-bp-ui-themed="" data-bp-preview-state={dirty ? 'draft' : 'applied'} className={`flex min-h-0 flex-col h-[min(38rem,calc(100dvh-10rem))] ${chromeless ? 'flex-1' : 'text-slate-100'}`}>
-      {!chromeless && <div className="mb-3 flex shrink-0 items-center justify-between gap-3 border-b border-white/10 pb-3">
-        <div className="flex items-center gap-2.5">
-          {/* M6：主题化应用 Logo（皮肤声明 tokens.icons.appLogo；缺省回退到内置标记）。 */}
-          <BpIcon name="appLogo" size={26} className="shrink-0 opacity-90" fallback={<span className="text-sm font-semibold tracking-[0.2em] text-slate-200">AR</span>} />
-        <div>
-          <p className="text-[10px] font-medium tracking-[0.14em] text-slate-400">{text(zh, '外观设置 / APPEARANCE', 'WORKSPACE / APPEARANCE')}</p>
-          <p className="mt-0.5 text-xs text-slate-300">{text(zh, '边选边看，真实工具面板即时更新', 'See the real tools change as you explore')}</p>
-        </div>
-        </div>
-        <span className={`flex shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] ${dirty ? 'border-white/25 text-slate-100' : 'border-white/10 text-slate-400'}`}>
-          <span className={`h-1.5 w-1.5 rounded-full ${dirty ? 'bg-cyan-500' : 'bg-slate-500'}`} />
-          {dirty ? text(zh, '试用中', 'Previewing') : text(zh, '已同步', 'Applied')}
-        </span>
-      </div>}
       <nav aria-label={text(zh, '外观分类', 'Appearance sections')} className="mb-3 flex shrink-0 gap-1 overflow-x-auto rounded-lg bg-white/[0.045] p-1">
-        {([['gallery', '主题', 'Themes'], ['controls', '界面调节', 'Interface'], ['wallpaper', '背景与壁纸', 'Background'], ['mix', '高级混搭', 'Mix'], ['mine', '收藏与配方', 'Saved']] as const).map(([key, cn, en]) => (
+        {([['gallery', '主题', 'Themes'], ['controls', '外观', 'Appearance'], ['mix', '混搭', 'Mix']] as const).map(([key, cn, en]) => (
           <button key={key} type="button" aria-current={section === key ? 'page' : undefined} onClick={() => selectSection(key)}
             className={`min-w-max flex-1 whitespace-nowrap rounded-md px-2 py-2 text-[11px] font-medium transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-slate-100 ${section === key ? 'bg-white/15 text-slate-50' : 'text-slate-400 hover:bg-white/[0.08] hover:text-slate-200'}`}>{text(zh, cn, en)}</button>
         ))}
       </nav>
 
       <div ref={scrollRef} data-bp-theme-scroll="" className="min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain pr-1.5 [scrollbar-width:thin] [scrollbar-color:#555_transparent]">
-        {section === 'controls' && <UiThemeControls zh={zh} settings={uiSettings}
-          tokens={engine.currentTokens()} onChange={previewUiSettings} onMode={previewMode} />}
-        {section === 'wallpaper' && <><BoardBackgroundControls kernel={kernel} language={zh ? 'zho' : 'en'} /><WallpaperControls zh={zh} kernel={kernel} engine={engine} settings={uiSettings}
+        {section === 'controls' && <><UiThemeControls zh={zh} settings={uiSettings}
+          tokens={engine.currentTokens()} onChange={previewUiSettings} onMode={previewMode} /><UiThemeControls zh={zh} workspaceOnly settings={uiSettings} tokens={engine.currentTokens()} onChange={previewUiSettings} onMode={previewMode} /><BoardBackgroundControls kernel={kernel} language={zh ? 'zho' : 'en'} /><WallpaperControls zh={zh} kernel={kernel} engine={engine} settings={uiSettings}
           onChange={previewUiSettings} onStage={stageWallpaper} onForget={forgetWallpaper} /></>}
         {section === 'gallery' && <div data-bp-theme-gallery-layout="" className="grid min-w-0 gap-3 min-[800px]:grid-cols-[minmax(0,1fr)_15rem]">
           <aside className="order-1 min-w-0 space-y-3 min-[800px]:order-2">
@@ -388,7 +282,7 @@ export const ThemeStudio: React.FC<PluginPanelProps> = ({ kernel, chromeless = f
           )}
           {configSkin && <Panel title={`${text(zh, '主题细节', 'Theme details')} · ${configSkin.customization!.title}`} ariaLabel={text(zh, '主题细节', 'Theme details')}>
             <details data-bp-theme-settings="" open={settingsOpen} onToggle={event => setSettingsOpen(event.currentTarget.open)} className="space-y-2">
-              <summary className="cursor-pointer text-xs font-medium text-slate-200">{text(zh, '调整会立即预览，应用前不会保存。', 'Changes preview instantly and are not saved until applied.')}</summary>
+              <summary className="cursor-pointer text-xs font-medium text-slate-200">{text(zh, '调整立即生效', 'Changes save automatically.')}</summary>
               <div className="space-y-2 border-t border-white/10 pt-2">{configSkin.customization!.settings.map(field =>
                 <SettingRow key={field.key} field={field} value={config[field.key]} onChange={patch => previewConfig(configSkin.id, patch)} />)}
               </div>
@@ -400,7 +294,7 @@ export const ThemeStudio: React.FC<PluginPanelProps> = ({ kernel, chromeless = f
             <div className="space-y-2.5">
               <input type="search" aria-label={text(zh, '搜索主题', 'Search themes')} value={search} onChange={event => setSearch(event.target.value)}
                 placeholder={text(zh, '查找主题…', 'Find a theme…')} className="w-full rounded-lg border border-white/10 bg-[#22262a] px-3 py-2 text-xs text-slate-100 outline-none placeholder:text-slate-500 focus:border-white/40" />
-              <div className="flex gap-1.5">{([['all', '全部', 'All'], ['dark', '深色', 'Dark'], ['light', '浅色', 'Light'], ['styled', '样式', 'Effects']] as const).map(([key, cn, en]) =>
+              <div className="flex gap-1.5">{([['all', '全部', 'All'], ['dark', '深色', 'Dark'], ['light', '浅色', 'Light'], ['styled', '样式', 'Effects'], ['favorites', '收藏', 'Favorites']] as const).map(([key, cn, en]) =>
                 <button key={key} type="button" aria-pressed={filter === key} onClick={() => setFilter(key)}
                   className={`rounded-md px-2 py-1 text-[10px] transition-colors ${filter === key ? 'bg-white/15 text-slate-50' : 'text-slate-400 hover:bg-white/[0.07]'}`}>{text(zh, cn, en)}</button>)}</div>
               <ul data-bp-theme-library="" className="grid max-h-[24rem] grid-cols-1 gap-2 overflow-y-auto overscroll-contain pr-1 min-[480px]:grid-cols-2 min-[800px]:grid-cols-1">{filtered.map(family => {
@@ -433,7 +327,7 @@ export const ThemeStudio: React.FC<PluginPanelProps> = ({ kernel, chromeless = f
         </div>}
 
         {section === 'mix' && <div className="space-y-4">
-          <p className="text-[11px] leading-5 text-slate-400">{text(zh, '选择来源，工具栏和面板会立即预览。未应用的混搭可随时还原。', 'Choose a source to preview it on real toolbars and panels. Unapplied changes can be reset.')}</p>
+          <p className="text-[11px] leading-5 text-slate-400">{text(zh, '选择来源，即时应用到对应界面。', 'Choose a source to apply it immediately.')}</p>
           <Panel title={<><span className="font-mono text-slate-400">01</span> {text(zh, '底座主题', 'Base')}</>} ariaLabel={text(zh, '底座主题', 'Base theme')}>
             <div className="grid max-h-32 grid-cols-2 gap-1.5 overflow-y-auto pr-1">{skins.map(skin =>
               <button key={skin.id} type="button" aria-pressed={baseId === skin.id} onClick={() => { setBaseId(skin.id); showMix(skin.id, overrides); }}
@@ -468,21 +362,12 @@ export const ThemeStudio: React.FC<PluginPanelProps> = ({ kernel, chromeless = f
                 <button type="button" disabled={!draft || savedMixes.length >= 12} onClick={saveMix}
                   className="rounded-lg border border-white/20 px-2.5 py-2 text-[11px] text-slate-200 hover:bg-white/10 disabled:opacity-35">{text(zh, '保存配方', 'Save recipe')}</button>
               </div>
-              <p className="text-[10px] text-slate-500">{text(zh, '保存配方不等于应用。', 'Saving a recipe does not apply it.')}</p>
+              <p className="text-[10px] text-slate-500">{text(zh, '配方可重复使用。', 'Reuse saved recipes anytime.')}</p>
             </div>
           </Panel>
         </div>}
 
-        {section === 'mine' && <div className="space-y-4">
-          <Panel title={text(zh, '收藏主题', 'Favorites')} badge={<span className="text-slate-500">{favorites.length}</span>} ariaLabel={text(zh, '收藏主题', 'Favorites')}>
-            {favorites.length === 0 ? <p className="rounded-lg border border-dashed border-white/10 px-3 py-5 text-center text-xs text-slate-400">{text(zh, '在主题库点星标，即可放在这里。', 'Star a theme to keep it here.')}</p> :
-              <ul className="space-y-1.5">{families.filter(family => favorites.includes(family.id)).map(family => <li key={family.id}>
-                <button type="button" onClick={() => { setSection('gallery'); showSkin(family.variants[0].id); }}
-                  className="flex w-full items-center gap-2 rounded-lg border border-white/10 px-3 py-2 text-left text-xs text-slate-200 hover:border-white/30 hover:bg-white/[0.05]">
-                  <span className="h-3 w-3 rounded-full" style={{ background: engine.resolveSkin(family.variants[0].id).color.accent }} /><span className="min-w-0 flex-1 truncate">{themeName(family, zh)}</span><span className="text-slate-500">↗</span>
-                </button>
-              </li>)}</ul>}
-          </Panel>
+        {section === 'mix' && <div className="space-y-4">
           <Panel title={text(zh, '已存的混搭配方', 'Saved mixes')} badge={<span className="text-slate-500">{savedMixes.length}</span>} ariaLabel={text(zh, '已存的混搭配方', 'Saved mixes')}>
             {savedMixes.length === 0 ? <p className="rounded-lg border border-dashed border-white/10 px-3 py-5 text-center text-xs text-slate-400">{text(zh, '在混搭页保存自己的配方。', 'Save a recipe from the Mix tab.')}</p> :
               <ul className="space-y-1.5">{savedMixes.map(mix => <li key={mix.id} className="flex items-center gap-2 rounded-lg border border-white/10 px-3 py-2 text-xs">
@@ -496,22 +381,7 @@ export const ThemeStudio: React.FC<PluginPanelProps> = ({ kernel, chromeless = f
         </div>}
       </div>
 
-      <footer className="mt-3 shrink-0 border-t border-white/10 pt-3">
-        <div className="mb-2 flex items-center gap-2 text-[10px] text-slate-400">
-          <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${dirty ? 'bg-cyan-500' : 'bg-slate-500'}`} />
-          <span className="min-w-0 flex-1 truncate">{dirty
-            ? text(zh, '整套工具界面正在试用新外观 · 关闭即还原', 'Live across the whole interface · close to restore')
-            : text(zh, `当前：${currentFamily ? themeName(currentFamily, zh) : '—'}`, `Current: ${currentFamily ? themeName(currentFamily, zh) : '—'}`)}</span>
-          {effective.cssSkinId && <button type="button" onClick={() => { session().previewStyleLayer(null); syncDraft(); }}
-            className="shrink-0 text-slate-400 underline-offset-2 hover:text-slate-100 hover:underline">{text(zh, '关样式', 'No style')}</button>}
-        </div>
-        {applyError && <p role="alert" className="mb-2 rounded-lg border border-white/15 bg-white/[0.05] px-2 py-1.5 text-[11px] text-slate-100">{applyError}</p>}
-        <div className="flex items-center gap-2">
-          <button type="button" disabled={!dirty || applying} onClick={resetDraft} className="rounded-lg border border-white/15 px-3 py-2 text-xs text-slate-200 transition-colors hover:bg-white/[0.08] disabled:cursor-default disabled:opacity-35">{text(zh, '还原', 'Reset')}</button>
-          <button type="button" data-bp-ui-action="primary" disabled={!dirty || applying} onClick={() => void applyDraft()} className="min-w-0 flex-1 rounded-lg border px-3 py-2 text-xs font-semibold disabled:cursor-default disabled:opacity-45">{applying ? text(zh, '正在保存…', 'Saving…') : text(zh, '应用外观', 'Apply appearance')}</button>
-          {canUndo && <button type="button" disabled={applying} onClick={undoApply} className="shrink-0 rounded-lg px-2 py-2 text-xs text-slate-300 hover:bg-white/[0.08]">{text(zh, '撤回', 'Undo')}</button>}
-        </div>
-      </footer>
+
     </div>
   );
 };

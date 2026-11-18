@@ -6,6 +6,7 @@
 // `marmoset` one whose `player_embedded` iframe points at `/embed/<id>`.
 import {createHash} from 'node:crypto';
 import {openPublic} from './public-http.mjs';
+import {normalizePlatformCategories} from './platform-categories.mjs';
 
 /** ArtStation hash ids are 4–20 alphanumerics (`lEVE8J`). */
 export const ARTSTATION_HASH=/^[A-Za-z0-9]{4,20}$/;
@@ -87,5 +88,6 @@ export async function fetchProjectAssets(href,{open=openPublic,signal}={}){
   const json=await fetchProjectJson(href,{open,signal});
   if(!json)return null;
   const ids=project3dAssets(json).map(asset=>asset.id);
-  return {ids:[...new Set(ids)],title:json.title||null,author:(json.user&&json.user.username)||null};
+  return {ids:[...new Set(ids)],title:json.title||null,author:(json.user&&json.user.username)||null,
+    platformCategories:normalizePlatformCategories('artstation',[...(Array.isArray(json.categories)?json.categories:[]),...(Array.isArray(json.category_ids)?json.category_ids:[])])};
 }

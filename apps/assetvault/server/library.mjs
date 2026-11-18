@@ -1,3 +1,8 @@
+import {revealInFileManager} from './reveal-path.mjs';
+import {cardThumbnail} from './card-thumbnail.mjs';
+import {claimIndex,isClaimed,isPendingClaim} from './asset-claim.mjs';
+import {auditLibrary,repairLibrary} from './library-audit.mjs';
+import {createResourceUsage} from './resource-usage.mjs';
 import {FORMATS} from '../src/library/format-registry.js';
 import {createPlatformSettings,platformForPath} from './platform-settings.mjs';
 import {createAuth} from './auth.mjs';
@@ -24,18 +29,29 @@ import {browseFolders,nativeFolderPicker} from './folder-dialog.mjs';
 import {createImportRoots} from './import-roots.mjs';
 import {preflightLocalFiles} from './local-import-preflight.mjs';
 import {createLocalFileImporter} from './local-file-import.mjs';
+import {createFileOrganizePreflight} from './file-organize-preflight.mjs';
+import {createFileOrganizer} from './file-organizer.mjs';
+import {createTagBackfill} from './tag-backfill.mjs';
+import {createTagManagement} from './tag-management.mjs';
+import {createTaxonomyRules} from './taxonomy-rules.mjs';
+import {createLocationMigration} from './location-migration.mjs';
+import {repairAssetTypes} from './asset-type-repair.mjs';
+import {repairAiMeta} from './ai-meta-repair.mjs';
 import {createWebdavSync} from './webdav-sync.mjs';
 import {createVectorIndex} from './vector-index.mjs';
-import {listLocalFolder,resolveLocalFile,localMime,parseRange} from './local-browse.mjs';
+import {listLocalFolder,resolveLocalFile,resolveLocalTarget,localMime,parseRange} from './local-browse.mjs';
 import {listArchiveEntries,extractArchiveEntry} from './archive.mjs';
-import {scanLibraryPackages} from './local-assets.mjs';
+import {scanLibraryPackages,catalogUidsForRemovedPaths} from './local-assets.mjs';
 import {writePictureBoardCard,isBoardUid} from './picture-board.mjs';
+import {assetFolder} from './asset-folders.mjs';
 import {pictureWindow} from './picture-index.mjs';
 import {cachedScan, invalidateScanCache} from './scan-cache.mjs';
 import {registerPackage,patchPackageMeta} from './asset-meta.mjs';
 import {findFfmpeg,probeMedia,transcodePlan,streamMp4} from './video-transcode.mjs';
 import {docStatus,convertToPdf,canConvertDoc} from './doc-convert.mjs';
-import {thumbFor} from './thumb-cache.mjs';
+import {thumbFor,saveModelThumb,LIST_THUMB_SIZE,cacheStats,trimCache,clearCache,setCacheBudget,pruneExpiredCache,modelThumbVersion,dropThumbCache} from './thumb-cache.mjs';
+import {localLocator} from './file-locations.mjs';
+import {ensureServerCover,isServerCoverName} from './model-cover.mjs';
 import {streamFolderZip} from './zip-stream.mjs';
 import {createLanSharing} from './lan-sharing.mjs';
 import {packFolderDownload} from './folder-archive.mjs';
@@ -88,6 +104,7 @@ import { SERVER_CAPABILITIES, SERVER_VERSION } from './capabilities.mjs';
 import {createAIService} from './ai.mjs';
 import {createDropImporter} from './drop-import.mjs';
 import {createCanvasBoards} from './canvas-boards.mjs';
+import {ensureLibraryIdentity} from './asset-sidecar.mjs';
 const isPolyhavenHost=host=>/(?:^|\.)polyhaven\.(?:com|org)$/i.test(host);
 const isPolypizzaHost=host=>/(?:^|\.)poly\.pizza$/i.test(host);
 const isKenneyHost=host=>/(?:^|\.)kenney\.nl$/i.test(host);
@@ -117,6 +134,12 @@ let httpCache=createResponseCache(defaultCacheDir());
 const previewCacheDir=path.join(resolveDataDir(root).dir,'preview-cache');
 const IMAGE_CACHE_MS=7*24*60*60*1000;
 const SEARCH_CACHE_MS=10*60*1000;
+// 「只入库」远程图集：保存时后台预热每张图的缩略图到 httpCache。地址过期后画廊走 /api/image
+// 仍能命中这份缓存，至少缩略图不裂。限量+低并发+短超时，避免一次存几百张卡把图站打爆 / 拖慢保存。
+const THUMB_WARM_LIMIT=200;       // 单卡最多预热张数（缩略图很小，但画板动辄上千张）
+const THUMB_WARM_CONCURRENCY=4;
+const THUMB_WARM_TIMEOUT_MS=15000;
+const THUMB_WARM_CAP=2*1024*1024; // 单张缩略图上限，超过就不是缩略图了，跳过
 // 用户反馈的收集端（feedback-worker 部署后把地址填这里，末尾不带斜杠）。
 // 桌面端「问题反馈」已改为跳 GitHub Issues，不再打这个接口；这里保留是为了旧前端 /
 // 脚本仍能提交，没人调用就可以整段删掉。
@@ -200,8 +223,10 @@ const ARTFLOW_CSP=`default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe
 const ARTFLOW_ROOT=process.env.SFX_ARTFLOW_ROOT||'';
 const ARTFLOW_PREFIX='/artflow/';
 // doc-render.js 是独立 bundle：marked / docx-preview / epubjs 按需加载，不进 app.js 主包。
-const assets=new Set(['/','/index.html','/app.js','/app.css','/viewer.css','/content-kind-tabs.css','/settings-controls.css','/engine.js','/gltf-preview.js','/doc-render.js','/artflow-embed.js','/favicon.svg','/worker.html','/splash.html','/splash.js','/sidebar-boot.js','/mascot.png','/login.html','/login.css','/login.js','/login-peek.js','/login-backdrop.svg','/account-chip.js']);
+const assets=new Set(['/model-preview.html','/model-preview.js','/','/index.html','/app.js','/app.css','/viewer.css','/content-kind-tabs.css','/settings-controls.css','/engine.js','/gltf-preview.js','/image-decoders.js','/doc-render.js','/model-thumb.js','/artflow-embed.js','/favicon.svg','/worker.html','/splash.html','/splash.js','/sidebar-boot.js','/mascot.png','/login.html','/login.css','/login.js','/login-peek.js','/login-backdrop.svg','/account-chip.js']);
 function json(res,status,data){res.writeHead(status,{'Content-Type':'application/json; charset=utf-8'});res.end(JSON.stringify(data,(key,value)=>key==='error'&&typeof value==='string'?chineseError(value,{fallback:true}):value));}
+// 拖入导入的批次编号：前端生成，只允许 URL 安全的短串，避免拿它当路径 / 内存键的注入面。
+const validBatch = value => /^[a-z0-9][a-z0-9-]{5,63}$/i.test(String(value||''));
 /** 预览条目是解出来的原始字节（FBX / PNG / HDR），不是 JSON，也不该每次回源。 */
 function binary(res,status,data,type){res.writeHead(status,{'Content-Type':type,'Content-Length':data.length,'Cache-Control':'private, max-age=3600'});res.end(data);}
 // 代理预览的 MIME 也从格式注册表派生：新增格式不必再来这里补一行。
@@ -239,6 +264,16 @@ function loadLocalRoots(file){
   }catch{}
 }
 const isLocalRootAllowed=folder=>{try{return localRoots.has(path.resolve(String(folder||'')));}catch{return false;}};
+/** 把任意图片字节缩到指定长边并转 WebP（压缩包内封面用）。转不了就返回 null，调用方发原图。 */
+async function shrinkImageBuffer(bytes,{width=384}={}){
+ try{
+  const sharp=(await import('sharp')).default;
+  const out=await sharp(bytes,{limitInputPixels:268402689}).rotate()
+   .resize(width,width,{fit:'inside',withoutEnlargement:true})
+   .webp({quality:78,alphaQuality:100}).toBuffer();
+  return out?.length?{bytes:out,mime:'image/webp'}:null;
+ }catch{return null;}
+}
 /** 预览用的读文件接口。支持 Range —— 视频/音频拖进度需要 206，否则只能从头播。 */
 async function streamLocalFile(req,res,target){
  const headers={'Content-Type':localMime(target.file),'Accept-Ranges':'bytes','Cache-Control':'private, max-age=60'};
@@ -276,7 +311,7 @@ async function firstAvailable(candidates,request){
   }
   throw lastError||Error('缺少可用的图片地址');
 }
-export function createLibraryServer({scan=scanPage,search=searchPage,open=openPublic,staticRoot=process.env.SFX_STATIC_ROOT||path.join(root,'dist/library'),downloads=null,libraryDbImporter=null,boardCollect=collectPictureAssets,pictureCollect=(platform,args,options)=>(platform==='artstation'?collectImageAssets:collectPictureAssets)(platform,args,options),artstation={},artsearch=artstationSearch,artfilters=artstationFilterOptions,artartist=artstationArtist,artprofile=artstationArtistProfile,polyhaven=polyhavenSearch,polyhavenCats=polyhavenCategories,simready=simreadySearch,polypizza=polypizzaSearch,kenney=kenneySearch,kenneyCats=kenneyCategories,freestylized=freestylizedSearch,freestylizedCats=freestylizedCategories,polyfork=polyforkSearch,polyforkCats=polyforkCategories,polyforkP=polyforkParams,polyforkV=polyforkVariant,polyforkGen=polyforkGenerator,ambientcg=ambientcgSearch,ambientcgPreview=ambientcgViewer,ambientcgCats=ambientcgCategories,fab=fabSearchFn,cacheDir=null,lanSharing=null,platformSettingsFile=null,collect=true,backup=true,auth=null,onRestart=null}={}) {
+export function createLibraryServer({scan=scanPage,search=searchPage,open=openPublic,staticRoot=process.env.SFX_STATIC_ROOT||path.join(root,'dist/library'),downloads=null,libraryDbImporter=null,boardCollect=collectPictureAssets,pictureCollect=(platform,args,options)=>(platform==='artstation'?collectImageAssets:collectPictureAssets)(platform,args,options),artstation={},artsearch=artstationSearch,artfilters=artstationFilterOptions,artartist=artstationArtist,artprofile=artstationArtistProfile,polyhaven=polyhavenSearch,polyhavenCats=polyhavenCategories,simready=simreadySearch,polypizza=polypizzaSearch,kenney=kenneySearch,kenneyCats=kenneyCategories,freestylized=freestylizedSearch,freestylizedCats=freestylizedCategories,polyfork=polyforkSearch,polyforkCats=polyforkCategories,polyforkP=polyforkParams,polyforkV=polyforkVariant,polyforkGen=polyforkGenerator,ambientcg=ambientcgSearch,ambientcgPreview=ambientcgViewer,ambientcgCats=ambientcgCategories,fab=fabSearchFn,cacheDir=null,archiveRoot=null,lanSharing=null,platformSettingsFile=null,collect=true,backup=true,auth=null,onRestart=null}={}) {
   // cacheDir：把响应缓存指到别处（测试与脚本传临时目录），免得夹具写进应用数据目录的真缓存。
   // 一个进程同时只会跑一个服务端实例，所以这里直接换掉模块级那一份。
   if(cacheDir)httpCache=createResponseCache(cacheDir);
@@ -299,6 +334,44 @@ export function createLibraryServer({scan=scanPage,search=searchPage,open=openPu
       candidate=>open(candidate,{artstation:isArtstationHost(host),signal,timeout:45000,
         ...(isPictureCdnHost(host)?{headers:{Referer:pictureRefererForHost(host)}}:{})}));
   };
+  // 「只入库」远程图集：把每张图的缩略图提前抓进 /api/image 的磁盘缓存。签名地址过期后，
+  // 画廊走 /api/image 仍能命中这份缓存（key 与缩略图请求完全一致：validateUrl(url).href + '|'），
+  // 至少缩略图不裂。低并发 + 限量 + 短超时，且用独立 signal（保存响应返回后 controller 会 abort）。
+  const warmRemoteThumbs=(items, cover)=>{
+    const urls=[];
+    const add=u=>{const s=String(u||'').trim();if(/^https?:\/\//i.test(s)&&!urls.includes(s))urls.push(s);};
+    add(cover);
+    for(const item of Array.isArray(items)?items:[])add(item?.thumb||item?.url);
+    const targets=[];
+    for(const raw of urls.slice(0,THUMB_WARM_LIMIT)){
+      try{
+        const t=validateUrl(raw);
+        // 只预热允许出图的图床：非法主机既不该缓存，也过不了 /api/image 的白名单。
+        if(!imageHostAllowed(t.hostname))continue;
+        const key=`${t.href}|`; // 与 /api/image imageKey 的缩略图分支一致（rendition/card 为空）
+        targets.push({wanted:t.href,host:t.hostname,key});
+      }catch{}
+    }
+    if(!targets.length)return;
+    let cursor=0;
+    const worker=async()=>{
+      while(cursor<targets.length){
+        const {wanted,host,key}=targets[cursor++];
+        try{
+          // 已经缓存过（含过期副本）就不重复下：过期兜底正是要有这份旧字节。
+          if(await httpCache.image(key,Infinity))continue;
+          const remote=await imageRequest(wanted,host,{signal:AbortSignal.timeout(THUMB_WARM_TIMEOUT_MS)});
+          if(remote.status<200||remote.status>=300){try{remote.stream.destroy();}catch{}continue;}
+          const mime=String(remote.headers['content-type']||'').split(';')[0];
+          if(!IMAGE_MIMES_BASE.includes(mime)){try{remote.stream.destroy();}catch{}continue;}
+          const chunks=[];let bytes=0;
+          for await(const chunk of remote.stream){bytes+=chunk.length;if(bytes>THUMB_WARM_CAP)break;chunks.push(chunk);}
+          if(bytes>0&&bytes<=THUMB_WARM_CAP)await httpCache.saveImage(key,Buffer.concat(chunks),mime);
+        }catch{} // 后台预热：任何失败都不影响卡片本身，静默跳过。
+      }
+    };
+    void Promise.all(Array.from({length:THUMB_WARM_CONCURRENCY},worker));
+  };
   // 资产解析单独留一份：拖放（/api/drag/files）与网页版兜底（/api/drag/urls）共用同一套取文件规则。
   // 路径只从自己的下载任务 / 扫描结果里取，前端给不出也不该给绝对路径。
   const assetResolver=createAssetResolver({
@@ -316,7 +389,7 @@ export function createLibraryServer({scan=scanPage,search=searchPage,open=openPu
       if(path.resolve(file)!==path.resolve(model.filePath))throw Error('资产文件定位不一致，请重新定位');
       return file;
     },
-    roots:()=>[...new Set([downloads?.defaultFolder,...(downloads?.jobs||[]).map(item=>item.downloadRoot)].filter(Boolean))],
+    roots:()=>[...new Set([downloads?.defaultFolder,...(downloads?.jobs||[]).map(item=>item.downloadRoot),...(downloads?.legacyRoots||[])].filter(Boolean))],
     scanPackages:async list=>(await cachedScan(JSON.stringify(list),{roots:list,compute:options=>scanLibraryPackages({roots:list,...options})})).packages||[],
   });
   // CF_HDROP 只认磁盘路径：把前端的 {root,rel} / 原图 URL 在这里换成绝对路径。
@@ -327,7 +400,7 @@ export function createLibraryServer({scan=scanPage,search=searchPage,open=openPu
       if(!isLocalRootAllowed(folder)){
         // 前端能从 localStorage 恢复索引后立刻开拖，这时 /api/library/scan 还没把 root 记进
         // 白名单。用与 scan 同一份 roots 来源兜一次：仍只放行资产库自己的下载根目录。
-        const roots=[downloads?.defaultFolder,...(downloads?.jobs||[]).map(job=>job.downloadRoot)].filter(Boolean);
+        const roots=[downloads?.defaultFolder,...(downloads?.jobs||[]).map(job=>job.downloadRoot),...(downloads?.legacyRoots||[])].filter(Boolean);
         if(!roots.some(item=>path.resolve(item)===path.resolve(folder)))throw Error('请先索引这个文件夹');
         allowLocalRoot(folder);
       }
@@ -338,6 +411,7 @@ export function createLibraryServer({scan=scanPage,search=searchPage,open=openPu
     resolveAsset:assetResolver,
     isAllowedHost:imageHostAllowed,
   });
+  const resourceUsage=createResourceUsage();
   const ai=createAIService({file:path.join(resolveDataDir(root).dir,'ai-settings.json')});
   // 参数译名单独存一目录：它是纯缓存，删掉只会让面板退回规则词表，不影响任何其它数据。
   const polyforkZh=createPolyforkZh({dir:path.join(resolveDataDir(root).dir,'polyfork-zh'),complete:ai.complete});
@@ -347,15 +421,32 @@ export function createLibraryServer({scan=scanPage,search=searchPage,open=openPu
   // 缺原生依赖时存储层自动退回纯文件模式，细粒度查询仍可走内存引擎。
   // ADR-09：真实服务端启用 DB 单一写入权威（纯逻辑测试不传，保持旧双轨契约）。
   const libraryStorage=createLibraryStorage(downloads?.dataDir||resolveDataDir(root).dir,downloads,{dbImporter:libraryDbImporter,catalogSingleWriter:true});
+  const fileOrganizePreflight=createFileOrganizePreflight({storage:libraryStorage,importRoots});
   // S3-d：自动备份。定时器不拖住进程退出，失败只告警 —— 备份挂了不影响主流程。
   const libraryBackups=createBackupService({storage:libraryStorage,onWarn:message=>console.warn(`[AssetVault] ${message}`)});
   if(backup!==false)libraryBackups.start();
   // ADR-12：资源库注册表固定在 %APPDATA%/AssetVault（base），不能放进 dataDir ——
   // 否则切到别的库之后就再也列不出清单了。
-  const userPaths=resolveUserPaths();
+  // archiveRoot：把「资产根」也指到别处。生产不传，跟着当前库走；测试/脚本传了 cacheDir
+  // （临时缓存目录）时默认落到 <cacheDir>/assets —— 否则测试里的导入会写进用户真实资产目录。
+  const basePaths=resolveUserPaths();
+  const userPaths=archiveRoot?{...basePaths,archiveRoot:path.resolve(archiveRoot)}
+   :cacheDir?{...basePaths,archiveRoot:path.join(cacheDir,'assets')}:basePaths;
+  // 资产根是受管目录：下载与导入的卡片都从这里取文件，必须放行。
+  // 否则换库 / 改过资产目录之后，卡片先铺出来、缩略图整排 403，必须手动重扫才活。
+  allowLocalRoot(userPaths.archiveRoot);
+  // 资产根自带说明书：.assetvault/library.json（库身份，换机器/换工具能认出是哪个库）
+  // 和 desktop.ini（资源管理器里显示库名 + 图标）。幂等，内容没变就不落盘。
+  try {
+    ensureLibraryIdentity(userPaths.archiveRoot, {
+      name: path.basename(userPaths.archiveRoot),
+      dataDir: userPaths.dataDir,
+      importType: 'copy',
+    });
+  } catch (error) { console.warn(`[AssetVault] 资产库标识写入失败：${error.message}`); }
   // ADR-15：语义索引。向量住独立表，随 embedding 模型重建，绝不改资产权威表。
   const semantic=createVectorIndex({storage:libraryStorage,ai,onWarn:message=>console.warn(`[AssetVault] ${message}`)});
-  const libraryApi=createLibraryApi({storage:libraryStorage,backups:libraryBackups,importRoots,dataDir:cacheDir||downloads?.dataDir||resolveDataDir(root).dir,downloadDir:userPaths.downloadDir,storeBase:userPaths.base,semantic,allowLocalRoot:folder=>allowLocalRoot(folder),onWarn:message=>console.warn(`[AssetVault] ${message}`)});
+  const libraryApi=createLibraryApi({storage:libraryStorage,backups:libraryBackups,importRoots,dataDir:cacheDir||downloads?.dataDir||resolveDataDir(root).dir,downloadDir:userPaths.downloadDir,archiveRoot:userPaths.archiveRoot,storeBase:userPaths.base,semantic,allowLocalRoot:folder=>allowLocalRoot(folder),onWarn:message=>console.warn(`[AssetVault] ${message}`)});
   // 智能收集画板：规则 / 待合并队列 / 守卫 / 执行器 / 调度器。
   // 规则与队列放独立文件，不碰主状态 blob —— 采集失败或内核缺失都不该影响资产库本身。
   const collectDir=downloads?.dataDir||resolveDataDir(root).dir;
@@ -372,8 +463,30 @@ export function createLibraryServer({scan=scanPage,search=searchPage,open=openPu
     assetsEventTimer=setTimeout(()=>{assetsEventTimer=0;try{libraryApi.events.emit({kind:'assets'});}catch{}},400);
     if(assetsEventTimer.unref)assetsEventTimer.unref();
   };
-  const localImporter=createLocalFileImporter({storage:libraryStorage,importRoots,dataDir:collectDir,allowLocalRoot,onImported:notifyAssets});
-  const dropImporter=createDropImporter({dataDir:collectDir,importRoots,allowLocalRoot,localImporter});
+  const localImporter=createLocalFileImporter({storage:libraryStorage,importRoots,dataDir:collectDir,archiveRoot:userPaths.archiveRoot,allowLocalRoot,onImported:notifyAssets});
+  const fileOrganizer=createFileOrganizer({storage:libraryStorage,importRoots,
+    beforeEnable:()=>libraryBackups.runNow({cleanup:false}),
+    onChanged:()=>{invalidateScanCache();notifyAssets();}});
+  const tagBackfill=createTagBackfill({storage:libraryStorage,onChanged:notifyAssets});
+  const tagManagement=createTagManagement({storage:libraryStorage,onChanged:notifyAssets,beforeMerge:()=>libraryBackups.runNow({cleanup:false})});
+  const taxonomyRules=createTaxonomyRules({storage:libraryStorage,onChanged:notifyAssets});
+  const locationMigration=createLocationMigration({storage:libraryStorage,importRoots,onChanged:()=>{invalidateScanCache();notifyAssets();},beforeMigrate:()=>libraryBackups.runNow({cleanup:false})});
+  // 导入是「先落盘、后 flush」，进程中途被杀可能留下没人认领的副本目录。
+  // 起来 10 秒后跑一次维护：先修老记录的格式识别（无扩展名的老资产一直是 other），
+  // 再清孤儿目录（只删「无资产记录 + 超过 1 小时」的旧结构残留）。
+  let maintenanceTimer=setTimeout(()=>{
+    repairAssetTypes({storage:libraryStorage})
+      .then(result=>{if(result.repaired)console.log(`[AssetVault] 按文件头修正了 ${result.repaired} 条资产的格式识别`);})
+      .catch(()=>{})
+      .then(()=>repairAiMeta({storage:libraryStorage}))
+      .then(result=>{if(result.repaired)console.log(`[AssetVault] 识别了 ${result.repaired} 张 AI 生成图的提示词`);})
+      .catch(()=>{})
+      .then(()=>localImporter.sweepOrphanDirs())
+      .then(result=>{if(result.removed)console.log(`[AssetVault] 清理了 ${result.removed} 个未入库的临时导入目录`);})
+      .catch(()=>{});
+  },10*1000);
+  if(maintenanceTimer.unref)maintenanceTimer.unref();
+  const dropImporter=createDropImporter({dataDir:collectDir,archiveRoot:userPaths.archiveRoot,importRoots,allowLocalRoot,localImporter});
   const canvasBoards=createCanvasBoards({storage:libraryStorage,dataDir:boardStoreDir,dropImporter,localImporter,onChanged:()=>libraryApi.events.emit({kind:'assets'})});
   const collectRules=createCollectRules({file:path.join(collectDir,'collect-rules.json')});
   const collectPendingStore=createCollectPending({file:path.join(collectDir,'collect-pending.json')});
@@ -407,6 +520,10 @@ export function createLibraryServer({scan=scanPage,search=searchPage,open=openPu
         if(await auth.handle(req,res,u))return;
         if(auth.gate(req,res,u))return;
       }
+      await fileOrganizer.ready;
+      // 未恢复的日志期间禁止其它写入口绕过位置保护；整理面板仍可读状态并重试恢复。
+      if(req.method==='POST'&&u.pathname.startsWith('/api/library')&&!u.pathname.startsWith('/api/library/file-organize/')
+        &&(await fileOrganizer.pending()).length)return json(res,409,{error:'文件整理操作尚待恢复，请在整理文件面板中重试恢复后再写入资产库'});
       if(await exportsApi.handle(req,res,u))return;
       if(u.pathname==='/api/platforms'){
         if(req.method==='GET')return json(res,200,platforms.get());
@@ -430,7 +547,7 @@ export function createLibraryServer({scan=scanPage,search=searchPage,open=openPu
       }
       if(u.pathname==='/api/library-state'){
         if(req.headers['x-sfx-local']!=='1')return json(res,403,{error:'缺少本地请求标识'});
-        if(req.method==='GET')return json(res,200,await libraryStorage.load({catalogPaged:u.searchParams.get('catalog')==='paged'}));
+        if(req.method==='GET')return json(res,200,{...await libraryStorage.load({catalogPaged:u.searchParams.get('catalog')==='paged'}),fileWriteProtocol:'1'});
         if(req.method==='POST'){
           // JSON 转义会让请求体比单个 key 略大，留出余量；上限统一由存储层常量决定。
           // 目录域可以很大（50 万资产实测 209MB），旧版按 16MB 小域定的上限会把正常保存挡掉。
@@ -444,7 +561,8 @@ export function createLibraryServer({scan=scanPage,search=searchPage,open=openPu
             if(Buffer.byteLength(text)>bodyLimit){overflow=true;text='';}
           }
           if(overflow)return json(res,413,{error:'资产库状态过大'});
-          await libraryStorage.save(JSON.parse(text));return json(res,200,{saved:true});
+          try{await libraryStorage.save(JSON.parse(text),{clientProtocol:req.headers['x-av-file-protocol']??null});return json(res,200,{saved:true});}
+          catch(error){return json(res,error.status||400,{error:error.message,code:error.code,requiredProtocol:error.requiredProtocol});}
         }
       }
       // 阶段 2 的细粒度接口：布尔/字段检索、多维过滤、合集与智能合集。
@@ -461,6 +579,13 @@ export function createLibraryServer({scan=scanPage,search=searchPage,open=openPu
       }
       if(await libraryApi.handle(req,res,u))return;
       if(await collectApi.handle(req,res,u))return;
+      if(u.pathname==='/api/resource-usage'&&req.method==='GET'){
+        const peer=req.socket.remoteAddress||'';
+        if(req.lanVisitor||req.headers['x-sfx-local']!=='1'||!['127.0.0.1','::1','::ffff:127.0.0.1'].includes(peer))return json(res,403,{error:'资源占用仅供本机查看'});
+        res.setHeader('Cache-Control','no-store');
+        try{return json(res,200,await resourceUsage.sample());}
+        catch{return json(res,503,{error:'无法读取系统进程信息，请稍后重试'});}
+      }
       if(u.pathname==='/api/health'&&req.method==='GET')return json(res,200,{name:'assetvault-local-library',version:SERVER_VERSION,mode:'local',engine:'existing-exporter',storage:libraryStorage.dbStatus()});
       // 图站抓取（素材下载器整合）：给定图站 URL，返回整站图片清单。复用 collectImageAssets 下游链路。
       // 用户反馈：前端打同源 /api/feedback，这里转发到收集端。
@@ -611,6 +736,8 @@ export function createLibraryServer({scan=scanPage,search=searchPage,open=openPu
         // 解析失败（限流 / 需要登录 / 太慢）不猜：这张卡先只记「远程收藏」，下次点重试再补。
         let imageCount=Math.min(1_000_000,Math.max(0,Math.floor(Number(input?.imageCount)||0)));
         let counted=false;
+        // 全量解析拿到的每张图地址：写进远程卡供「不下载翻图集」用。解析失败时回退前端传来的那批。
+        let remoteItems=Array.isArray(input?.remoteImages)?input.remoteImages:[];
         try{
           // 与预览共用同一个响应缓存目录，但 key 标 full：预览那份是前 48 张，不能拿来当总数。
           // 同一块画板第二次点「只入库」应该是秒回，而不是再翻一遍页。
@@ -621,6 +748,7 @@ export function createLibraryServer({scan=scanPage,search=searchPage,open=openPu
             await httpCache.saveJson(cacheKey,plan).catch(()=>{});
           }
           const items=Array.isArray(plan?.items)?plan.items:[];
+          if(items.length)remoteItems=items;
           imageCount=items.length+(plan?.skipped?.length||0);
           title=String(plan?.title||title);
           author=String(plan?.author||author);
@@ -636,7 +764,9 @@ export function createLibraryServer({scan=scanPage,search=searchPage,open=openPu
         try{
           const card=await writePictureBoardCard({
             folder:downloads.settings.folder,
-            category:'图片',
+            // 与下载任务的落点用同一套分类（assetFolder）：否则「下载原图」会算到 图片/插画，
+            // 而远程卡写在 图片/，原地接管失败 → 同一个画板裂成两张卡。
+            category:assetFolder({title,platform,assetType:'images'}),
             uid,
             platform,
             url:source,
@@ -645,9 +775,13 @@ export function createLibraryServer({scan=scanPage,search=searchPage,open=openPu
             cover:cover||null,
             imageCount:counted?imageCount:0,
             tags:Array.isArray(input?.tags)?input.tags.slice(0,40).map(tag=>String(tag).slice(0,60)):[],
+            remoteImages:remoteItems,
           });
           // info.json 落在包目录内部，扫描缓存的根签名探不到 → 显式失效，前端刷新就能看见。
           invalidateScanCache();
+          // 后台预热缩略图：远程签名地址会过期，存卡时先把图抓到 /api/image 的磁盘缓存，
+          // 以后地址失效了画廊仍能从缓存取到缩略图。不 await，保存响应不被拖慢。
+          void warmRemoteThumbs(remoteItems, cover);
           return json(res,200,{ok:true,...card});
         }catch(error){return json(res,500,{error:`写入资产库失败：${error.message}`});}
       }
@@ -667,19 +801,21 @@ export function createLibraryServer({scan=scanPage,search=searchPage,open=openPu
         if(req.method==='GET'&&u.pathname==='/api/ai/settings')return json(res,200,await ai.settings());
         if(req.method==='POST'){
           // 图搜的请求体带 base64 图片，先走大上限的解析器，再进入常规 JSON 分支。
+          if(u.pathname==='/api/ai/tags')return json(res,200,await ai.tagAssets(await bodyLarge(req)));
           if(u.pathname==='/api/ai/vision-search')return json(res,200,await ai.visionSearch(await bodyLarge(req)));
           const input=await body(req);
           if(u.pathname==='/api/ai/key'){res.setHeader('Cache-Control','no-store');return json(res,200,await ai.key());}
           if(u.pathname==='/api/ai/settings')return json(res,200,await ai.configure(input));
           if(u.pathname==='/api/ai/models')return json(res,200,await ai.models(input,controller.signal));
-          if(u.pathname==='/api/ai/test')return json(res,200,await ai.test(controller.signal));
+          if(u.pathname==='/api/ai/probe-models')return json(res,200,await ai.probeModels(input,controller.signal));
+          if(u.pathname==='/api/ai/probe')return json(res,200,await ai.probeChat(input,controller.signal));
+          if(u.pathname==='/api/ai/test')return json(res,200,await ai.test(input?.role,controller.signal));
           // expand=true 走合并调用：一次 LLM 推理同时返回英文翻译和扩展词，
           // 中文搜索不再串行等两次推理（旧 /expand 端点保留，行为不变）。
           if(u.pathname==='/api/ai/translate')return json(res,200,input.expand===true?await ai.translateSearch(input.query):await ai.translate(input.query));
           if(u.pathname==='/api/ai/expand')return json(res,200,await ai.expand(input.query));
           if(u.pathname==='/api/ai/parse-local')return json(res,200,await ai.parseLocal(input.query));
           if(u.pathname==='/api/ai/brainstorm')return json(res,200,await ai.brainstorm(input.query));
-          if(u.pathname==='/api/ai/tags')return json(res,200,await ai.tagAssets(input));
         }
         return json(res,404,{error:'AI 接口不存在'});
       }
@@ -724,6 +860,9 @@ export function createLibraryServer({scan=scanPage,search=searchPage,open=openPu
           catch(e){return json(res,500,{error:e.message});}
         }
         if(u.pathname==='/api/browser/login'&&req.method==='GET')return json(res,200,loginStatus());
+        // 哪些平台有登录入口：平台下拉给每一项画登录图标时查这里，避免前端硬编码一份会和
+        // PICTURE_LOGIN_URLS 脱节的名单（新接一个站只改后端即可）。
+        if(u.pathname==='/api/browser/logins'&&req.method==='GET')return json(res,200,{platforms:PICTURE_LOGIN_URLS});
         if(u.pathname==='/api/browser/login/close'&&req.method==='POST'){
           try{return json(res,200,{...await closeLogin(),login:loginStatus(),cookies:cookieStats()});}
           catch(e){return json(res,500,{error:e.message});}
@@ -797,35 +936,106 @@ export function createLibraryServer({scan=scanPage,search=searchPage,open=openPu
       }
       // 「导入文件夹」：用户显式登记的本机目录，持久化为扫描根，重启后仍生效。
       // 只放行主机（局域网访客不能改主机目录），路径由服务端自己校验并 stat。
+      if(u.pathname==='/api/library/file-organize/preflight'){
+        const ip=String(req.socket.remoteAddress||'').replace(/^::ffff:/,'');
+        const trusted=!req.lanVisitor&&['127.0.0.1','::1'].includes(ip)&&[`127.0.0.1:${req.socket.localPort}`,`localhost:${req.socket.localPort}`].includes(req.headers.host);
+        if(!trusted||req.headers['x-sfx-local']!=='1'||req.headers.origin&&req.headers.origin!==`http://${req.headers.host}`||req.headers['sec-fetch-site']==='cross-site')return json(res,403,{error:'仅主机同源页面可以预检真实目录'});
+        if(req.method!=='POST')return json(res,405,{error:'只支持 POST'});
+        try{
+          const input=await body(req);
+          if(!['inspect','plan'].includes(input.action))return json(res,400,{error:'未知预检操作'});
+          return json(res,200,await (input.action==='plan'?fileOrganizePreflight.plan(input):fileOrganizePreflight.inspect(input.folder)));
+        }catch(error){return json(res,error.status||400,{error:error.message});}
+      }
+      if(u.pathname==='/api/library/file-organize/action'){
+        const ip=String(req.socket.remoteAddress||'').replace(/^::ffff:/,'');
+        const trusted=!req.lanVisitor&&['127.0.0.1','::1'].includes(ip)&&[`127.0.0.1:${req.socket.localPort}`,`localhost:${req.socket.localPort}`].includes(req.headers.host);
+        if(!trusted||req.headers['x-sfx-local']!=='1'||req.headers.origin&&req.headers.origin!==`http://${req.headers.host}`||req.headers['sec-fetch-site']==='cross-site')return json(res,403,{error:'仅主机同源页面可以整理源文件'});
+        if(req.method!=='POST')return json(res,405,{error:'只支持 POST'});
+        try{
+          const input=await body(req);
+          if(input.action==='identity-inspect')return json(res,200,await locationMigration.inspect(input));
+          if(input.action==='identity-audit')return json(res,200,await locationMigration.audit());
+          if(input.action==='identity-migrate'){
+            const controller=new AbortController(),cancel=()=>controller.abort();
+            res.once('close',cancel);
+            try{return json(res,200,await locationMigration.migrate({...input,signal:controller.signal}));}
+            finally{res.off('close',cancel);}
+          }
+          const actions={'terms-rejections':()=>tagManagement.rejections(input),'terms-restore-rejection':()=>tagManagement.restoreRejection(input),'terms-list':()=>tagManagement.list(input),'terms-write':()=>tagManagement.mutate(input.change||{}),'rules-list':()=>taxonomyRules.list(),'rules-write':()=>taxonomyRules.write(input.change||{}),'labels-status':()=>tagBackfill.status(input),'labels-start':()=>tagBackfill.start(input),'labels-pause':()=>tagBackfill.pause(input),list:()=>fileOrganizer.list(input),permission:()=>fileOrganizer.setWritable(input),
+            preview:()=>fileOrganizer.preview(input),move:()=>fileOrganizer.move(input),
+            history:()=>fileOrganizer.history(),undo:()=>fileOrganizer.undo(input.operationId),recover:()=>fileOrganizer.recover(),
+            'cache-stats':()=>cacheStats(),'cache-clear':async()=>({removed:await clearCache(),...await cacheStats()}),
+            'cache-prune':async()=>{
+              const sources=await libraryStorage.withDb(conn=>conn.all('SELECT r.path,l.rel FROM file_locations l JOIN file_roots r ON r.root_id=l.root_id LIMIT 50001')
+                .map(row=>{const locator=localLocator({localRoot:row.path,localRel:row.rel});return locator?{file:path.join(locator.root,...locator.rel.split('/')),root:locator.root}:null;}).filter(Boolean));
+              if(!sources)throw Error('数据库不可用，无法核验源文件位置');
+              return {...await pruneExpiredCache({files:sources.map(item=>item.file),roots:new Map(sources.map(item=>[item.file,item.root]))}),...await cacheStats()};
+            },
+            'cache-trim':async()=>({removed:await trimCache(),...await cacheStats()}),'cache-budget':()=>setCacheBudget(input.bytes)};
+          if(!Object.hasOwn(actions,input.action))return json(res,400,{error:'未知整理操作'});
+          return json(res,200,await actions[input.action]());
+        }catch(error){return json(res,error.status||400,{error:error.message,operationId:error.operationId});}
+      }
       if(u.pathname==='/api/library/import-roots'){
         if(req.lanVisitor)return json(res,403,{error:'访客不能修改主机导入目录'});
         // 托管副本目录是库的内部存储（拖入导入时自动登记，只为了让 importFile 的根校验通过），
         // 不属于用户「导入目录」，列出来只会让人想移除它、移除后缩略图就 403。
         if(req.method==='GET')return json(res,200,{roots:importRoots.list().filter(folder=>!isManagedImportPath(folder)),entries:importRoots.status().filter(entry=>!isManagedImportPath(entry.path))});
         if(req.method!=='POST')return json(res,405,{error:'只支持 GET / POST'});
+        const ip=String(req.socket.remoteAddress||'').replace(/^::ffff:/,'');
+        if(!['127.0.0.1','::1'].includes(ip)||![`127.0.0.1:${req.socket.localPort}`,`localhost:${req.socket.localPort}`].includes(req.headers.host)
+          ||req.headers['x-sfx-local']!=='1'||req.headers.origin&&req.headers.origin!==`http://${req.headers.host}`||req.headers['sec-fetch-site']==='cross-site')return json(res,403,{error:'仅主机同源页面可以修改导入目录'});
         const input=await body(req);
         try{
           const action=String(input?.action||'add');
+          if(action==='relink'&&(await libraryStorage.withDb(conn=>conn.all('SELECT 1 FROM file_roots r JOIN file_locations l ON l.root_id=r.root_id WHERE r.path=? LIMIT 1',[path.resolve(String(input.from||''))])))?.length)
+            return json(res,409,{error:'此目录已有稳定资产定位；整根重新定位尚未开放，请使用单文件重新定位，避免破坏原有身份关联'});
+          if(action==='remove')await libraryStorage.withDbWrite(conn=>conn.run('UPDATE file_roots SET writable=0 WHERE path=?',[path.resolve(String(input.folder||''))]));
           const result=action==='remove'?importRoots.remove(input?.folder)
             :action==='relink'?importRoots.relink(input?.from,input?.to)
             :importRoots.add(input?.folder);
           if(result.added)allowLocalRoot(result.root);
           // 换根后新位置要进白名单，否则重扫认出包了、缩略图却被 403 挡住。
           if(result.relinked)allowLocalRoot(result.to);
+          // 用户明确导入目录时，为图片图集自动补固定身份；日常扫描仍然只读。
+          if(action==='add'){
+            const root=result.root||String(input.folder||'');
+            if(root){const scanned=await scanLibraryPackages({roots:[root]});
+              for(const pkg of scanned.packages)if(pkg.category==='images'&&pkg.type==='folder'&&!pkg.hasMeta)
+                await registerPackage(path.join(pkg.root,...pkg.rel.split('/')),pkg);
+            }
+          }
           invalidateScanCache();
           return json(res,200,{ok:true,...result,entries:importRoots.status()});
         }catch(error){return json(res,400,{error:error.message});}
       }
       // 外部文件拖入：二进制流直接落盘 → 复用 importFile 入库。单独一条路由，不能走
       // body(req)（它把请求体限死 64KB，装不下模型 / 贴图），也不做 JSON 包装。
-      if(u.pathname==='/api/library/drop-import'){
+      // `/drop-import/flush` 是同一批的收尾：文件挨个进来（每个只落盘 + 校验），最后一次性入库。
+      if(u.pathname==='/api/library/drop-import'||u.pathname==='/api/library/drop-import/flush'){
         const ip=String(req.socket.remoteAddress||'').replace(/^::ffff:/,'');
         const trusted=!req.lanVisitor&&['127.0.0.1','::1'].includes(ip)&&[`127.0.0.1:${req.socket.localPort}`,`localhost:${req.socket.localPort}`].includes(req.headers.host);
         if(!trusted||req.headers['x-sfx-local']!=='1'||req.headers.origin&&req.headers.origin!==`http://${req.headers.host}`||req.headers['sec-fetch-site']==='cross-site')return json(res,403,{error:'仅主机同源页面可以拖入导入'});
         if(req.method!=='POST')return json(res,405,{error:'只支持 POST'});
         try{
+          if(u.pathname.endsWith('/flush')){
+            const input=await body(req);
+            const batch=String(input?.batch||'');
+            if(!validBatch(batch))return json(res,400,{error:'批次编号无效'});
+            const action=String(input?.action||'flush')==='abort'?'abort':'flush';
+            const result=action==='abort'?await dropImporter.abort(batch):await dropImporter.flush(batch);
+            // 图集在盘上新建了带 info.json 的目录：扫描缓存还持着旧签名，不显式失效的话
+            // 紧跟着的前端重扫可能拿旧结果，图集卡就不出现。
+            if(result?.albums?.length)invalidateScanCache();
+            return json(res,200,result);
+          }
           const name=decodeURIComponent(String(req.headers['x-av-drop-name']||''));
-          return json(res,200,await dropImporter.save({name,stream:req,size:Number(req.headers['content-length']||0)}));
+          // 图集模式：前端把「整包当一个图集」的选择放在这个头里，落盘时同一批进同一个目录。
+          const album=decodeURIComponent(String(req.headers['x-av-album']||''));
+          const batch=String(req.headers['x-av-batch']||'');
+          const canvasBoard=decodeURIComponent(String(req.headers['x-av-canvas-board']||'')).slice(0,200);
+          return json(res,200,await dropImporter.save({name,stream:req,size:Number(req.headers['content-length']||0),batch:validBatch(batch)?batch:'',album,canvasBoard}));
         }catch(error){return json(res,error.status||400,{error:error.message});}
       }
       // 显式只读检查已登记根：仅批内比较，不与全库索引比较，不做导入提交。
@@ -877,13 +1087,37 @@ export function createLibraryServer({scan=scanPage,search=searchPage,open=openPu
         try{return json(res,200,await listLocalFolder({folder:input?.folder||'',limit:Number(input?.limit)||undefined}));}
         catch(error){return json(res,400,{error:error.message});}
       }
+      // 资产检查：库内「目录 ↔ 记录」一致性。GET 只读体检，POST 做安全修复。
+      // 修复只碰两类（补 packageDir / 多余重复记录进回收站），规则在 server/library-audit.mjs，
+      // 与 scripts/audit-library-links.mjs 共用一份 —— 界面和脚本各写一套，迟早对不上。
+      if(u.pathname==='/api/library/audit'){
+        if(!libraryStorage)return json(res,503,{error:'资产库内核未启用，无法体检'});
+        try{
+          if(req.method==='GET'){
+            const report=await auditLibrary({storage:libraryStorage,archiveRoot:userPaths.archiveRoot});
+            return json(res,200,report);
+          }
+          if(req.method==='POST'){
+            const input=await body(req);
+            const wanted=Array.isArray(input?.kinds)?input.kinds.filter(kind=>kind==='anchors'||kind==='duplicates'):['anchors','duplicates'];
+            if(!wanted.length)return json(res,400,{error:'没有要修的项目'});
+            const result=await repairLibrary({storage:libraryStorage,archiveRoot:userPaths.archiveRoot,kinds:wanted});
+            // 补了锚点 / 移走重复记录都会改变「哪些包已经有主」，扫描缓存必须跟着失效。
+            invalidateScanCache();
+            return json(res,200,result);
+          }
+          return json(res,405,{error:'只支持 GET / POST'});
+        }catch(error){
+          return json(res,500,{error:`资产检查失败：${error.message}`});
+        }
+      }
       // 资产库的扫描根 = 后台下载目录 + 各任务下载根 + 用户显式导入的本机目录。
       // 全部归一成绝对路径，避免同一目录因斜杠写法不同在 Set / 扫描缓存 key 里分裂。
       // 取文件与缩略图仍只认登记过的根，别的路径一律 403。
       if(u.pathname==='/api/library/scan'){
         if(req.method!=='POST')return json(res,405,{error:'只支持 POST'});
         if(!downloads)return json(res,503,{error:'后台下载服务未启动'});
-        const roots=[...new Set([downloads.defaultFolder,...downloads.jobs.map(job=>job.downloadRoot),...importRoots.valid()].filter(Boolean).map(folder=>path.resolve(folder)))];
+        const roots=[...new Set([downloads.defaultFolder,...downloads.jobs.map(job=>job.downloadRoot),...(downloads.legacyRoots||[]),...importRoots.valid()].filter(Boolean).map(folder=>path.resolve(folder)))];
         // 托管副本目录不参与「零散文件」扫描：它里面的每个文件都已经是一条资产记录，
         // 再列一遍就是重复卡片（拖入导入后会同时出现资产卡和磁盘文件卡）。取文件的权限另走
         // allowLocalRoot，摘掉扫描不影响缩略图与预览。
@@ -894,13 +1128,38 @@ export function createLibraryServer({scan=scanPage,search=searchPage,open=openPu
         // 重复请求不再无条件全量重建：scan-cache 按根目录签名 + TTL 失效，写操作成功后显式清缓存。
         const scanned=await cachedScan(JSON.stringify(scanRoots),{roots:scanRoots,force:u.searchParams.get('force')==='1',compute:options=>scanLibraryPackages({roots:scanRoots,...options})});
         for(const root of roots)allowLocalRoot(root);
+        // 已入库的本地文件不再进「零散文件」列表：导入副本与下载产物现在都落在资产根下的分类目录里，
+        // 扫描一定会扫到它们，不滤掉就是同一张图两张卡（一张资产卡 + 一张磁盘文件卡）。
+        // 回收站仍持有文件身份：只软删除、不删文件，不能被扫描重新显示为散文件。
+        const indexed=new Set();
+        try{
+          const rows=await libraryStorage.withDb(conn=>conn.all("SELECT payload FROM assets WHERE state IN ('active','trashed')"));
+          for(const row of rows){
+            try{const file=JSON.parse(row.payload)?.filePath;if(file)indexed.add(path.resolve(String(file)).toLowerCase());}catch{}
+          }
+        }catch{/* 读不到资产表就不过滤：宁可多一张文件卡，也不要整片文件消失 */}
         const files=scanned.files.filter(file=>{
           // 只收素材：readme、日志、脚本、LICENSE 这些是目录里的附带文件，不是资产。
           if(file.kind==='other'||file.kind==='document')return false;
           const absolute=path.resolve(file.root,file.rel);
+          if(indexed.has(absolute.toLowerCase()))return false;
           return !claimed.some(entry=>absolute===entry||absolute.startsWith(entry+path.sep));
         });
-        return json(res,200,{roots,packages:scanned.packages,files,truncated:scanned.truncated,limits:scanned.limits});
+        // 资产包同理：一个已经登记成资产的目录，不应该再作为「素材包」出一张卡。
+        // 两套数据源各出一张，就是「一张有正确缩略图、另一张是图集样式」的重复卡
+        // （2026-11-16 反馈）。目录本身不删，资产卡点开照样能看包内文件。
+        // 判据集中在 server/asset-claim.mjs，巡检脚本用同一份，避免两边规则漂移。
+        let index=null;
+        try{
+          const rows=await libraryStorage.withDb(conn=>conn.all("SELECT uid, payload FROM assets WHERE state IN ('active','trashed')"));
+          index=claimIndex(rows);
+        }catch{/* 读不到资产表就不过滤：宁可多一张包卡，也不要整片包消失 */}
+        const packages=scanned.packages
+          .filter(pkg=>!isClaimed(pkg,index))
+          // 剩下的包里，凡是带包内身份（uid / info.json）却没被认领的，就是「漏登记」：
+          // 明说，别让它伪装成普通素材包 —— 那正是这次重复卡的观感来源。
+          .map(pkg=>isPendingClaim(pkg)?{...pkg,pendingClaim:true}:pkg);
+        return json(res,200,{roots,packages,files,truncated:scanned.truncated,limits:scanned.limits});
       }
       // 登记：给「用户自己拷进来的素材包」补一个 info.json（uid + 事实字段 + 包统计）。
       // 只认扫描结果里真实存在的包根，前端传不了任意路径；已有 info.json 的包一律不改写。
@@ -934,7 +1193,7 @@ export function createLibraryServer({scan=scanPage,search=searchPage,open=openPu
         try{
           const input=await body(req);
           const uid=String(input?.uid||'');
-          const roots=[...new Set([downloads.settings?.folder,downloads.defaultFolder,...downloads.jobs.map(job=>job.downloadRoot)].filter(Boolean))].map(folder=>path.resolve(folder));
+          const roots=[...new Set([downloads.settings?.folder,downloads.defaultFolder,...downloads.jobs.map(job=>job.downloadRoot),...(downloads.legacyRoots||[])].filter(Boolean))].map(folder=>path.resolve(folder));
           // 可删除范围 = 下载目录 + 已登记的导入目录 + 托管副本目录。少了后两类，
           // 拖入导入 / 导入文件夹出来的卡片点删除会「静默什么都不做」，但前端仍然弹「已删除」。
           const deletable=[...new Set([...roots,...importRoots.valid().map(folder=>path.resolve(folder)),managedImportDir])];
@@ -943,8 +1202,16 @@ export function createLibraryServer({scan=scanPage,search=searchPage,open=openPu
           const rmAsset=async file=>{
             const full=path.resolve(file);
             if(!inside(full))return;
+            // 派生缩略图必须在删文件之前清：缓存名靠「设备号:inode:创建时间」算，
+            // 文件一落地删掉就再也对不上了，这些图只会白占几十 MB 直到过期。
+            await dropThumbCache(full).catch(()=>{});
             await fs.rm(full,{recursive:true,force:true});
-            // 拖入导入每次落一个新的 drop-* 目录：文件删了目录留着只会越堆越多。非空时 rmdir 自然失败。
+            // 连带删掉同名说明书：<文件名>.info.json 与目录资产的 __info.json。
+            // 只删主文件会把空壳说明书留在盘上，下次扫描它又变成一张打不开的破图卡，
+            // 用户看到的就成「删了刷新又回来」。
+            await fs.rm(`${full}.info.json`,{force:true}).catch(()=>{});
+            await fs.rm(path.join(full,'__info.json'),{force:true}).catch(()=>{});
+            // 删掉资产后顺手收掉空的分类子目录（如 imports/图片/图片）；非空时 rmdir 自然失败。
             const parent=path.dirname(full);
             if(parent!==managedImportDir&&isManagedImportPath(parent))await fs.rmdir(parent).catch(()=>{});
             downloads.dismissedDownloads?.add(process.platform==='win32'?full.toLowerCase():full);
@@ -990,12 +1257,16 @@ export function createLibraryServer({scan=scanPage,search=searchPage,open=openPu
                 await fs.rm(path.join(cacheDir,name),{force:true}).catch(()=>{});
               }
             }
-            await libraryStorage.dropCatalog([uid]);
+
           }
-          downloads.jobs=downloads.jobs.filter(item=>!(uid&&item.uid===uid)&&item.id!==input?.jobId);
+          // Path-only deletion must also remove registered catalog cards, not only disk files.
+          const removedUids=await libraryStorage.withDb(conn=>catalogUidsForRemovedPaths(conn.all('SELECT uid, payload FROM assets'),removed));
+          if(uid)removedUids.push(uid);
+          await libraryStorage.dropCatalog(removedUids);
+          downloads.jobs=downloads.jobs.filter(item=>!removedUids.includes(item.uid)&&item.id!==input?.jobId&&!removed.includes(item.filePath));
           downloads.save();
           invalidateScanCache();
-          return json(res,200,{ok:true,removed});
+          return json(res,200,{ok:true,removed,removedUids});
         }catch(error){
           const code=String(error?.code||'');
           const message=/EPERM|EACCES|EBUSY/.test(code)?'文件被占用或没有删除权限':error.message;
@@ -1069,6 +1340,29 @@ export function createLibraryServer({scan=scanPage,search=searchPage,open=openPu
         }
         return;
       }
+      if(u.pathname==='/api/local/reveal'&&req.method==='POST'){
+        const peer=req.socket.remoteAddress||'';
+        if(!['127.0.0.1','::1','::ffff:127.0.0.1'].includes(peer)||req.headers['x-sfx-local']!=='1')return json(res,403,{error:'仅支持本机打开文件夹'});
+        let input=null;
+        try{input=await body(req);}catch(error){return json(res,400,{error:error.message});}
+        if(!isLocalRootAllowed(input.root))return json(res,403,{error:'请先索引这个文件夹'});
+        try{
+          // rel 现在既可能是文件，也可能是一个素材包目录：目录就打开目录本身，
+          // 文件则在资源管理器里选中它（打开的还是它所在的文件夹）。
+          const resolved=resolveLocalTarget({root:input.root,rel:input.rel});
+          if(!await revealInFileManager(resolved.path,{isDir:resolved.isDir}))return json(res,500,{error:'调不起系统文件管理器'});
+          return json(res,200,{opened:true,folder:resolved.isDir?resolved.path:path.dirname(resolved.path),selected:resolved.rel});
+        }catch(error){
+          // 目标被改名 / 删掉时，用户要的其实还是「那个地方」：父目录还在就打开父目录，
+          // 比回一句「文件不存在」有用得多。父目录必须仍在已索引的根里面，不许借机越界。
+          const base=path.resolve(String(input.root||''));
+          const parent=path.dirname(path.resolve(base,String(input.rel||'')));
+          const inScope=parent.startsWith(base+path.sep)&&parent!==base;
+          if(inScope&&fs.existsSync(parent)&&await revealInFileManager(parent,{isDir:true}))
+            return json(res,200,{opened:true,folder:parent,fellBack:true});
+          return json(res,404,{error:`打不开这个位置：${error.message}`});
+        }
+      }
       if(u.pathname==='/api/local/file'&&req.method==='GET'){
         const root=u.searchParams.get('root');
         if(!isLocalRootAllowed(root))return json(res,403,{error:'请先索引这个文件夹，再预览里面的文件'});
@@ -1133,17 +1427,63 @@ export function createLibraryServer({scan=scanPage,search=searchPage,open=openPu
         let target=null;
         try{target=resolveLocalFile({root,rel:u.searchParams.get('rel')});}
         catch(e){return json(res,400,{error:e.message});}
-        const width=Math.min(2048,Math.max(64,Number(u.searchParams.get('w'))||512));
+        const width=u.searchParams.get('purpose')==='tags'?1536:LIST_THUMB_SIZE;
         try{
-          const out=await thumbFor(target.file,{width});
-          res.writeHead(200,{'Content-Type':'image/png','Content-Length':out.buffer.length,'Cache-Control':'private,max-age=604800'});
+          const original=u.searchParams.get('full')==='1';
+          const out=await thumbFor(target.file,{width,format:original?'png':'webp',root,original});
+          const etag='"'+createHash('sha1').update(out.buffer).digest('hex')+'"';
+          const cacheHeaders={'ETag':etag,'Cache-Control':Number(u.searchParams.get('v'))>0?'private,max-age=86400':'private,max-age=0,must-revalidate'};
+          if(req.headers['if-none-match']===etag){res.writeHead(304,cacheHeaders);return res.end();}
+          res.writeHead(200,{...cacheHeaders,'Content-Type':out.mime||'image/png','Content-Length':out.buffer.length});
           return res.end(out.buffer);
         }catch(error){
-          // PSD 生成不了就是生成不了，直接说清楚，退回原文件只会得到一张破图；
-          // 其它格式（SVG / 没装 ffmpeg 的 jpg）退回原文件，缩略图位置上显示原图，功能不断。
-          if(/\.psd$/i.test(target.file))return json(res,415,{error:`缩略图生成失败：${error.message}`});
-          return streamLocalFile(req,res,target);
+          // A card must never decode the full source as a thumbnail fallback.
+          // The client retries transient failures, then keeps an actionable placeholder.
+          res.setHeader('Cache-Control','no-store');
+          return json(res,415,{error:`缩略图生成失败：${error.message}`});
         }
+      }
+      // 服务端 3D 封面：.blend / .usd* 浏览器解析不了，由服务端出图并写进同一份缩略图缓存。
+      if(u.pathname==='/api/local/thumb/version'&&req.method==='GET'){
+        if(req.headers['x-sfx-local']!=='1')return json(res,403,{error:'缺少本地请求标识'});
+        const root=u.searchParams.get('root');
+        if(!isLocalRootAllowed(root))return json(res,403,{error:'请先索引这个文件夹，再预览里面的文件'});
+        try{const target=resolveLocalFile({root,rel:u.searchParams.get('rel')});return json(res,200,{version:await modelThumbVersion(target.file,{root})});}
+        catch(error){return json(res,error.status||409,{error:error.message});}
+      }
+      // 与上面的回传接口分开，是因为这条要真的渲染（.blend 先读内嵌预览，毫秒级；USD 走 Blender）。
+      if(u.pathname==='/api/local/thumb/render'&&req.method==='POST'){
+        if(req.headers['x-sfx-local']!=='1')return json(res,403,{error:'缺少本地请求标识'});
+        let input=null;
+        try{input=await bodyLarge(req,64*1024);}catch(error){return json(res,400,{error:error.message});}
+        const root=String(input?.root||''),rel=String(input?.rel||'');
+        if(!isLocalRootAllowed(root))return json(res,403,{error:'请先索引这个文件夹，再预览里面的文件'});
+        let target=null;
+        try{target=resolveLocalFile({root,rel});}catch(e){return json(res,400,{error:e.message});}
+        if(!isServerCoverName(target.file))return json(res,415,{error:'这个格式不走服务端渲染'});
+        try{
+          const width=LIST_THUMB_SIZE;
+          return json(res,200,{ok:true,...await ensureServerCover(target.file,{width,format:'webp'})});
+        }catch(error){return json(res,415,{error:`封面生成失败：${error.message}`});}
+      }
+      // 3D 封面回传：Node 侧没有 WebGL，由前端 model-thumb.js 离屏渲一帧后写进缩略图缓存。
+      // 与 GET 共用 root 白名单 + 路径解析，且要求本地请求标识；访客只读总闸也会挡掉非 GET。
+      if(u.pathname==='/api/local/thumb/model'&&req.method==='POST'){
+        if(req.headers['x-sfx-local']!=='1')return json(res,403,{error:'缺少本地请求标识'});
+        let input=null;
+        try{input=await bodyLarge(req,4*1024*1024);}catch(error){return json(res,400,{error:error.message});}
+        const root=String(input?.root||''),rel=String(input?.rel||'');
+        if(!isLocalRootAllowed(root))return json(res,403,{error:'请先索引这个文件夹，再预览里面的文件'});
+        let target=null;
+        try{target=resolveLocalFile({root,rel});}catch(e){return json(res,400,{error:e.message});}
+        const match=/^data:image\/png;base64,([A-Za-z0-9+/=]+)$/.exec(String(input?.png||''));
+        if(!match)return json(res,400,{error:'封面不是 PNG 图片'});
+        try{
+          const width=LIST_THUMB_SIZE;
+          if(/\.(gltf|glb)$/i.test(target.file)&&typeof input.coverVersion!=='string')return json(res,409,{error:'glTF/GLB 封面需要源版本，请刷新页面后重试'});
+          await saveModelThumb(target.file,Buffer.from(match[1],'base64'),{width,format:'webp',root,coverVersion:input.coverVersion});
+          return json(res,200,{ok:true});
+        }catch(error){return json(res,error.status||415,{error:`3D 封面保存失败：${error.message}`});}
       }
       // ZIP 内嵌浏览：只读中央目录，不落盘、不解压整包。
       if(u.pathname==='/api/local/archive'&&req.method==='GET'){
@@ -1165,8 +1505,17 @@ export function createLibraryServer({scan=scanPage,search=searchPage,open=openPu
         catch(e){return json(res,400,{error:e.message});}
         try{
           const entry=await extractArchiveEntry(target.file,u.searchParams.get('entry'));
-          res.writeHead(200,{'Content-Type':localMime(entry.name)||'application/octet-stream','Content-Length':entry.bytes.length,'Cache-Control':'private,max-age=300'});
-          return res.end(entry.bytes);
+          // 传了 w 就当卡片封面用：压缩包里的原图常有十几 MB（4K 底色图），原样发给网格会把首屏拖垮。
+          // 这里缩到长边 w 再转 WebP；转码失败（不是图片）就退回原字节，不让封面整块消失。
+          const width=Math.max(0,Math.min(2048,Number(u.searchParams.get('w'))||0));
+          const shrunk=width?await shrinkImageBuffer(entry.bytes,{width}):null;
+          const body=shrunk?.bytes||entry.bytes;
+          const mime=(shrunk?.mime)||localMime(entry.name)||'application/octet-stream';
+          const etag='"'+createHash('sha1').update(body).digest('hex')+'"';
+          const headers={'Content-Type':mime,'Content-Length':body.length,'ETag':etag,'Cache-Control':shrunk?'private,max-age=3600':'private,max-age=300'};
+          if(req.headers['if-none-match']===etag){res.writeHead(304,headers);return res.end();}
+          res.writeHead(200,headers);
+          return res.end(body);
         }catch(error){return json(res,400,{error:error.message});}
       }
       if(u.pathname==='/api/local/play'&&req.method==='GET'){
@@ -1593,31 +1942,63 @@ export function createLibraryServer({scan=scanPage,search=searchPage,open=openPu
         // full=1：拖拽 / 下载原图专用。缩略图那 8MB 上限对 4K 原图不够用，而原图也不该塞进
         // 缩略图缓存（一张十几 MB，缓存目录会迅速膨胀），所以 full 请求既不读缓存也不写缓存。
         const full=image&&u.searchParams.get('full')==='1';
-        const imageKey=image&&!full?`${wanted}|${rendition}`:'';
+        const card=image&&!full&&u.searchParams.get('card')==='1';
+        const imageKey=image&&!full?`${wanted}|${rendition}${card?'|card384-v1':''}`:'';
         // ETag：图片响应没有验证器时，浏览器 F5 会把它当成「不确定是否最新」整张重下；
         // 带上 ETag 后同一张图只换一次 304，刷新不再重复传输几 MB 的图片。
         const etag=imageKey?`W/"${createHash('sha1').update(imageKey).digest('hex').slice(0,20)}"`:'';
-        if(etag&&req.headers['if-none-match']===etag){res.writeHead(304,{'Cache-Control':'private, max-age=604800',ETag:etag});res.end();return;}
+        // 卡片封面走 ETag 复验，不套一周的 max-age：封面尺寸属于可调的内存预算（512→384），
+        // 长缓存会让浏览器一直用旧尺寸的封面，改了等于没改，而且下次调更小的尺寸又会卡住一周。
+        // 复验命中的是本地服务，只回一条 304，代价远小于重新下一张图。
+        const imageCacheControl=card?'private, max-age=86400':'private, max-age=604800';
+        // 远程地址过期 / 限流 / 临时故障时，回退到磁盘缓存里的旧缩略图（忽略 max-age）。
+        // 预热过的图集缩略图正是靠这条兜底：地址挂了也至少显示缩略图，而不是整片裂图。
+        // full=1（原图）imageKey 为空，不兜底——原图本就不缓存，前端有 thumbUrl 降级钩子切到缩略图。
+        const serveStale=async()=>{
+          if(!imageKey)return false;
+          const stale=await httpCache.image(imageKey,Infinity).catch(()=>null);
+          if(!stale)return false;
+          res.writeHead(200,{'Content-Type':stale.mime,'Cache-Control':'no-store',...(etag?{ETag:etag}:{})});
+          res.end(stale.bytes);return true;
+        };
+        if(etag&&req.headers['if-none-match']===etag){res.writeHead(304,{'Cache-Control':imageCacheControl,ETag:etag});res.end();return;}
         if(imageKey){
           const cached=await httpCache.image(imageKey,IMAGE_CACHE_MS);
-          if(cached){res.writeHead(200,{'Content-Type':cached.mime,'Cache-Control':'private, max-age=604800',...(etag?{ETag:etag}:{})});res.end(cached.bytes);return;}
+          if(cached){res.writeHead(200,{'Content-Type':cached.mime,'Cache-Control':imageCacheControl,...(etag?{ETag:etag}:{})});res.end(cached.bytes);return;}
         }
         const sourcePlatform=[[(host=>['hf-mirror.com','huggingface.co'].includes(host)),'simready'],[isSketchfabHost,'sketchfab'],[isArtstationHost,'artstation'],[isPolyhavenHost,'polyhaven'],[isAmbientcgHost,'ambientcg'],[isPolypizzaHost,'polypizza'],[isKenneyHost,'kenney'],[isFreestylizedHost,'freestylized'],[isPolyforkHost,'polyfork'],[isFabHost,'fab'],[isPictureCdnHost,'picture']].find(([matches])=>matches(targetHost))?.[1];
         // picture 是图站大类（非模型模块、由各站 routeLink 控制开关），跳过平台 enabled 校验；其余平台照常校验。
         if(sourcePlatform&&sourcePlatform!=='picture'&&!platforms.enabled(sourcePlatform))return json(res,403,{error:'该平台已关闭，请在设置中开启'});
-        const remote=await imageRequest(wanted,targetHost,{signal:controller.signal,useLadder:image});
-        const mime=String(remote.headers['content-type']||'').split(';')[0];
-        if(image&&!(full?IMAGE_MIMES_FULL:IMAGE_MIMES_BASE).includes(mime)){remote.stream.destroy();return json(res,502,{error:'缩略图不可用'});}
+        let remote;
+        try{
+          remote=await imageRequest(wanted,targetHost,{signal:controller.signal,useLadder:image});
+        }catch(error){
+          // 全部候选都连不上（地址过期 / 下线 / 超时）：有旧缩略图就顶上，否则照常报错。
+          if(await serveStale())return;
+          throw error;
+        }
+        let mime=String(remote.headers['content-type']||'').split(';')[0];
+        if(image&&!(full?IMAGE_MIMES_FULL:IMAGE_MIMES_BASE).includes(mime)){
+          remote.stream.destroy();
+          if(await serveStale())return;
+          return json(res,502,{error:'缩略图不可用'});
+        }
         if(image){
           const chunks=[];let bytes=0;const cap=full?REMOTE_CAP:8*1024*1024;
           for await(const chunk of remote.stream){bytes+=chunk.length;if(bytes>cap)break;chunks.push(chunk);}
-          const bodyBytes=Buffer.concat(chunks);
+          let bodyBytes=Buffer.concat(chunks);
+          if(card&&remote.status>=200&&remote.status<300){
+            try{const thumbnail=await cardThumbnail(bodyBytes);bodyBytes=thumbnail.bytes;mime=thumbnail.mime;}
+            catch{return json(res,502,{error:'无法生成卡片缩略图'});}
+          }
           if(imageKey&&remote.status>=200&&remote.status<300)await httpCache.saveImage(imageKey,bodyBytes,mime).catch(()=>{});
           // 只有 2xx 才配长缓存。以前这里不分状态码一律 max-age=604800，一次临时的 404/403
           // 会被浏览器记上一周，图从此一直裂着 —— 站方恢复、服务端修好都不会自己好。
           const okImage=remote.status>=200&&remote.status<300;
+          // 站方返回 403/404/567（签名过期、限流）：有旧缩略图就顶上，不让整片图裂掉。
+          if(!okImage&&await serveStale())return;
           res.writeHead(remote.status,okImage
-            ?{'Content-Type':mime,'Cache-Control':'private, max-age=604800',...(etag?{ETag:etag}:{})}
+            ?{'Content-Type':mime,'Cache-Control':imageCacheControl,...(etag?{ETag:etag}:{})}
             :{'Content-Type':mime,'Cache-Control':'no-store'});
           res.end(bodyBytes);return;
         }
@@ -1688,8 +2069,10 @@ export function createLibraryServer({scan=scanPage,search=searchPage,open=openPu
 if(process.argv[1]&&import.meta.url===pathToFileURL(path.resolve(process.argv[1])).href){
   const port=Number(process.env.SFX_PORT||4179);
   if(Number(process.versions.node.split('.')[0])<22)throw Error('后台下载需要 Node.js 22 或更高版本');
-  const {dataDir,downloadDir,accountsDir}=resolveUserPaths();
-  const downloads=await new DownloadManager({dataDir,defaultFolder:downloadDir}).init();
+  const {dataDir,downloadDir,archiveRoot,accountsDir}=resolveUserPaths();
+  // 下载落到「归档根」= <库名>/图片/…，和分类树一一对应，用户改名磁盘跟着改。
+  // 旧 downloads 目录只作为历史扫描根，保证之前下载的卡片不会因为换根而消失。
+  const downloads=await new DownloadManager({dataDir,defaultFolder:archiveRoot,legacyRoots:[downloadDir]}).init();
   // 用户在「首次准备」里手动指过 blender.exe 的话，趁服务还没开始接活把它接回环境变量。
   applyBlenderOverride();
   const sharing=createLanSharing({file:path.join(downloads.dataDir,'lan-sharing.json')});

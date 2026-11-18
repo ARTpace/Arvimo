@@ -1,3 +1,4 @@
+import type { DrawingOptions } from '../types';
 import React, { useState, useRef, useEffect } from 'react';
 import type { Tool } from '../types';
 import { ACCEPTED_FILE_TYPES_STRING } from '../utils/formatDetector';
@@ -9,8 +10,8 @@ interface ToolbarProps {
     t: (key: string, ...args: any[]) => any;
     activeTool: Tool;
     setActiveTool: (tool: Tool) => void;
-    drawingOptions: { strokeColor: string; strokeWidth: number; opacity: number };
-    setDrawingOptions: (options: { strokeColor: string; strokeWidth: number; opacity: number }) => void;
+    drawingOptions: DrawingOptions;
+    setDrawingOptions: (options: DrawingOptions) => void;
     onUpload: (files: File[]) => void;
     isCropping: boolean;
     onConfirmCrop: () => void;
@@ -148,6 +149,8 @@ export const Toolbar: React.FC<ToolbarProps> = ({
             </div>
         )
     }
+
+    if (['draw','erase','highlighter'].includes(activeTool)) return null;
 
     const mainTools: { id: Tool; label: string; icon: React.ReactNode }[] = [
         { id: 'select', label: t('toolbar.select'), icon: <BpIcon name="tool.select" size={24} /> },

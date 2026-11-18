@@ -5,7 +5,7 @@
 // 壳通过 controls 暴露的缝把 store 快照塞进 extraFilters / queryOptions，不反向 import 实现。
 import {icon} from './icon-set.js';
 import {
-  FILTER_DIMENSIONS, SORT_DIMENSION, ALL_DIMENSIONS, FILTER_DOCK_STORAGE_KEY,
+  FILTER_DIMENSIONS, SORT_DIMENSION, FILTER_DOCK_STORAGE_KEY,
   SORT_CHIPS, readDockState, writeDockState, dimensionActive,
 } from './filter-dimensions.js';
 import {createFilterPanelDrawer} from './filter-panel-drawer.js';
@@ -19,6 +19,10 @@ const safeStorage = () => {
   try { return typeof localStorage !== 'undefined' ? localStorage : null; }
   catch { return null; }
 };
+
+/* 工具栏的筛选抽屉不再挂「标签」维度（2026-11-18 反馈「这个图标没用了」）。
+   只改工具栏这一处：智能画板的规则编辑器仍用完整维度表，标签筛选那条能力没丢。 */
+const DOCK_DIMENSIONS = FILTER_DIMENSIONS.filter(dim => dim.id !== 'tags');
 
 export function createFilterDock({
   $, state, controls, esc = value => String(value), toast = () => {},
@@ -71,7 +75,8 @@ export function createFilterDock({
   }
 
   /** 排序下拉菜单：从 SORT_CHIPS 取全集，按 primary / secondary 分组，当前项打勾。
-   *  底部一行「升序 / 降序」切换保留排序方向能力，但不占用主图标条空间。 */
+   *  底部一行「升序 / 降序」切换保留排序方向能力，但不占用主图标条空间。
+   *  2026-11-18：两组各加小标题、底部方向独立成组，排版规整；文字统一左对齐。 */
   function buildSortMenu() {
     const current = controls.sort.value;
     const groups = {};
@@ -82,8 +87,11 @@ export function createFilterDock({
         <span class="fd-sort-check">${current === item.value ? icon('check') : ''}</span>
         <span class="fd-sort-item-label">${esc(item.label)}</span></button>`).join('');
     const sep = '<span class="fd-sort-sep" role="separator" aria-hidden="true"></span>';
+    const groupTitle = text => `<span class="fd-menu-group" role="presentation">${esc(text)}</span>`;
     const dir = store.get().sortOrder === 'desc' ? '降序' : '升序';
-    sortMenu.innerHTML = column('primary') + sep + column('secondary') + sep
+    sortMenu.innerHTML = groupTitle('常用排序') + column('primary') + sep
+      + groupTitle('更多方式') + column('secondary') + sep
+      + groupTitle('排序方向')
       + `<button type="button" class="fd-sort-dir" data-dir="toggle" title="切换升 / 降序">
           ${icon('chevron-up')}<span>${esc(dir)}</span></button>`;
   }
@@ -131,8 +139,7 @@ export function createFilterDock({
     select.dispatchEvent(new Event('change', {bubbles: true}));
   }
 
-  /** 标签筛选是否在起作用。标签是「跨类型」的维度：一旦选了标签，顶部模式带来的
-   *  本地类型就不再参与过滤（用户 2026-11-11 反馈「标签筛选不该顺手把类型筛也带上」）。 */
+  /** 标签与当前类型叠加筛选，不改变顶部已选类型。 */
   const tagsActive = () => {
     const data = store.get();
     return data.tags.length > 0 || data.excludeTags.length > 0;
@@ -144,7 +151,7 @@ export function createFilterDock({
     // 类型 chip 的真值仍是旧 #local-kind（单选，前端过滤），但它同时要进查询 payload：
     // 否则服务端规则（智能画板）看不到「类型」这个维度，存下来的规则会少一条。
     const extras = store.toFilters();
-    const legacyKind = tagsActive() ? '' : localSnapshot().localKind;
+    const legacyKind = localSnapshot().localKind;
     if (legacyKind) extras.kinds = [...new Set([...(extras.kinds || []), legacyKind])];
     controls.setExtraFilters?.(extras);
     controls.setQueryOptions?.(store.toQueryOptions());
@@ -269,7 +276,7 @@ export function createFilterDock({
     onCollectionPick: () => close(),
   };
 
-  const drawer = createFilterPanelDrawer({host: pop, ctx});
+  const drawer = createFilterPanelDrawer({host: pop, ctx, dimensions: DOCK_DIMENSIONS});
 
   /** 一键清全部：图标条的 store 与旧工具栏那套（类型 / 文件状态 / 范围 / 搜索词）一起复位。 */
   function clearEverything() {
@@ -279,18 +286,20 @@ export function createFilterDock({
   }
 
   function open(id) {
-    const dim = ALL_DIMENSIONS.find(item => item.id === id);
+    // 只认抽屉里真实存在的维度：旧 localStorage 里可能记着已下线的 id（如 tags），
+    // 直接回退到第一栏，别让「筛选」键按下去毫无反应。
+    const dim = DOCK_DIMENSIONS.find(item => item.id === id) || DOCK_DIMENSIONS[0];
     if (!dim) return;
-    if (openId === id) return;
-    openId = id;
-    lastDim = id;
+    if (openId === dim.id) return;
+    openId = dim.id;
+    lastDim = dim.id;
     setDrawerOpen(true);
-    pop.dataset.id = id;
+    pop.dataset.id = dim.id;
     pop.hidden = false;
     // 抽屉：左边一列维度，右边当前维度的面板，下面是「已选条件」条。
     // 换成抽屉是为了把「开筛选 → 找维度 → 再开面板」压成一次点击，筛选后的条件也不再摊在命令条上。
-    panel = drawer.open(id);
-    writeDockState(storage, id, key);
+    panel = drawer.open(dim.id);
+    writeDockState(storage, dim.id, key);
     refresh();
   }
 

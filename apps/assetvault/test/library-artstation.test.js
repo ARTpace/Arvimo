@@ -92,7 +92,7 @@ test('artstation-project: pulls the marmoset embed id from the project JSON',asy
   const seen=[];
   const fakeOpen=async(url,opts)=>{seen.push([url,opts.artstation]);return{status:200,headers:{},stream:(async function*(){yield Buffer.from(JSON.stringify(json),'utf8');})()};};
   const r=await fetchProjectAssets('https://www.artstation.com/artwork/lEVE8J',{open:fakeOpen});
-  assert.deepEqual(r,{ids:['100627939'],title:'Deployable Ballistic Shield',author:'datawind'});
+  assert.deepEqual(r,{ids:['100627939'],title:'Deployable Ballistic Shield',author:'datawind',platformCategories:[]});
   assert.equal(seen[0][0],'https://www.artstation.com/projects/lEVE8J.json');
   assert.equal(seen[0][1],true);
 });

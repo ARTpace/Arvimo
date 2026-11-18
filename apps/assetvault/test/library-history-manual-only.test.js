@@ -1,3 +1,4 @@
+import {assembleLibraryStyles} from '../scripts/lib/library-styles.mjs';
 // 最近检索的三条规矩（2026-10-16 用户提的三件事，各自钉一条）：
 //
 //  1. 只有「手动在搜索框里敲了关键词并提交」才写记录。分类 / 排序 / 复选变更、历史回放、
@@ -115,7 +116,7 @@ test('the platform picker announces itself so the popover can get out of the way
 });
 
 test('the two popovers are layered and laid out so they cannot cover each other',()=>{
- const css=read('src/library/app.css');
+ const css=assembleLibraryStyles();
  const grab=sel=>{const i=at(css,sel+'{');return css.slice(i,css.indexOf('}',i));};
  assert.ok(/flex-wrap:wrap/.test(grab('.history-list')),'历史列表要横向铺开、装不下才换行');
  assert.ok(/border-radius:99px/.test(grab('.history-item')),'历史记录是胶囊样式');

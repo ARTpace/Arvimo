@@ -8,13 +8,21 @@
 //   - 「加载更多」由 library-paging.js 转发到 more()，累积 uid 后重绘，不重建整张网格。
 export const PAGE_SIZE = 60;
 
-/** 只补新增、绝不覆盖：本地可能已有用户尚未提交的改动，服务端页不能把它盖掉。 */
+/** 资产本体只补新增；标签分层同步服务端结果，让后台补标在刷新后可见。 */
 export function mergeRemoteModels(state, items = []) {
   if (!Array.isArray(state.models)) state.models = [];
   const known = new Set(state.models.map(model => model?.uid));
   let added = 0;
   for (const item of items) {
-    if (!item || typeof item.uid !== 'string' || known.has(item.uid)) continue;
+    if (!item || typeof item.uid !== 'string') continue;
+    for (const [kind, field] of [['ai', 'aiTags'], ['user', 'userTags']]) {
+      if (!Array.isArray(item.tagKinds?.[kind])) continue;
+      state[field] ??= {};
+      const tags = item.tagKinds[kind].filter(tag => typeof tag === 'string' && tag);
+      if (tags.length) state[field][item.uid] = [...tags];
+      else delete state[field][item.uid];
+    }
+    if (known.has(item.uid)) continue;
     known.add(item.uid);
     state.models.push({...item, _remoteOnly: true});
     added++;

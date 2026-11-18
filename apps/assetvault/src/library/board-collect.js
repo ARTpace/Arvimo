@@ -1,3 +1,4 @@
+import {showActionCard} from './action-card.js';
 // 智能收集面板：规则 CRUD / 试运行 / 立即收集 / 运行记录 / 待合并队列合并。
 // 所有写操作经 board-api，资产只在 syncPending() 里经 mergeModels → persistNow → ack 落地，
 // 保证「服务端采集结果」不会被前端整块保存覆盖，也不会因 ack 提前而丢数据。
@@ -270,7 +271,7 @@ export function createBoardCollect({
 
   return {
     async open() {
-      dialog.showModal?.();
+      showActionCard(dialog);
       await store.refresh().catch(() => {});
       await load();
       await syncPending({quiet: true});

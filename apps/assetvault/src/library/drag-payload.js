@@ -101,6 +101,7 @@ export function createDragPayload({packages = () => [], post = defaultPost, warm
   let warmTimer = null;
 
   function sourceOf(target) {
+    if (target?.closest?.('[data-preview-pan]')) return null;
     const preview = target?.closest?.('.local-gallery-photo[data-drag-url], .local-gallery-photo[data-drag-root]');
     if (preview) return previewSource(preview);
     const card = target?.closest?.('.model-card');

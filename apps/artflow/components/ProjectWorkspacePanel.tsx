@@ -1,3 +1,4 @@
+import { canvasMessage } from '../utils/canvas-messages';
 import React from 'react';
 import { useTranslation, type TranslationFunction } from '../utils/language-store';
 
@@ -90,7 +91,7 @@ export const WorkspaceStatusDock: React.FC<WorkspaceStatusDockProps> = ({
   hasProjectSaveBaseline,
   onOpen,
 }) => {
-  const { t } = useTranslation();
+  const { t, language } = useTranslation();
   const copy = modeCopy(storageMode, t);
   const title = workspaceName(storageMode, projectName, t);
   const saveStatus = saveStatusCopy(isSaving, hasUnsavedChanges, hasProjectSaveBaseline, t);
@@ -149,7 +150,7 @@ export const ProjectWorkspacePanel: React.FC<ProjectWorkspacePanelProps> = ({
   onSaveProject,
   onOpenImportJobs,
 }) => {
-  const { t } = useTranslation();
+  const { t, language } = useTranslation();
   if (!isOpen) return null;
 
   const copy = modeCopy(storageMode, t);
@@ -201,7 +202,7 @@ export const ProjectWorkspacePanel: React.FC<ProjectWorkspacePanelProps> = ({
         </section>
 
         <section className={`mt-3 rounded-xl border px-3 py-2.5 text-xs ${toneClass(activity.tone)}`} aria-live="polite">
-          <span className="font-medium">{t('workspace.activityLabel')}</span>{activity.message}
+          <span className="font-medium">{t('workspace.activityLabel')}</span>{canvasMessage(activity.message, language)}
         </section>
 
         <section className={`mt-3 rounded-xl border px-3 py-2.5 text-xs ${saveStatus.className}`} aria-live="polite">

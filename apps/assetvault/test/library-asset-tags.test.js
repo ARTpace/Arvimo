@@ -29,7 +29,7 @@ test('只在发现页整理也能持久保存，关闭重开或平台重新返�
 });
 test('原始和 AI 标签紧凑合并并安全转义，重复标签不重复显示',()=>{
  const html=tagPanel({aiTags:{[uid]:['TREE','<script>']}},{uid,tags:['tree','rock']},esc);
- assert.doesNotMatch(html,/平台标签|AI 标签 ·|<small>/);assert.match(html,/<svg[^>]*>.*?<\/svg><\/i> AI标签/);
+ assert.doesNotMatch(html,/平台标签|AI 标签 ·|<small>/);assert.match(html,/class="tag-section-head"/);assert.doesNotMatch(html,/<span>视觉识别<\/span>/);assert.match(html,/aria-label="视觉识别标签"/);
  assert.match(html,/&lt;script&gt;/);assert.doesNotMatch(html,/>TREE</);
  assert.match(html,/data-action="ai-tags"/);
 });
@@ -61,12 +61,23 @@ test('我的标签：增删、跨资产重命名/删除，与平台/AI 层合并
  assert.deepEqual(userTagsFor(state,{uid}),['机甲']);
  assert.equal(tagsFor(state,{uid,tags:['src']}).length,2);
 });
-test('标签面板三层并排：平台可检索、AI 带 SVG、我的带移除按钮，评分备注同面板',()=>{
+test('标签面板分层样式：平台可检索、AI保留来源样式、我的可移除，评分备注同面板',()=>{
  const html=tagPanel({aiTags:{[uid]:['ai-tag']},userTags:{[uid]:['mine']},userMeta:{[uid]:{rating:3,note:'ok'}}},{uid,tags:['platform']},esc);
  assert.match(html,/data-tag="platform"/);
- assert.match(html,/<svg[^>]*>.*?<\/svg><\/i>ai-tag/);
+ assert.match(html,/class="tag-chip ai" data-tag="ai-tag"/);
  assert.match(html,/data-remove-tag="mine"/);
  assert.match(html,/data-rate="3"/);
  assert.match(html,/>ok</);
  assert.doesNotMatch(html,/data-remove-tag="platform"/);
+});
+
+
+test('重新生成只替换旧 AI 标签，保留平台和手动标签且去重',()=>{
+ const model={uid,tags:['平台标签']};
+ const state={aiTags:{[uid]:['旧标签','保留词']},userTags:{[uid]:['手动标签']}};
+ addAITags(state,model,['新标签','新标签','平台标签','保留词'],{replace:true});
+ assert.deepEqual(state.aiTags[uid],['新标签','保留词']);
+ assert.deepEqual(model.tags,['平台标签']);
+ assert.deepEqual(state.userTags[uid],['手动标签']);
+ assert.ok(!tagsFor(state,model).includes('旧标签'));
 });

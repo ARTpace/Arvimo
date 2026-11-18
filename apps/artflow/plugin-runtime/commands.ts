@@ -5,6 +5,15 @@
 
 import type { Contribution, Kernel } from './kernel';
 import { resolveLocalizedText, type LocalizedText, type UiLanguage } from './i18n';
+import {getPreference,setPreference,deletePreference} from './preferences-store';
+
+export const COMMAND_SHORTCUT_PREF='input.commandShortcuts';
+type StoredBinding={key:string;mod:boolean;alt:boolean;shift:boolean};
+export function setCommandShortcut(id:string,binding:CommandKeybinding|null){
+ const overrides=getPreference<Record<string,StoredBinding|null>>(COMMAND_SHORTCUT_PREF,{});
+ setPreference(COMMAND_SHORTCUT_PREF,{...overrides,[id]:binding?{key:binding.key,mod:!!binding.mod,alt:!!binding.alt,shift:!!binding.shift}:null});
+}
+export function resetCommandShortcuts(){deletePreference(COMMAND_SHORTCUT_PREF);}
 
 export interface CommandKeybinding {
   /** `KeyboardEvent.key`, normalized to lowercase (for example `f` or `k`). */
@@ -57,7 +66,16 @@ export function resolveCommandText(
 }
 
 export function listCommandContributions(kernel: Kernel): readonly CommandContribution[] {
-  return kernel.contributions.list<CommandDefinition>('commands');
+  const overrides=getPreference<Record<string,StoredBinding|null>>(COMMAND_SHORTCUT_PREF,{});
+  return kernel.contributions.list<CommandDefinition>('commands').map(entry=>Object.prototype.hasOwnProperty.call(overrides,entry.id)
+    ?{...entry,value:{...entry.value,shortcut:overrides[entry.id]??undefined}}:entry);
+}
+
+/** Stop legacy fallback listeners from executing a default that the user replaced. */
+export function isReplacedCommandShortcut(kernel:Kernel,event:KeyEventLike):boolean{
+ const overrides=getPreference<Record<string,StoredBinding|null>>(COMMAND_SHORTCUT_PREF,{});
+ return kernel.contributions.list<CommandDefinition>('commands').some(entry=>Object.prototype.hasOwnProperty.call(overrides,entry.id)
+  &&!!entry.value.shortcut&&matchesCommandKeybinding(entry.value.shortcut,event));
 }
 
 /** Space-separated terms must each occur in the plugin-supplied searchable metadata. */

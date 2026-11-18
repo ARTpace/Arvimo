@@ -2,8 +2,35 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
 import Database from 'better-sqlite3';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import {MIGRATIONS, SUPPORTED_SCHEMA_VERSION, STATE_KEYS, planMigrations} from '../server/library-schema.mjs';
 import {createLibraryDb} from '../server/library-db.mjs';
+
+test('早期无 seed_key 的 v8 原样升级 v11，保留资产与用户域，未知 checksum 仍拒绝',t=>{
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'av-legacy-v8-'));t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
+ const file=path.join(dir,'library.db'),old=new Database(file),uid='a'.repeat(32);
+ for(const item of MIGRATIONS.filter(item=>item.version<=10)){
+  const sql=item.version===8?item.sql.replace('ALTER TABLE tag_terms ADD COLUMN seed_key TEXT;\n','').replace('CREATE UNIQUE INDEX tag_terms_seed_key_idx ON tag_terms(seed_key) WHERE seed_key IS NOT NULL;\n',''):item.sql;
+  const checksum=createHash('sha256').update(sql).digest('hex');old.exec(sql);
+  old.prepare('INSERT INTO schema_migrations VALUES (?,?,?,?)').run(item.version,item.name,checksum,'2026-11-14');
+ }
+ const payload=JSON.stringify({uid,name:'原图片.png',tags:['保留标签']});
+ old.prepare('INSERT INTO assets(uid,position,state,payload) VALUES (?,0,?,?)').run(uid,'active',payload);
+ const user=JSON.stringify({favorites:[uid],userTags:{[uid]:['人工标签']}});
+ old.prepare('INSERT INTO state_meta VALUES (?,?,1)').run('sfx-library-user',user);old.close();
+ for(let i=0;i<2;i++){
+  const db=createLibraryDb({Database,file});try{
+   assert.equal(db.all('SELECT payload FROM assets WHERE uid=?',[uid])[0].payload,payload);
+   assert.equal(db.all('SELECT value FROM state_meta WHERE key=?',['sfx-library-user'])[0].value,user);
+   assert.equal(db.all('SELECT checksum FROM schema_migrations WHERE version=8')[0].checksum,'eb50f21a908d606a3422e42a0c3331c1aa04d32b72fc4f1302886aebb62c063a');
+   assert.equal(db.all("SELECT 1 FROM pragma_table_info('tag_terms') WHERE name='seed_key'").length,1);
+   assert.equal(db.all('SELECT 1 FROM schema_migrations WHERE version=11').length,1);
+  }finally{db.close();}
+ }
+ assert.throws(()=>planMigrations([{version:8,checksum:'unknown'}]),/checksum 不匹配/);
+});
 
 test('迁移链版本连续，checksum 与 SQL 本体一致', () => {
   assert.equal(SUPPORTED_SCHEMA_VERSION, MIGRATIONS.at(-1).version);
@@ -36,10 +63,10 @@ test('v1…v5 建出核心表与索引，重复打开不会重复迁移', () => 
       'tag_terms', 'tag_facets', 'tag_aliases', 'asset_tags', 'asset_formats',
       'content_tags', 'audit_log', 'members', 'jobs', 'tag_counts',
       // V6：语义向量（可再生派生数据，独立于 assets）
-      'asset_vectors']) assert.ok(names.includes(table), `缺少 ${table}`);
+      'asset_vectors', 'file_roots', 'file_locations', 'file_operations']) assert.ok(names.includes(table), `缺少 ${table}`);
     // V3 / V4 是纯索引迁移（下推用），V5 是列化迁移（分类 / 可下载），V6 新增向量表，
     // 但迁移链必须整条跑完。
-    assert.equal(db.counts().migrations, 6);
+    assert.equal(db.counts().migrations, MIGRATIONS.length);
 
     // V4 的覆盖索引：uid 必须落在索引尾部，否则每行命中都要回表。
     // 这是 V3/V4 反复出现的同一条教训，用断言钉死，别让后人「顺手改回去」。

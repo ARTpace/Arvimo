@@ -13,6 +13,7 @@
 import {esc} from './html-esc.js';
 import {platformLabel} from './platforms.js';
 import {openExternal} from './open-url.js';
+import {normalizeContextMenu} from './menu-policy.js';
 
 /** 右键菜单：条目 + 定位 + 关闭 + 键盘导航。buildItems 返回 null 表示这里不该出菜单。
  *  targetOf 决定「右键在谁身上才出菜单」，默认是资产卡；画板卡等其它实体各自传自己的选择器，
@@ -48,14 +49,14 @@ export function createContextMenu({icon, notify = () => {}, buildItems,
       // action 型条目带 data-action，事件继续冒泡给 app.js 的既有分发执行；
       // 关闭动作延后到下一个宏任务，避免先清空 DOM 把 data-action 一起带走。
       const action = item.action ? ` data-action="${esc(item.action)}"` : '';
-      return `<button class="${cls}" role="menuitem" type="button" data-ctx-index="${index}"${action}${attrs}${item.disabled ? ' disabled' : ''}>${icon(item.icon || 'cube')}<span>${esc(item.label)}</span></button>`;
+      return `<button class="${cls}" role="menuitem" type="button" data-ctx-index="${index}"${action}${attrs}${item.hint?` title="${esc(item.hint)}" aria-description="${esc(item.hint)}"`:''}${item.disabled ? ' disabled' : ''}>${icon(item.icon || 'cube')}<span>${esc(item.label)}</span></button>`;
     }).join('');
     menu.innerHTML = head + items;
   };
 
   const open = (card, x, y) => {
-    const spec = buildItems(card);
-    // 没有可用条目就别弹菜单 —— 这时让浏览器原生右键菜单接手，用户还能复制图片地址。
+    const spec = normalizeContextMenu(buildItems(card));
+    // 没有可用条目就不弹菜单（调用方已经拦掉原生菜单，见下面的 contextmenu 处理）。
     if (!spec || !spec.items || !spec.items.length) return false;
     current = spec.items;
     render(spec);
@@ -80,13 +81,16 @@ export function createContextMenu({icon, notify = () => {}, buildItems,
 
   document.addEventListener('contextmenu', event => {
     if (editable(event.target)) return;
-    const card = cardOf(event.target);
-    if (!card) { close(); return; }
     // 正在选中文本时右键：让浏览器原生菜单接手（复制选中的文字）。
     if (String(window.getSelection?.() || '').trim()) return;
-    // 只有真能弹出菜单时才拦下原生菜单。
-    if (!open(card, event.clientX, event.clientY)) { close(); return; }
+    // 除输入框和选中文本，工具里不再出现 WebView2 的原生菜单（返回 / 刷新 / 另存为 / 打印 / 检查）。
+    // 以前只在卡片上拦，空白处右键就漏出系统菜单（用户 2026-11-14 反馈）；这里一律先拦掉，
+    // 有卡片菜单可弹再弹自己的。
     event.preventDefault();
+    const card = cardOf(event.target);
+    if (!card) { close(); return; }
+    // 有卡片菜单就弹自己的。
+    if (!open(card, event.clientX, event.clientY)) { close(); }
   });
 
   menu.addEventListener('click', event => {
@@ -169,6 +173,20 @@ const menuSpec = (title, subtitle, groups) => {
   return {title, subtitle, items};
 };
 
+/** 资产合集卡（.model-card[data-card-group]）：容器级动作，成员拆分在合集内部右键。 */
+export function groupMenuItems(ctx) {
+  const {row} = ctx;
+  return {
+    title: row?.name || '资产合集',
+    subtitle: `${row?.children?.length || 0} 项资产`,
+    items: [
+      {icon: 'folder', label: '打开合集', run: () => ctx.card.click()},
+      ctx.onDissolve && {icon: 'minus', label: '解散整个合集', danger: true,
+        confirm: '解散后成员回到全部资产，原资产保留', run: () => ctx.onDissolve()},
+    ].filter(Boolean),
+  };
+}
+
 /**
  * 远端资产卡（.model-card[data-uid]）的菜单条目。
  * 只判「能不能下载 / 打开文件夹 / 导出」这类上下文，动作一律沿用卡片的 data-action；
@@ -192,8 +210,11 @@ export function assetMenuItems(ctx) {
     sendToCanvas,
   ] : [
     {icon: 'eye', label: '打开预览', action: 'preview', attrs: {uid}},
-    canDownload && {icon: 'download', label: '下载到本地', action: 'download', attrs: {uid}},
+    canDownload && !revealId && !ctx.onReveal && {icon: 'download', label: '下载到本地', action: 'download', attrs: {uid}},
     revealId && {icon: 'folder', label: '打开下载文件夹', action: 'reveal-download', attrs: {id: revealId}},
+    // 「重新定位」进来的库内资产（storageMode='linked'）在磁盘上有确切路径：直接定位到那个文件。
+    // 只给这一种：没下载到本机的资产没有路径可开，硬给一颗键只会点了报错。
+    !revealId && ctx.onReveal && {icon: 'folder', label: '打开所在文件夹', run: () => ctx.onReveal()},
     canExport && {icon: 'share', label: '发送到其它软件…', run: () => clickInside(ctx.card, '.export-toggle')},
     url && {icon: 'external', label: '在浏览器打开官方页面', run: () => openExternalLink(url)},
     sendToCanvas,
@@ -207,21 +228,22 @@ export function assetMenuItems(ctx) {
     url && {icon: 'link', label: '复制官方链接', run: () => copyText(url).then(ok => notify(ok ? '链接已复制' : '复制失败，请手动复制'))},
   ] : [
     {icon: 'heart', label: favorite ? '取消收藏' : '收藏', action: 'favorite', attrs: {uid}},
-    !isVisitor && (inLibrary
-      ? {icon: 'trash', label: '从模型库移除', action: 'remove', attrs: {uid}}
-      : {icon: 'save', label: '加入模型库', action: 'collect', attrs: {uid}}),
+    !isVisitor && !inLibrary && {icon: 'save', label: '加入模型库', action: 'collect', attrs: {uid}},
     {icon: 'tag', label: '标签与评分…', action: 'asset-tags', attrs: {uid}},
+    ctx.onCustomCategory && {icon:'layers',label:'归入自定义子类…',run:()=>ctx.onCustomCategory()},
     ctx.onBoardPicker && !isVisitor && {icon: 'layers', label: '加入画板…', run: () => ctx.onBoardPicker([uid], {mode: 'add'})},
-    ctx.onBoardPicker && !isVisitor && {icon: 'minus', label: '从画板移出…', run: () => ctx.onBoardPicker([uid], {mode: 'remove'})},
+    ctx.inBoard && ctx.onBoardPicker && !isVisitor && {icon: 'minus', label: '从画板移出', run: () => ctx.onBoardPicker([uid], {mode: 'remove'})},
+    ctx.onGroupSplit && {icon: 'minus', label: '从合集移出', run: () => ctx.onGroupSplit()},
     ctx.onSimilar && {icon: 'search', label: '找相似资产', run: () => ctx.onSimilar(uid)},
     url && {icon: 'link', label: '复制官方链接', run: () => copyText(url).then(ok => notify(ok ? '链接已复制' : '复制失败，请手动复制'))},
     ctx.canRelink && {icon: 'folder', label: '重新定位链接文件…', run: () => ctx.onRelink?.()},
   ]);
   // 危险操作：仅资产库（发现页不提供本地删除 / 回收站操作）。
   const danger = isDiscover ? [] : [
+    !isTrash && !isVisitor && inLibrary && {icon:'trash',label:'移入回收站（保留文件）',action:'remove',attrs:{uid}},
     isTrash && {icon: 'rotate', label: '放回模型库', action: 'restore', attrs: {uid}},
     isTrash && {icon: 'trash', label: '彻底删除记录', action: 'purge', attrs: {uid}, danger: true},
-    ctx.onDelete && !isVisitor && {icon: 'trash', label: '删除', confirm: '再点一次，连本地文件一起删除', danger: true, run: () => ctx.onDelete()},
+    ctx.onDelete && !isVisitor && {icon: 'trash', label: ctx.deleteLabel || '删除资产及本地文件…', confirm: ctx.deleteConfirm || '再点一次，连本地文件一起删除', danger: true, run: () => ctx.onDelete()},
   ];
   return menuSpec(model?.name || '资产', platformLabel(model?.platform), [
     {label: '打开与获取', items: open},
@@ -238,10 +260,15 @@ export function packageMenuItems(ctx) {
   const key = `${pkg?.root}|${pkg?.rel}`;
   const open = [
     {icon: 'eye', label: '打开素材包', run: () => clickInside(ctx.card, '.preview-hit')},
+    ctx.onAlbumBoard && {icon:'layers',label:'图集加入画板…',run:()=>ctx.onAlbumBoard()},
     {icon: 'download', label: '下载为 ZIP', run: () => clickInside(ctx.card, '[data-package-download]')},
     pkg?.remote && {icon: 'download', label: '下载原图', run: () => ctx.onPackageAction?.(key, 'fetch')},
+    // 素材包的 rel 就是它在磁盘上的目录：直接让资源管理器打开这个目录。
+    ctx.onReveal && {icon: 'folder', label: '打开所在文件夹', run: () => ctx.onReveal()},
+    ctx.onCustomCategory && {icon:'layers',label:'归入自定义子类…',run:()=>ctx.onCustomCategory()},
   ];
   const organize = [
+    ctx.onGroupSplit && {icon: 'minus', label: '从合集移出', run: () => ctx.onGroupSplit()},
     canRegister && {icon: 'tag', label: '登记 info.json', run: () => ctx.onPackageAction?.(key, 'register')},
     pkg?.rel && {icon: 'link', label: '复制路径', run: () => copyText(pkg.rel).then(ok => notify(ok ? '路径已复制' : '复制失败，请手动复制'))},
   ];
@@ -260,10 +287,12 @@ export function packageMenuItems(ctx) {
  *  序列是资产、画板是容器——除了「播放」也给「加入画板」，与模型卡同一套组织逻辑；
  *  不再在卡片上摆多余按钮，低频动作全收进右键。 */
 export function sequenceMenuItems(ctx) {
-  const {seq, uid, onOpen, onBoardPicker, onCopyPath, onSendToCanvas, notify = () => {}} = ctx;
+  const {seq, uid, onOpen, onBoardPicker, onCopyPath, onSendToCanvas, onReveal, notify = () => {}} = ctx;
   const items = [
     {icon: 'eye', label: '播放序列', run: () => onOpen?.(uid)},
   ];
+  // 序列是同一个目录里的一批帧：定位第一帧，打开的就是那个目录，且选中了一张图。
+  if (onReveal) items.push({icon: 'folder', label: '打开所在文件夹', run: () => onReveal()});
   if (onSendToCanvas) items.push({icon: 'grid', label: '发送到画布', run: () => onSendToCanvas([uid])});
   if (onBoardPicker) items.push({icon: 'layers', label: '加入画板…', run: () => onBoardPicker([uid], {mode: 'add'})});
   if (onCopyPath) items.push({icon: 'link', label: '复制路径', run: () => onCopyPath()});
@@ -276,13 +305,19 @@ export function fileMenuItems(ctx) {
   const {file, notify = () => {}} = ctx;
   const open = [
     {icon: 'eye', label: '打开文件', run: () => ctx.card.click()},
+    ctx.onReveal && {icon: 'folder', label: '打开所在文件夹', run: () => ctx.onReveal()},
+    ctx.onCustomCategory && {icon:'layers',label:'归入自定义子类…',run:()=>ctx.onCustomCategory()},
     file?.rel && {icon: 'link', label: '复制路径', run: () => copyText(file.rel).then(ok => notify(ok ? '路径已复制' : '复制失败，请手动复制'))},
   ];
   const danger = [
     ctx.onDelete && {icon: 'trash', label: '删除', confirm: '再点一次，删除本地文件', danger: true, run: () => ctx.onDelete()},
   ];
+  const organize = [
+    ctx.onGroupSplit && {icon: 'minus', label: '从合集移出', run: () => ctx.onGroupSplit()},
+  ];
   return menuSpec(file?.name || '文件', file?.rel || '', [
     {label: '打开与获取', items: open},
+    {label: '整理', items: organize},
     {label: '危险操作', items: danger},
   ]);
 }
@@ -298,7 +333,7 @@ export function pictureMenuItems(ctx) {
   const author = absoluteUrl(data.authorUrl || '');
   const open = [
     {icon: 'eye', label: isVideo ? '播放视频' : '打开大图预览', run: () => img.click()},
-    original && {icon: 'download', label: isVideo ? '视频另存到本机…' : '原图另存到本机…', run: () => saveOriginal(original, data.title || '', isVideo)},
+    original && {icon: 'download', label: isVideo ? '视频另存到本机…' : '原图另存到本机…', run: () => saveOriginal(original, data.title || '', isVideo).catch(error=>notify(`保存失败：${error.message}`))},
     ctx.onBookmark && {icon: 'save', label: '只入库不下载', run: () => ctx.onBookmark()},
   ];
   const organize = [
@@ -320,15 +355,21 @@ export function pictureMenuItems(ctx) {
 
 /** 存原图：走本地代理（图站校验 Referer，直连会 403），full=1 取原始像素。
  *  视频没有 full 概念，走 /api/video 直通原文件。 */
-function saveOriginal(url, title, video = false) {
+export async function saveOriginal(url, title, video = false) {
   const href = new URL(video ? `/api/video?url=${encodeURIComponent(url)}` : `/api/image?url=${encodeURIComponent(url)}&full=1`, location.origin).href;
+  const response=await fetch(href,{headers:{'X-SFX-Local':'1'}});
+  if(!response.ok)throw new Error(`原图请求失败（HTTP ${response.status}）`);
+  const blob=await response.blob();
+  if(!blob.size||/json|text\/html/i.test(blob.type))throw new Error('平台没有返回有效图片或视频');
+  const objectUrl=URL.createObjectURL(blob);
   const link = document.createElement('a');
-  link.href = href;
+  link.href = objectUrl;
   link.download = originalFileName(url, title);
   link.rel = 'noopener';
   document.body.appendChild(link);
   link.click();
   link.remove();
+  setTimeout(()=>URL.revokeObjectURL(objectUrl),60000);
 }
 
 /** 文件名：优先用标题，扩展名从地址里取（拿不到就当 jpg —— 这几家图床基本只有 jpg/png）。 */

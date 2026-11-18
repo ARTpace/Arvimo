@@ -1,3 +1,4 @@
+import {assembleLibraryStyles} from '../scripts/lib/library-styles.mjs';
 // 回归守卫：预览弹窗重构给 <iframe id="viewer"> 加了 hidden 之后，
 // 平台自带 viewer 的路径（Sketchfab / ambientCG / SBSAR / ArtStation Marmoset）
 // 不走 gltfPreview.prepareStage()，曾全部永久停在「正在加载模型…」。
@@ -13,7 +14,7 @@ const read = (rel) => fs.readFileSync(path.join(root, rel), 'utf8');
 const lv = read('src/library/library-view.js');
 const as = read('src/library/artstation-ui.js');
 const html = read('src/library/index.html');
-const css = read('src/library/app.css');
+const css = assembleLibraryStyles();
 const sc = read('scripts/self-check.mjs');
 
 test('iframe 默认 hidden 必须有成对的舞台切换', () => {

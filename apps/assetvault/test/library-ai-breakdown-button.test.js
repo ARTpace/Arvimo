@@ -1,3 +1,4 @@
+import {assembleLibraryStyles} from '../scripts/lib/library-styles.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -12,7 +13,7 @@ const read=file=>fs.readFileSync(path.join(root,file),'utf8');
 const html=read('src/library/index.html');
 const app=read('src/library/app.js');
 const motion=read('src/library/search-motion.js');
-const css=read('src/library/app.css');
+const css=assembleLibraryStyles();
 const motionCss=read('src/library/search-motion.css');
 
 test('AI 拆解键搬进 .global-search，且在输入框内的最后一个位置',()=>{

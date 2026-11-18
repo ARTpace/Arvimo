@@ -1,0 +1,27 @@
+{
+  "at": "2026-11-14T17:14:16.117Z",
+  "node": "v22.19.0",
+  "platform": "win32",
+  "cpu": "Intel(R) Core(TM) Ultra 7 265KF",
+  "scope": "合成 SQLite 定位/标签分页/根预检/关联审计；不代表导入、图像解码、真实移动、掉电或界面验收",
+  "results": [
+    {
+      "count": 50000,
+      "fixtureInsertMs": 2057.08,
+      "locationLookupMs": 0.14,
+      "tagPageMs": 65.4,
+      "rootPreflightMs": 258.2,
+      "identityAuditMs": 13.83,
+      "rssMB": 174.8
+    },
+    {
+      "count": 200000,
+      "fixtureInsertMs": 6914.38,
+      "locationLookupMs": 0.16,
+      "tagPageMs": 342.74,
+      "rootPreflightMs": 1380.96,
+      "identityAuditMs": 191.24,
+      "rssMB": 363.2
+    }
+  ]
+}

@@ -1,3 +1,4 @@
+import {assembleLibraryStyles} from '../scripts/lib/library-styles.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -7,7 +8,7 @@ import {createCardView} from '../src/library/card-view.js';
 import {createSendMenu,exportMenuHtml,applicableTargets,setSelectedTarget,selectedTargetFor,effectiveTarget,targetById} from '../src/library/export-targets.js';
 import {platformLabel} from '../src/library/platforms.js';
 
-const css=fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)),'..','src','library','app.css'),'utf8');
+const css=assembleLibraryStyles();
 const icon=name=>`<i class="${name}"></i>`;
 const esc=s=>s==null?'':String(s);
 

@@ -1,6 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {execFileSync} from 'node:child_process';
 import {matchesWindowsOwner,lockOwnerAlive,processIdentity,canReplaceOwner} from '../server/process-lock.mjs';
+
+test('已退出的锁持有者无需启动 PowerShell，查询超时不应阻断热重启',()=>{
+ const pid=Number(execFileSync(process.execPath,['-e','process.stdout.write(String(process.pid))'],{encoding:'utf8',windowsHide:true}));
+ assert.equal(lockOwnerAlive({pid,startedAt:Date.now(),executable:process.execPath},()=>assert.fail('dead processes must not invoke slow CIM inspection')),false);
+});
 
 test('桌面接管必须同时确认服务命令、路径和创建时间',()=>{
  const owner={pid:123,startedAt:10000,executable:'C:/AssetVault/node.exe'};

@@ -9,6 +9,22 @@ const state = models => ({'sfx-library-v2': JSON.stringify({
   models, aiTags: {}, userTags: {}, userMeta: {}, favorites: [], trashed: [],
 })});
 
+test('内置稳定 seed ID 改名保留 term_id、旧名称别名与排除；冲突回滚不推进版本',()=>{
+ const db=createLibraryDb({Database,file:':memory:'});
+ try{
+  const native=db.native(),facets={subject:'题材'};
+  syncVocab(native,{rev:100,facets,terms:[{id:'test-fixed',value:'测试旧名称',facets:['subject']}]});
+  const id=db.all("SELECT term_id FROM tag_terms WHERE seed_key='test-fixed'")[0].term_id;
+  db.run("INSERT INTO tag_rejections VALUES (?,?,?,?)",['a'.repeat(32),id,'ai',1]);
+  syncVocab(native,{rev:101,facets,terms:[{id:'test-fixed',value:'测试新名称',facets:['subject']}]});
+  assert.equal(db.all("SELECT term_id FROM tag_terms WHERE norm='测试新名称'")[0].term_id,id);
+  assert.equal(db.all("SELECT term_id FROM tag_aliases WHERE alias_norm='测试旧名称'")[0].term_id,id);
+  assert.equal(db.all('SELECT term_id FROM tag_rejections')[0].term_id,id);
+  assert.throws(()=>syncVocab(native,{rev:102,facets,terms:[{id:'duplicate',value:'甲',facets:['subject']},{id:'duplicate',value:'乙',facets:['subject']}]}),/重复/);
+  assert.equal(db.getMeta('vocab_rev'),'101');assert.equal(db.all("SELECT * FROM tag_terms WHERE norm='甲'").length,0);
+ }finally{db.close();}
+});
+
 test('打开库即把种子词表激活，并把同名别名合并到 canonical', () => {
   const db = createLibraryDb({Database, file: ':memory:'});
   const uid = 'a'.repeat(32);
@@ -108,6 +124,6 @@ test('分面视图：一个词挂多个面，计数按资产去重且各面一�
 
     assert.ok(view.rev > 0);
     assert.equal(view.totals.pending, 0, '种子内的词都已 active');
-    assert.deepEqual(view.facets.map(item => item.key), ['style', 'subject', 'material', 'usage', 'mood', 'tech']);
+    assert.deepEqual(view.facets.map(item => item.key), ['style', 'subject', 'material', 'usage', 'mood', 'tech', 'software', 'license', 'platform']);
   } finally { db.close(); }
 });

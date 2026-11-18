@@ -1,9 +1,11 @@
 import {ACTIVE,WAITING,TERMINAL} from './download-progress.js';
+import {captureDownloadFlight} from './download-flight.js';
 import {createTaskCard} from './download-card.js';
 import {createFolderPicker} from './folder-picker.js';
 import {createBrowserDelivery,fetchBrowserAsset} from './browser-delivery.js';
 import {createClientDirectory} from './client-directory.js';
 import {isLanVisitor} from './visitor-mode.js';
+import {askConfirm} from './ask-dialog.js';
 // Only Sketchfab conversion drives a headless browser; ArtStation runs the mviewer CLI, so a
 // missing browser must not be reported as a problem for an ArtStation-only queue.
 const needsBrowser=j=>j.kind==='sketchfab'&&!TERMINAL.has(j.state);
@@ -41,17 +43,16 @@ export function createDownloadUI({$,icon,esc,toast,legacy,requestLegacy,onUpdate
   setTimeout(()=>{try{dialog.showModal();$('#download-path-input').focus();}catch{}},0);
  }
  function accept(data){const signature=data.jobs.map(j=>j.id+':'+j.state+':'+j.fileExists).join('|');const changed=signature!==ui.signature;ui.signature=signature;ui.jobs=data.jobs;ui.settings=data.settings;ui.defaultFolder=data.defaultFolder;ui.folderStatus=data.folderStatus||{ok:true};if(ui.folderStatus.ok)ui.pathPromptedFor='';ui.connected=true;ui.browserAvailable=data.browserAvailable;ui.blenderAvailable=data.fbxAvailable;const pathWarning=ui.folderStatus&&!ui.folderStatus.ok?ui.folderStatus.message:'';ui.warning=data.storageError||data.warning||pathWarning||(!data.browserAvailable&&data.jobs.some(needsBrowser)?'未找到后台 Chrome/Edge，Sketchfab 模型转换需要浏览器；ArtStation 转换不受影响。':'');ui.lastWarning=ui.warning;ui.selected=new Set([...ui.selected].filter(id=>ui.jobs.some(j=>j.id===id)));onUpdate(changed);if(isVisible())render();promptForFolder();}
- async function refresh(){if(ui.pending)return;ui.pending=true;try{const data=await api();if(data)accept(data);else{const disconnected=!ui.connected;ui.connected=true;ui.warning=ui.lastWarning||'';if(isVisible()){if(disconnected)renderHeader();if(ui.jobs.some(j=>ACTIVE.has(j.state)))renderList();}}}catch(e){ui.connected=false;ui.warning='后台服务未连接：'+e.message;if(isVisible())renderHeader();}finally{ui.pending=false;}}
+ async function refresh(){if(ui.pending)return ui.pending;ui.pending=(async()=>{try{const data=await api();if(data)accept(data);else{const disconnected=!ui.connected;ui.connected=true;ui.warning=ui.lastWarning||'';if(isVisible()){if(disconnected)renderHeader();if(ui.jobs.some(j=>ACTIVE.has(j.state)))renderList();}}}catch(e){ui.connected=false;ui.warning='后台服务未连接：'+e.message;if(isVisible())renderHeader();}finally{ui.pending=null;}})();return ui.pending;}
  function visible(){return ui.jobs.filter(j=>ui.filter==='all'||ui.filter==='active'&&ACTIVE.has(j.state)||ui.filter==='waiting'&&WAITING.has(j.state)||ui.filter==='saved'&&j.state==='saved'||ui.filter==='failed'&&['failed','interrupted'].includes(j.state)||ui.filter==='cancelled'&&j.state==='cancelled');}
  function renderHeader(){
-  $('#task-count').textContent=ui.jobs.length;$('#download-service').innerHTML=`<span class="live-dot"></span>${ui.connected?'后台服务在线 · 关页仍可下载':'等待连接后台服务'}`;
-  $('#download-warning').hidden=!ui.warning;$('#download-warning').textContent=ui.warning||'';
-  $('#download-folder').textContent=visitor?(clientDirectory.name?`本机文件夹：${clientDirectory.name}`:'此电脑的浏览器下载目录（在浏览器设置中指定）'):(ui.settings?.folder||'正在读取保存目录…');
+  $('#task-count').textContent=ui.jobs.length;$('#download-service').innerHTML=`<span class="live-dot"></span>${ui.connected?'在线':'未连接'}`;
+  $('#download-service').title=ui.warning||'任务在后台继续处理';
   // 队列说明原本占一整行，简化后收进暂停键的 title：鼠标停上去就有，不占版面。
   const pause=$('#queue-pause');
-  pause.textContent=ui.settings?.paused?'继续排队':'暂停队列';
-  pause.title=ui.settings?.paused?'队列已暂停：不会开始新任务，正在执行的任务仍继续。':`最多 ${ui.settings?.concurrency||1} 个任务同时执行 · 关闭本地服务会中断任务`;
-  pause.disabled=!ui.connected;
+  pause.textContent=ui.settings?.paused?'继续全部':'暂停全部';
+  pause.title=ui.settings?.paused?'继续全部任务；转换任务重新执行，图片任务沿用已有续传机制':'暂停正在执行和等待中的任务；正在提交保存的文件会完成保存';
+  pause.disabled=!ui.connected||!!ui.changingPause;
   // 各状态计数并进筛选页签，替掉原先四张统计卡：分组切换时顺手能看到有多少，且不挤占任务列表。
   const groups={all:ui.jobs.length,active:ui.jobs.filter(j=>ACTIVE.has(j.state)).length,waiting:ui.jobs.filter(j=>WAITING.has(j.state)).length,saved:ui.jobs.filter(j=>j.state==='saved').length,failed:ui.jobs.filter(j=>['failed','interrupted'].includes(j.state)).length,cancelled:ui.jobs.filter(j=>j.state==='cancelled').length};
   document.querySelectorAll('[data-task-filter]').forEach(b=>{
@@ -115,8 +116,6 @@ export function createDownloadUI({$,icon,esc,toast,legacy,requestLegacy,onUpdate
  function setup(){
   if(visitor){
    directoryReady.then(()=>renderHeader());
-   $('#download-folder').closest('.download-location').querySelector('small').textContent='保存到我的电脑';
-   $('#change-download-folder').textContent='指定保存位置';
    const dialog=$('#client-download-dialog');
    $('#client-choose-directory').hidden=!clientDirectory.supported;
    $('#client-choose-directory').onclick=async()=>{
@@ -132,12 +131,11 @@ export function createDownloadUI({$,icon,esc,toast,legacy,requestLegacy,onUpdate
   document.addEventListener('click',e=>{const filter=e.target.closest('[data-task-filter]');if(filter){ui.filter=filter.dataset.taskFilter;render();}const button=e.target.closest('[data-dm-action]');if(button)action(button.dataset.dmAction,button.dataset.id);const batchButton=e.target.closest('[data-task-batch]');if(batchButton)batch(batchButton.dataset.taskBatch);const old=e.target.closest('[data-legacy-download]');if(old)requestLegacy(old.dataset.legacyDownload);});
   $('#tasks').addEventListener('change',e=>{const id=e.target.dataset.jobSelect;if(id){e.target.checked?ui.selected.add(id):ui.selected.delete(id);render();}});
   $('#task-select-visible').onclick=()=>{for(const t of visible())ui.selected.add(t.id);render();};$('#task-deselect').onclick=()=>{ui.selected.clear();render();};
-  $('#queue-pause').onclick=async()=>{try{accept(await api('/settings',{paused:!ui.settings.paused}));}catch(e){toast(e.message);}};
-  $('#change-download-folder').onclick=()=>{if(visitor){$('#client-download-dialog').showModal();return;}$('#download-path-input').value=ui.settings?.folder||'';$('#download-path-error').textContent='';$('#download-path-dialog').showModal();};
+  $('#queue-pause').onclick=async()=>{const button=$('#queue-pause');if(button.disabled||!ui.settings)return;ui.changingPause=true;button.disabled=true;try{accept(await api('/settings',{paused:!ui.settings.paused}));}catch(e){toast(e.message);}finally{ui.changingPause=false;renderHeader();}};
   $('#save-download-path').onclick=async()=>{const button=$('#save-download-path');button.disabled=true;$('#download-path-error').textContent='';try{await saveSettings({folder:$('#download-path-input').value.trim()});$('#download-path-dialog').close();toast('默认保存路径已更新，新任务将使用此目录');}catch(e){$('#download-path-error').textContent=e.message;}finally{button.disabled=false;}};
   $('#browse-download-path').onclick=()=>chooseFolder($('#download-path-input'),$('#download-path-error'));
-  $('#download-refresh').onclick=refresh;$('#open-download-folder').onclick=async()=>{try{await api('/reveal',{});}catch(e){toast(e.message);}};
-  $('#clear-tasks').onclick=()=>{if(confirm('清除已结束的后台任务记录？不会删除磁盘文件。'))batch('remove',ui.jobs.filter(t=>TERMINAL.has(t.state)).map(t=>t.id));};
+  $('#download-refresh').onclick=async()=>{const button=$('#download-refresh');button.disabled=true;try{await refresh();toast(ui.connected?'任务已刷新':'刷新失败，请检查后台服务');}finally{button.disabled=false;}};
+  $('#clear-tasks').onclick=async()=>{if(await askConfirm({title: '清除任务记录', message: '清除已结束的后台任务记录？不会删除磁盘文件。', confirmText: '清除', danger: true}))batch('remove',ui.jobs.filter(t=>TERMINAL.has(t.state)).map(t=>t.id));};
   let pollToken=0;
   const poll=async()=>{
    const token=++pollToken;
@@ -153,7 +151,7 @@ export function createDownloadUI({$,icon,esc,toast,legacy,requestLegacy,onUpdate
  }
   // `platform` rides along for picture jobs: the queue stores it so a restored job still asks the
   // right source where its pictures live, instead of guessing from the URL shape.
-  async function enqueue(models,options,force,folder,kind='sketchfab',extra={}){const result=await api('/tasks',{kind,models:models.map(modelPayload),options,authorized:true,force,folder,...extra});delivery.track(result.added||[]);await refresh();delivery.accept(ui.jobs);return result;}
+  async function enqueue(models,options,force,folder,kind='sketchfab',extra={}){const fly=captureDownloadFlight(models);const result=await api('/tasks',{kind,models:models.map(modelPayload),options,authorized:true,force,folder,...extra});delivery.track(result.added||[]);await refresh();delivery.accept(ui.jobs);if(result.added?.length)fly();return result;}
  async function saveSettings(values){if(visitor)throw Error('访客不能修改主机设置');accept(await api('/settings',values));}
  return Object.assign(ui,{render,refresh,setup,enqueue,saveSettings,pickFolder,reveal,sendToBlender,activeCount:()=>ui.jobs.filter(j=>ACTIVE.has(j.state)||WAITING.has(j.state)).length,saveToClient:downloadAsset});
 }

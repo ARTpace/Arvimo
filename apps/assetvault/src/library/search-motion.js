@@ -5,6 +5,32 @@ export function initSearchMotion(panel,{notify}={}){
  panel.dataset.motionReady='1';
  const input=panel.querySelector('#asset-query'),clear=panel.querySelector('#search-clear');
  const mascot=panel.querySelector('#search-mascot');
+ // 气泡仍锚定小猫，但不能越过滚动容器或窗口顶部的裁切边界。
+ const bubble=panel.querySelector('#search-mascot-bubble');
+ if(bubble&&typeof ResizeObserver==='function'){
+  let bubbleFrame=0,bubbleOffset=0;
+  const placeBubble=()=>{
+   bubbleFrame=0;
+   let safeTop=8;
+   for(let parent=bubble.parentElement;parent;parent=parent.parentElement){
+    if(/auto|scroll|hidden|clip/.test(getComputedStyle(parent).overflowY)){
+     safeTop=Math.max(safeTop,parent.getBoundingClientRect().top+8);
+    }
+   }
+   const offset=Math.ceil(Math.max(0,safeTop-(bubble.getBoundingClientRect().top-bubbleOffset)));
+   if(offset!==bubbleOffset){
+    bubbleOffset=offset;
+    bubble.style.setProperty('--bubble-safe-offset',`${offset}px`);
+   }
+  };
+  const scheduleBubble=()=>{if(!bubbleFrame)bubbleFrame=requestAnimationFrame(placeBubble);};
+  new ResizeObserver(scheduleBubble).observe(bubble);
+  new MutationObserver(scheduleBubble).observe(bubble,{attributes:true,attributeFilter:['class']});
+  window.addEventListener('resize',scheduleBubble,{passive:true});
+  document.addEventListener('scroll',scheduleBubble,{capture:true,passive:true});
+  scheduleBubble();
+ }
+
  const mini=panel.querySelector('.search-mini-bot'),search=panel.querySelector('#search-button'),ai=panel.querySelector('#theme-breakdown-btn'),kbd=panel.querySelector('kbd');
  const reduced=window.matchMedia('(prefers-reduced-motion: reduce)');
  const eyes=[...panel.querySelectorAll('.bot-eye,.vault-bot-eye')];

@@ -4,13 +4,17 @@
  * 共享 UI 原语来自 plugins/settings-ui。侧栏 navGroup='core'。
  */
 import React, { useEffect, useState } from 'react';
+import '../../../assetvault/src/library/shortcut-settings.css';
 import type { Effect, Kernel } from '../../plugin-runtime/kernel';
 import { SETTINGS_UI_BRIDGE_SERVICE, type SettingsUiBridge } from '../../plugin-runtime/settings-bridge';
 import type { SettingsSectionContribution, SettingsSectionProps } from '../../plugin-runtime/settings-contributions';
 import { SectionBlock, SettingsRow, Segmented } from '../../plugin-runtime/settings-ui';
+import { askConfirm } from '../../components/AskDialog';
 import { listAvailableLanguages } from '../../utils/language-store';
 import { buildShortcutRegistry, findShortcutConflicts, bindingIdentity, type ShortcutRegistryEntry } from '../../plugin-runtime/shortcut-arbitration';
-import { resolveCommandText } from '../../plugin-runtime/commands';
+import { resolveCommandText, listCommandContributions, setCommandShortcut, resetCommandShortcuts, COMMAND_SHORTCUT_PREF, type CommandDefinition } from '../../plugin-runtime/commands';
+import {subscribePreferences} from '../../plugin-runtime/preferences-store';
+import {DEFAULT_GENERATE_HOTKEY,DEFAULT_PRESENTATION_HOTKEYS} from '../../hooks/useSettings';
 import { HOST_PLATFORM_SERVICE, type HostPlatformService } from '../../plugin-runtime/host-platform';
 import type { Hotkey, PresentationHotkeys, WheelAction } from '../../types';
 
@@ -18,7 +22,7 @@ const useBridge = (kernel: Kernel): SettingsUiBridge =>
   kernel.use(SETTINGS_UI_BRIDGE_SERVICE) as SettingsUiBridge;
 
 const formatHotkey = (hotkey: Hotkey): string => {
-  if (!hotkey) return '';
+  if (!hotkey?.key) return '未设置';
   const parts: string[] = [];
   const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
   if (hotkey.metaOrCtrlKey) parts.push(isMac ? '⌘' : 'Ctrl');
@@ -26,6 +30,7 @@ const formatHotkey = (hotkey: Hotkey): string => {
   if (hotkey.shiftKey) parts.push('⇧');
   let keyName = hotkey.key;
   if (keyName === ' ') keyName = 'Space';
+  else if (keyName.startsWith('Arrow')) keyName = ({ArrowUp:'↑',ArrowDown:'↓',ArrowLeft:'←',ArrowRight:'→'} as Record<string,string>)[keyName]||keyName;
   else if (keyName.length === 1) keyName = keyName.toUpperCase();
   parts.push(keyName);
   return parts.join(' + ');
@@ -39,6 +44,7 @@ const useHotkeyRecorder = (
   useEffect(() => {
     if (!recordingKey) return;
     const handleKeyDown = (e: KeyboardEvent) => {
+      if(e.isComposing||e.repeat)return;
       e.preventDefault();
       e.stopPropagation();
       if (['Control', 'Shift', 'Alt', 'Meta'].includes(e.key)) return;
@@ -98,17 +104,18 @@ const GeneralSection: React.FC<SettingsSectionProps> = ({ kernel, language }) =>
   const fileLabel = language === 'zho';
   // 选项来自「内置底座 + 已注册语言包」，而不是写死两档 —— 注册语言包的插件会自动出现在这里。
   const languageOptions = listAvailableLanguages().map(code => ({ value: code, label: languageLabel(code) }));
+  const languageRow = (
+    <SettingsRow label={fileLabel ? '语言' : 'Language'}>
+      <Segmented
+        options={languageOptions}
+        active={bridge.language}
+        onSelect={value => bridge.setLanguage(value)}
+      />
+    </SettingsRow>
+  );
   return (
     <>
-      <SectionBlock title={fileLabel ? '语言' : 'Language'}>
-        <SettingsRow label={fileLabel ? '语言' : 'Language'}>
-          <Segmented
-            options={languageOptions}
-            active={bridge.language}
-            onSelect={value => bridge.setLanguage(value)}
-          />
-        </SettingsRow>
-      </SectionBlock>
+      <SectionBlock title={fileLabel ? '语言' : 'Language'}>{languageRow}</SectionBlock>
       {/* 嵌入时由主应用管理会话，独立运行保留重启操作。 */}
       {(typeof window === 'undefined' || window.parent === window) && <AppSessionSection kernel={kernel} language={language} />}
     </>
@@ -128,9 +135,15 @@ const AppSessionSection: React.FC<SettingsSectionProps> = ({ kernel, language })
   const [notice, setNotice] = useState<string | null>(null);
   const handleRestart = async (): Promise<void> => {
     if (restarting) return;
-    const confirmed = window.confirm(zho
-      ? '重启会关闭当前窗口并重新启动 Arvimo，未保存的改动将丢失。确定要重启吗？'
-      : 'Restart closes this window and relaunches Arvimo; unsaved changes will be lost. Continue?');
+    const confirmed = await askConfirm({
+      title: zho ? '重启应用' : 'Restart app',
+      message: zho
+        ? '重启会关闭当前窗口并重新启动 Arvimo，未保存的改动将丢失。确定要重启吗？'
+        : 'Restart closes this window and relaunches Arvimo; unsaved changes will be lost. Continue?',
+      confirmText: zho ? '重启' : 'Restart',
+      cancelText: zho ? '取消' : 'Cancel',
+      danger: true,
+    });
     if (!confirmed) return;
     setNotice(null);
     setRestarting(true);
@@ -172,100 +185,68 @@ const AppSessionSection: React.FC<SettingsSectionProps> = ({ kernel, language })
 const HotkeysSection: React.FC<SettingsSectionProps> = ({ kernel, language }) => {
   const { wheelAction, setWheelAction, generateHotkey, setGenerateHotkey, presentationHotkeys, setPresentationHotkeys } = useBridge(kernel).hotkeys;
   const [recordingKey, setRecordingKey] = useState<string | null>(null);
+  const [revision, setRevision] = useState(0);
+  const [message, setMessage] = useState('');
+  const [query, setQuery] = useState('');
   const zho = language === 'zho';
-
-  // 快捷键冲突可见性：命令槽注册表 + 同组合键冲突组（裁决顺序 priority DESC → id ASC）。
-  const registry = React.useMemo(() => buildShortcutRegistry(kernel), [kernel]);
-  const conflictIdentities = React.useMemo(
-    () => new Set(findShortcutConflicts(registry).map(group => bindingIdentity(group[0].binding))),
-    [registry],
-  );
-  const conflictEntries = React.useMemo(
-    () => new Map(findShortcutConflicts(registry).flatMap(group => group.map(entry => [entry.contribution.id, group] as const))),
-    [registry],
-  );
-
-  useHotkeyRecorder(recordingKey, hotkey => {
-    if (recordingKey === 'generate') setGenerateHotkey(hotkey);
-    else if (recordingKey) setPresentationHotkeys({ ...presentationHotkeys, [recordingKey]: hotkey });
-    setRecordingKey(null);
-  });
-
-  const presentationHotkeyMap: { key: keyof PresentationHotkeys; label: string }[] = [
-    { key: 'nextSmooth', label: zho ? '下一页（平滑）' : 'Next (smooth)' },
-    { key: 'prevSmooth', label: zho ? '上一页（平滑）' : 'Previous (smooth)' },
-    { key: 'nextDirect', label: zho ? '下一页（直接）' : 'Next (direct)' },
-    { key: 'prevDirect', label: zho ? '上一页（直接）' : 'Previous (direct)' },
+  useEffect(()=>subscribePreferences(COMMAND_SHORTCUT_PREF,()=>setRevision(value=>value+1)),[]);
+  const commands=React.useMemo(()=>listCommandContributions(kernel),[kernel,revision]);
+  const registry=React.useMemo(()=>buildShortcutRegistry(kernel),[kernel,revision]);
+  const conflicts=new Set(findShortcutConflicts(registry).flatMap(group=>group.map(entry=>entry.contribution.id)));
+  const presentationRows: {key:keyof PresentationHotkeys;label:string}[]=[
+    {key:'nextSmooth',label:zho?'下一页 · 平滑':'Next · smooth'},
+    {key:'prevSmooth',label:zho?'上一页 · 平滑':'Previous · smooth'},
+    {key:'nextDirect',label:zho?'下一页 · 直接':'Next · direct'},
+    {key:'prevDirect',label:zho?'上一页 · 直接':'Previous · direct'},
   ];
-
-  return (
-    <>
-      <SectionBlock title={zho ? '鼠标滚轮' : 'Mouse Wheel'}>
-        <SettingsRow label={zho ? '鼠标滚轮' : 'Mouse Wheel'}>
-          <Segmented
-            options={[{ value: 'zoom', label: zho ? '缩放' : 'Zoom' }, { value: 'pan', label: zho ? '平移' : 'Pan' }]}
-            active={wheelAction}
-            onSelect={value => setWheelAction(value as WheelAction)}
-          />
-        </SettingsRow>
-      </SectionBlock>
-      <SectionBlock title={zho ? '生成快捷键' : 'Generate Hotkey'}>
-        <SettingsRow label={zho ? '生成快捷键' : 'Generate Hotkey'}>
-          <span className="min-w-[7rem] rounded-md bg-black/25 px-2.5 py-1 text-center font-mono text-sm text-neutral-200">{formatHotkey(generateHotkey)}</span>
-          <button onClick={() => setRecordingKey('generate')} className="rounded-md bg-white/10 px-3 py-1.5 text-sm hover:bg-white/20">
-            {recordingKey === 'generate' ? (zho ? '按下按键…' : 'Press a key…') : (zho ? '设置' : 'Set')}
-          </button>
-        </SettingsRow>
-      </SectionBlock>
-      <SectionBlock title={zho ? '放映快捷键' : 'Presentation Hotkeys'}>
-        {presentationHotkeyMap.map(({ key, label }) => (
-          <SettingsRow key={key} label={label}>
-            <span className="min-w-[7rem] rounded-md bg-black/25 px-2.5 py-1 text-center font-mono text-sm text-neutral-200">{formatHotkey(presentationHotkeys[key])}</span>
-            <button onClick={() => setRecordingKey(key)} className="w-24 rounded-md bg-white/10 px-3 py-1.5 text-center text-sm hover:bg-white/20">
-              {recordingKey === key ? (zho ? '按下按键…' : 'Press a key…') : (zho ? '设置' : 'Set')}
-            </button>
-          </SettingsRow>
-        ))}
-      </SectionBlock>
-      <SectionBlock title={zho ? '命令快捷键' : 'Command Shortcuts'}>
-        {registry.length === 0 && (
-          <p className="px-0.5 text-xs text-neutral-500">{zho ? '没有已注册的命令快捷键。' : 'No command shortcuts registered.'}</p>
-        )}
-        {registry.map(entry => {
-          const identity = bindingIdentity(entry.binding);
-          const conflicted = conflictIdentities.has(identity);
-          const others = (conflictEntries.get(entry.contribution.id) ?? [])
-            .filter(other => other.contribution.id !== entry.contribution.id)
-            .map(other => resolveCommandText(other.contribution.value, language).title);
-          return (
-            <div key={entry.contribution.id} className="flex items-center justify-between gap-2 py-1">
-              <div className="flex min-w-0 items-center gap-2">
-                <span className="min-w-0 truncate text-sm text-neutral-200">{resolveCommandText(entry.contribution.value, language).title}</span>
-                {conflicted && (
-                  <span
-                    className="shrink-0 rounded-full bg-amber-300/15 px-2 py-0.5 text-[10px] font-medium text-amber-100"
-                    title={zho ? `组合键被占用：${others.join('、')}` : `Key also used by: ${others.join(', ')}`}
-                  >
-                    {zho ? `冲突 ×${others.length}` : `conflict ×${others.length}`}
-                  </span>
-                )}
-              </div>
-              <code className={`shrink-0 rounded bg-black/25 px-2 py-0.5 font-mono text-xs ${conflicted ? 'text-amber-100' : 'text-neutral-300'}`}>
-                {entry.display}
-              </code>
-            </div>
-          );
-        })}
-        <p className="px-0.5 pt-1 text-[11px] leading-4 text-neutral-500">
-          {zho
-            ? '同组合键冲突时，按注册顺序（插件优先级 → id）第一个可用命令生效。'
-            : 'On conflict, the first available command in registry order (plugin priority → id) wins.'}
-        </p>
-      </SectionBlock>
-    </>
+  const asBinding=(hotkey:Hotkey)=>({key:hotkey.key,mod:hotkey.metaOrCtrlKey,alt:hotkey.altKey,shift:hotkey.shiftKey});
+  const builtins=[{id:'generate',label:zho?'生成':'Generate',hotkey:generateHotkey},...presentationRows.map(row=>({id:row.key,label:row.label,hotkey:presentationHotkeys[row.key]}))];
+  const save=(id:string,hotkey:Hotkey)=>{
+    if(id==='generate')setGenerateHotkey(hotkey);
+    else if(id.startsWith('command:'))setCommandShortcut(id.slice(8),hotkey.key?asBinding(hotkey):null);
+    else setPresentationHotkeys({...presentationHotkeys,[id]:hotkey});
+  };
+  useHotkeyRecorder(recordingKey,hotkey=>{
+    if(!recordingKey)return;
+    if(hotkey.key==='Escape'&&!hotkey.metaOrCtrlKey&&!hotkey.altKey&&!hotkey.shiftKey){setRecordingKey(null);return;}
+    const identity=bindingIdentity(asBinding(hotkey));
+    const occupied=builtins.find(row=>row.id!==recordingKey&&row.hotkey.key&&bindingIdentity(asBinding(row.hotkey))===identity);
+    const command=registry.find(entry=>`command:${entry.contribution.id}`!==recordingKey&&bindingIdentity(entry.binding)===identity);
+    if(occupied||command){setMessage((zho?'已用于：':'Used by: ')+(occupied?.label||resolveCommandText(command!.contribution.value,language).title));setRecordingKey(null);return;}
+    save(recordingKey,hotkey);setMessage('');setRecordingKey(null);
+  });
+  const row=(id:string,label:string,hotkey:Hotkey,reset:()=>void,conflicted=false)=>(
+    <div className="shortcut-row" key={id} hidden={!`${label} ${formatHotkey(hotkey)}`.toLowerCase().includes(query.trim().toLowerCase())}>
+      <span title={label}>{label}</span>
+      <button type="button" className="shortcut-key" aria-label={`${zho?'修改':'Edit'} ${label}`} aria-pressed={recordingKey===id}
+        title={conflicted?(zho?'快捷键冲突':'Shortcut conflict'):undefined}
+        style={conflicted?{color:'#e5bd65'}:undefined}
+        onBlur={()=>{if(recordingKey===id)setRecordingKey(null);}}
+        onClick={()=>{setMessage('');setRecordingKey(id);}}>
+        {recordingKey===id?(zho?'按下快捷键…':'Press shortcut…'):formatHotkey(hotkey)}
+      </button>
+      <button type="button" className="shortcut-reset" aria-label={`${zho?'重置':'Reset'} ${label}`} title={zho?'恢复默认':'Reset'} onClick={()=>{setRecordingKey(null);reset();}}>↺</button>
+    </div>
   );
+  return <div className="shortcut-settings">
+    <div className="shortcut-tools"><input className="shortcut-search" type="search" placeholder={zho?'搜索快捷键':'Search shortcuts'} aria-label={zho?'搜索快捷键':'Search shortcuts'} value={query} onChange={event=>setQuery(event.target.value)}/><button type="button" onClick={()=>{resetCommandShortcuts();setGenerateHotkey(DEFAULT_GENERATE_HOTKEY);setPresentationHotkeys(DEFAULT_PRESENTATION_HOTKEYS);setRecordingKey(null);setMessage('');}}>{zho?'全部恢复默认':'Restore defaults'}</button></div>
+    {message&&<span className="shortcut-message" role="status">{message}</span>}
+    <div className="shortcut-list">
+      <div className="shortcut-row shortcut-heading"><span>{zho?'命令':'Command'}</span><span>{zho?'按键绑定':'Binding'}</span><span>{zho?'操作':'Action'}</span></div>
+      <div className="shortcut-row" hidden={!`${zho?'滚轮 缩放 平移':'Wheel Zoom Pan'}`.toLowerCase().includes(query.trim().toLowerCase())}><span>{zho?'滚轮':'Wheel'}</span><Segmented options={[{value:'zoom',label:zho?'缩放':'Zoom'},{value:'pan',label:zho?'平移':'Pan'}]} active={wheelAction} onSelect={value=>setWheelAction(value as WheelAction)}/><span/></div>
+      {row('generate',zho?'生成':'Generate',generateHotkey,()=>setGenerateHotkey(DEFAULT_GENERATE_HOTKEY))}
+      {presentationRows.map(item=>row(item.key,item.label,presentationHotkeys[item.key],()=>setPresentationHotkeys({...presentationHotkeys,[item.key]:DEFAULT_PRESENTATION_HOTKEYS[item.key]})))}
+      {commands.map(entry=>{
+        const binding=entry.value.shortcut;
+        const hotkey={key:binding?.key||'',metaOrCtrlKey:!!binding?.mod,altKey:!!binding?.alt,shiftKey:!!binding?.shift};
+        return row(`command:${entry.id}`,resolveCommandText(entry.value,language).title,hotkey,()=>{
+          const original=(kernel as Kernel).contributions.list<CommandDefinition>('commands').find(item=>item.id===entry.id)?.value.shortcut;
+          setCommandShortcut(entry.id,original||null);
+        },conflicts.has(entry.id));
+      })}
+    </div>
+  </div>;
 };
-
 const SECTIONS: { id: string; navPriority: number; label: (language: 'en' | 'zho') => string; component: React.FC<SettingsSectionProps> }[] = [
   { id: 'ai', navPriority: 0, label: lang => (lang === 'zho' ? 'Gemini 密钥' : 'Gemini API Key'), component: CoreAiSection },
   { id: 'general', navPriority: 40, label: lang => (lang === 'zho' ? '通用' : 'General'), component: GeneralSection },

@@ -4,7 +4,7 @@ import fs from 'node:fs/promises';
 import fsSync from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import {listLocalFolder,resolveLocalFile,localMime,parseRange,fileKind} from '../server/local-browse.mjs';
+import {listLocalFolder,resolveLocalFile,resolveLocalTarget,localMime,parseRange,fileKind} from '../server/local-browse.mjs';
 
 // 本地文件夹索引：只读扫描 + 越界防护。这两条任一失守，用户要么卡在几千个 node_modules
 // 文件里，要么能通过 rel 读到索引目录之外的东西。
@@ -108,7 +108,29 @@ test('本地索引登记进能力契约，旧进程才会被换掉',async()=>{
  assert.ok(server.includes('isLocalRootAllowed'),'取文件必须过索引根白名单');
 });
 
-// 资产库只扫自己的目录：没有第二个导航页，也没有「选一个文件夹」这一步。
+// 「打开所在文件夹」既要能定位文件，也要能打开素材包目录（素材包的 rel 本身就是目录），
+// 所以解析口必须两种都收，而 /api/local/file 那条仍然只认文件（不然能拿目录当文件流出去）。
+test('resolveLocalTarget 收文件也收目录，resolveLocalFile 只认文件，越界一律拒绝',async()=>{
+ const base=await fixture(await temp());
+ try{
+  const file=resolveLocalTarget({root:base,rel:'models/chair.glb'});
+  assert.equal(file.isDir,false);
+  assert.equal(file.path,path.join(base,'models','chair.glb'));
+  assert.equal(resolveLocalFile({root:base,rel:'models/chair.glb'}).bytes,3);
+
+  const folder=resolveLocalTarget({root:base,rel:'models'});
+  assert.equal(folder.isDir,true);
+  assert.equal(folder.path,path.join(base,'models'));
+  assert.throws(()=>resolveLocalFile({root:base,rel:'models'}),/不是文件/);
+
+  for(const rel of ['../outside','models/../../outside','/etc/passwd']) assert.throws(()=>resolveLocalTarget({root:base,rel}),/路径不合法|会被移动|缺少文件路径/,`越界路径不该被放行：${rel}`);
+  assert.throws(()=>resolveLocalTarget({root:base,rel:'models/gone.glb'}),/不存在或已被移动/);
+ }finally{
+  await fs.rm(base,{recursive:true,force:true});
+ }
+});
+
+
 // 用户把素材拷进资产库文件夹就该被认出来，不需要先声明一个来源。
 test('资产库扫描自己的目录，不另开导航页也不让用户选文件夹',async()=>{
  const html=await fs.readFile(new URL('../src/library/index.html',import.meta.url),'utf8');

@@ -1,6 +1,7 @@
 import {loadLibrary,saveLibrary,collectModels} from './library-state.js';
 import {diffMainState,mutationPayloadSize,MAX_MUTATION_BYTES,MAIN_STATE_KEY} from './state-mutations.js';
 import {translateStateChange,PROBE_STATE_KEY} from './tag-ops.js';
+import {applyLocalFileMoves} from './local-file-moves.js';
 const keys=['sfx-library-v2','sfx-discovery-v1','sfx-library-ui','sfx-local-index-v1'];
 const parse=value=>{try{const data=JSON.parse(value);return data&&typeof data==='object'&&!Array.isArray(data)?data:null;}catch{return null;}};
 
@@ -27,6 +28,7 @@ export async function createPersistentStorage(local,request=fetch,options={}){
  let pending=Promise.resolve(),scheduled=false,mutationsEnabled=options.mutations!==false,collectionsEnabled=options.collections!==false,assetOpsEnabled=options.assetOps!==false;
  let lastParsed=parse(cache[MAIN_STATE_KEY]);
  const dirty=new Map();
+ const fileMoves=new Map();
  const report=message=>{
   options.onWarn?.(message);
   if(typeof window!=='undefined'&&typeof window.dispatchEvent==='function'&&typeof CustomEvent==='function')
@@ -50,6 +52,7 @@ export async function createPersistentStorage(local,request=fetch,options={}){
   let added=0;
   for(const item of items){
    if(!item||typeof item.uid!=='string'||catalogSeen.has(item.uid))continue;
+   const moved=fileMoves.get(item.uid);if(moved)applyLocalFileMoves([item],{root:moved.root,changes:[moved.change]});
    catalogSeen.add(item.uid);catalogModels.push(item);added++;
   }
   if(!added)return;
@@ -107,7 +110,19 @@ export async function createPersistentStorage(local,request=fetch,options={}){
    }
   })():Promise.resolve();
  }
- const post=(path,body)=>request(path,{method:'POST',headers:{'X-SFX-Local':'1','Content-Type':'application/json'},body:JSON.stringify(body),keepalive:false});
+ let writeBlocked=null;
+ const post=async(path,body)=>{
+  if(writeBlocked)throw writeBlocked;
+  const result=await request(path,{method:'POST',headers:{'X-SFX-Local':'1','Content-Type':'application/json','X-AV-File-Protocol':'1'},body:JSON.stringify(body),keepalive:false});
+  if(result.status===426||result.status===503){
+   let detail;try{detail=await result.clone().json();}catch{}
+   if(result.status===426||detail?.code==='write_protocol_unavailable'){
+    writeBlocked=Object.assign(Error(detail?.error||'资产库写入协议已更新，请刷新或升级页面后再保存；本次未写入'),{noFallback:true});
+    throw writeBlocked;
+   }
+  }
+  return result;
+ };
  /**
   * 定点写入按体积切批。单条 model 上限 512KB，一次带 200 条理论上能到 100MB，
   * 而服务端对请求体是有上限的 —— 撞上限会整批失败并退化成整块重放，等于白传几十 MB。
@@ -123,12 +138,16 @@ export async function createPersistentStorage(local,request=fetch,options={}){
   if(current.length)batches.push(current);
   return batches;
  }
- async function postState(values){const result=await post('/api/library-state',values);if(!result.ok)throw Error('资产库保存失败');}
+ async function saveError(result,label){
+  let detail;try{detail=await result.json();}catch{}
+  return Error(`${label}：${detail?.error||`HTTP ${result.status||'未知错误'}`}`);
+ }
+ async function postState(values){const result=await post('/api/library-state',values);if(!result.ok)throw await saveError(result,'资产库保存失败');}
  /** 细粒度通道：404/405 说明服务端是老进程，关掉通道后整块重放。 */
  async function postJson(path,body){
   const result=await post(path,body);
   if(result.status===404||result.status===405)collectionsEnabled=false;
-  if(!result.ok)throw Error(`${path} 保存失败`);
+  if(!result.ok)throw await saveError(result,`${path} 保存失败`);
   return result;
  }
  /**
@@ -182,7 +201,8 @@ export async function createPersistentStorage(local,request=fetch,options={}){
   pending=pending.then(async()=>{
    const values=Object.fromEntries(dirty);dirty.clear();
    const main=Object.hasOwn(values,MAIN_STATE_KEY)?values[MAIN_STATE_KEY]:undefined;
-   const diff=main!==undefined&&mutationsEnabled?diffMainState(lastParsed,main):null;
+   const parsedMain=main!==undefined?parse(main):null;
+   const diff=parsedMain&&mutationsEnabled?diffMainState(lastParsed,parsedMain):null;
    const small={},bulk={};
    for(const [key,value] of Object.entries(values)){
     if(key===MAIN_STATE_KEY)continue;
@@ -194,7 +214,6 @@ export async function createPersistentStorage(local,request=fetch,options={}){
    const onlyKeys=diff?.unchanged&&main!==undefined?Object.fromEntries(Object.entries(values).filter(([key])=>key!==MAIN_STATE_KEY)):null;
    // ADR-02：主 blob 的变化先翻译成「按域」的写入指令。看懂了就不回传整块 blob，
    // 看不懂（版本号 / 未知字段 / 脏数据 / 变更过多）才退回原来的整块或差量通道。
-   const parsedMain=main!==undefined?parse(main):null;
    // 解析不出来绝不能当成「没有变化」—— 那会把这次主状态写入整条吞掉。
    const change=parsedMain&&collectionsEnabled?translateStateChange(lastParsed,parsedMain):null;
    const useDomains=change&&!change.fallback;
@@ -206,7 +225,7 @@ export async function createPersistentStorage(local,request=fetch,options={}){
     }else if(canDiff){
      const result=await post('/api/library/mutations',{ops:diff.ops,values:small});
      if(result.status===404||result.status===405)mutationsEnabled=false;
-     if(!result.ok)throw Error('资产库增量保存失败');
+     if(!result.ok)throw await saveError(result,'资产库增量保存失败');
      incremental=true;applied=diff.ops.length;
      // 大 key 单独整块提交：紧跟在同一次差量之后，都排在串行队列里，不会覆盖刚改的主 blob。
      if(Object.keys(bulk).length)await postState(bulk);
@@ -215,16 +234,17 @@ export async function createPersistentStorage(local,request=fetch,options={}){
     }else{
      await postState(values);
     }
-    if(main!==undefined)lastParsed=diff?.data??parse(main);
+    if(main!==undefined)lastParsed=parsedMain;
     options.onCommit?.({incremental,applied,keys:Object.keys(values),domains});
    }catch(error){
+    if(error.noFallback){report(error.message);return;}
     if(useDomains||canDiff){
      // 任一细粒度通道失败一律整块重放；同时永久关掉通道，避免每次输入都白撞一次老接口。
      collectionsEnabled=false;
      if(canDiff)mutationsEnabled=false;
      try{
       await postState(values);
-      if(main!==undefined)lastParsed=diff?.data??parse(main);
+      if(main!==undefined)lastParsed=parsedMain;
       options.onCommit?.({incremental:false,fallback:true,keys:Object.keys(values)});
      }catch(fallbackError){report(fallbackError.message);}
     }else report(error.message);
@@ -238,7 +258,15 @@ export async function createPersistentStorage(local,request=fetch,options={}){
   if(keys.includes(key)&&(key!=='sfx-local-index-v1'||scanIndex)){dirty.set(key,String(value));scheduleSave();}
  },
  // ADR-09：app.js 在 state 建好后挂补页回调；全选等操作要等目录补齐完成。
- catalogModels,catalogReady,setCatalogPageHandler};
+ catalogModels,catalogReady,setCatalogPageHandler,
+ applyFileMoves(result){
+  for(const change of result.changes||[])fileMoves.set(change.uid,{root:result.root,change:{...change,from:fileMoves.get(change.uid)?.change.from??change.from}});
+  const patch=data=>{if(!data)return;applyLocalFileMoves(data.models,result);applyLocalFileMoves(data.trashed,result);};
+  const data=parse(cache[MAIN_STATE_KEY]);patch(data);patch(lastParsed);
+  applyLocalFileMoves(catalogModels,result);
+  if(data){cache[MAIN_STATE_KEY]=JSON.stringify(data);try{local?.setItem(MAIN_STATE_KEY,cache[MAIN_STATE_KEY]);}catch{}}
+  if(dirty.has(MAIN_STATE_KEY)){const queued=parse(dirty.get(MAIN_STATE_KEY));patch(queued);if(queued)dirty.set(MAIN_STATE_KEY,JSON.stringify(queued));}
+ }};
  // Restore actual downloads only on first migration; later removals must stay removed.
  if(!values['sfx-library-v2']){
   const state=loadLibrary(storage);state.models=collectModels(state.models,recovered).models;

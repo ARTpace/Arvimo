@@ -225,7 +225,7 @@ interface FileHandlersProps {
     getCanvasPoint: (x: number, y: number) => { x: number; y: number };
     addElementsWithParenting: (elements: Element[], commit?: boolean, importGroupId?: string) => void;
     endImportHistoryGroup?: (importGroupId: string) => void;
-    documentState?: Pick<CanvasDocumentStateStore, 'getSnapshot'>;
+    documentState?: Pick<CanvasDocumentStateStore, 'getSnapshot' | 'ensureActiveBoard'>;
     /** Live gesture state: never publish a new canvas document during a drag, edit or pan/zoom. */
     isCanvasBusy?: () => boolean;
     /** Stage an ephemeral reveal before the canvas document is committed. */
@@ -429,6 +429,7 @@ export const useFileHandlers = ({
             return;
         }
         setError(null);
+        documentState?.ensureActiveBoard();
 
         // V3: files matching installed declarative extensions go to a managed background batch, not the legacy sync path.
         if (importExtensionFiles) {

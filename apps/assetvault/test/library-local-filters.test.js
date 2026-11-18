@@ -4,6 +4,13 @@ import fs from 'node:fs';
 import vm from 'node:vm';
 import {filterLocalAssets,localFileState,localAssetKind,localAssetCategories} from '../src/library/local-filters.js';
 
+test('扫描图集按明确存储分类筛选，不因缺少kind而消失',()=>{
+ const pkg={category:'images',title:'木头Wood',rel:'图片/纹理贴图/风格化Alphas/木头Wood'};
+ assert.ok(localAssetCategories(pkg).includes('纹理贴图'));
+ assert.deepEqual(filterLocalAssets([pkg],{category:'纹理贴图'},[]),[pkg]);
+ assert.ok(localAssetCategories({category:'images',title:'普通图集',rel:'其他/图片/纹理贴图/普通图集'}).includes('其他图片'));
+});
+
 test('local categories combine metadata and tags independently of discovery filters',()=>{
  const models=[{uid:'a',category:'道具',categories:[{name:'武器'}],tags:['金属','道具'],userTags:['游戏']},{uid:'b',tags:['木材']}];
  assert.deepEqual(localAssetCategories(models[0]),['武器','道具','金属','游戏']);
@@ -55,4 +62,15 @@ test('startup restores page size after loading the discovery snapshot',()=>{
   vm.runInNewContext(snippet,context);
   assert.equal(context.state.pageSize,snapshot?.pageSize===96?96:48);
  }
+});
+
+
+test('active tags do not disable the selected local type',()=>{
+ const source=fs.readFileSync(new URL('../src/library/app.js',import.meta.url),'utf8');
+ const declaration=source.match(/const activeLocalKind=[^\n]+/)[0];
+ const models=[{uid:'image',assetType:'images',tags:['chair']},{uid:'model',platform:'sketchfab',tags:['chair']}];
+ const context={tagFilterActive:()=>true,$:()=>({value:'images'})};
+ const kind=vm.runInNewContext(declaration+';activeLocalKind()',context);
+ assert.equal(kind,'images');
+ assert.deepEqual(filterLocalAssets(models,{kind,search:'chair'},null).map(row=>row.uid),['image']);
 });

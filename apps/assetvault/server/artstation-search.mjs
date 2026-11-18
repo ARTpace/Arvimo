@@ -13,6 +13,7 @@ import {openPublic} from './public-http.mjs';
 import {readStreamText,ARTSTATION_HASH,artstationUid} from './artstation-project.mjs';
 import {coverUrl} from './artstation-cdn.mjs';
 import {tagList} from './tag-list.mjs';
+import {normalizePlatformCategories} from './platform-categories.mjs';
 
 // Identity lives with the project module (the .mview pipeline needs the same id in its
 // info.json for archive provenance checks); re-exported here so search callers keep one import.
@@ -133,6 +134,12 @@ export function isSearchableProject(project){
   return !!project&&typeof project==='object'&&project.is_adult_content!==true&&project.hide_as_adult!==true&&ARTSTATION_HASH.test(String(project.hash_id||'').trim());
 }
 
+export function artstationCategories(project){
+ return normalizePlatformCategories('artstation',[
+  ...(Array.isArray(project.categories)?project.categories:[]),
+  ...(Array.isArray(project.category_ids)?project.category_ids:[]),
+ ],{options:optionsCache?.value?.categories||[]});
+}
 export function normalizeArtstationProject(project){
   if(!isSearchableProject(project))return null;
   const hash=String(project.hash_id).trim();
@@ -149,7 +156,8 @@ export function normalizeArtstationProject(project){
     // 「可转 3D」和「只是图片」，否则用户会以为点下载就能拿到模型。
     hasMarmoset:project.icons?.marmoset===true,
     downloadable:false,license:'ArtStation 作品 · 需确认授权',
-    categories:[],tags:tagList(project.tags),publishedAt:null,
+    platformCategories:artstationCategories(project),
+    categories:artstationCategories(project).map(row=>row.name||row.slug).filter(Boolean),tags:tagList(project.tags),publishedAt:null,
   };
 }
 

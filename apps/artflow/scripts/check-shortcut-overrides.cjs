@@ -1,0 +1,18 @@
+const assert=require('node:assert/strict');
+require('./register-typescript.cjs');
+const {setCommandShortcut,resetCommandShortcuts,listCommandContributions,isReplacedCommandShortcut}=require('../plugin-runtime/commands.ts');
+const {arbitrateShortcut}=require('../plugin-runtime/shortcut-arbitration.ts');
+const entries=[{id:'copy',priority:1,value:{title:'Copy',shortcut:{key:'c',mod:true},run(){}}}];
+const kernel={contributions:{list:()=>entries}};
+const event=key=>({key,ctrlKey:true,metaKey:false,altKey:false,shiftKey:false});
+resetCommandShortcuts();
+assert.equal(arbitrateShortcut(kernel,event('c')).winner.contribution.id,'copy');
+setCommandShortcut('copy',{key:'j',mod:true});
+assert.equal(arbitrateShortcut(kernel,event('c')).winner,undefined);
+assert.equal(isReplacedCommandShortcut(kernel,event('c')),true);
+assert.equal(arbitrateShortcut(kernel,event('j')).winner.contribution.id,'copy');
+assert.equal(listCommandContributions(kernel)[0].value.shortcut.key,'j');
+assert.equal(entries[0].value.shortcut.key,'c','plugin defaults remain unchanged');
+setCommandShortcut('copy',null);assert.equal(arbitrateShortcut(kernel,event('j')).winner,undefined);
+resetCommandShortcuts();assert.equal(arbitrateShortcut(kernel,event('c')).winner.contribution.id,'copy');
+console.log('Shortcut override checks passed.');

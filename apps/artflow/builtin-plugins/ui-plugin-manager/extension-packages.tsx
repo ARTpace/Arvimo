@@ -4,6 +4,7 @@ import { InlinePluginDetails } from './details-dialog';
 import type { InstalledPackage } from '../../plugin-runtime/extension-package';
 import type { ExtensionRuntime } from '../../plugin-runtime/extension-registry';
 import type { SettingsSectionLanguage } from '../../plugin-runtime/settings-contributions';
+import { askConfirm, askPrompt } from '../../components/AskDialog';
 
 const copyFor = (language: SettingsSectionLanguage) => language === 'zho' ? {
   source: 'JSON 扩展包', live: '即时生效', enabled: '已启用', disabled: '已停用',
@@ -120,11 +121,14 @@ export const PackageRows: React.FC<PackageProps & {
             </dl>
             <div className="flex flex-wrap gap-1.5">
               <button type="button" onClick={() => {
-                const text = window.prompt(copy.replacePrompt);
-                if (text) run(() => runtime.replaceVersion(id, JSON.parse(text)), copy.replaced(id));
+                void askPrompt({title: copy.replace, message: copy.replacePrompt, placeholder: '{ "name": "…", "version": "…" }'}).then(text => {
+                  if (text) run(() => runtime.replaceVersion(id, JSON.parse(text)), copy.replaced(id));
+                });
               }} className="rounded-lg bg-white/[0.07] px-2.5 py-1 text-xs text-neutral-200 hover:bg-white/10">{copy.replace}</button>
               <button type="button" onClick={() => {
-                if (window.confirm(copy.uninstallConfirm(id)) && run(() => runtime.uninstall(id), copy.removed)) setOpenId(null);
+                void askConfirm({title: copy.uninstall, message: copy.uninstallConfirm(id), confirmText: copy.uninstall, cancelText: '取消', danger: true}).then(ok => {
+                  if (ok && run(() => runtime.uninstall(id), copy.removed)) setOpenId(null);
+                });
               }} className="rounded-lg bg-rose-500/10 px-2.5 py-1 text-xs text-rose-200 hover:bg-rose-500/20">{copy.uninstall}</button>
             </div>
           </InlinePluginDetails>}

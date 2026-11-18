@@ -2,6 +2,23 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createPreviewCache} from '../src/library/preview-cache.js';
 
+test('慢速磁盘写入队列有字节上限，预览读取不被阻塞',async()=>{
+ let release,writes=0;
+ const disk={keys:async()=>[],put:async()=>{writes++;await new Promise(resolve=>{release=resolve;});}};
+ const cache=createPreviewCache(async()=>new Response('data'),{storage:{open:async()=>disk},maxQueuedBytes:4});
+ await cache.get('a');await new Promise(resolve=>setImmediate(resolve));
+ await cache.get('b');assert.equal(writes,1);
+ release();await cache.flush();assert.equal(writes,1);
+});
+
+test('清理内存后在途请求不重新填满缓存',async()=>{
+ let release,count=0;
+ const cache=createPreviewCache(async()=>{count++;if(count===1)await new Promise(resolve=>{release=resolve;});return new Response('data');},{storage:null});
+ const task=cache.get('one');await new Promise(resolve=>setImmediate(resolve));
+ cache.clearMemory();release();await task;
+ await cache.get('one');assert.equal(count,2);
+});
+
 function fixture(options={}){
  const files=new Map();let downloads=0;
  const cache={

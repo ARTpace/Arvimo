@@ -7,6 +7,10 @@
 // 必须守住的一条：**不写 images 数组**。清单一旦声明了图片，校验器就要求磁盘上真有那些文件，
 // 画廊也会去打开不存在的路径。图片数量走 imageCount，与清单分开记。
 //
+// 「不下载也能翻图集」：每张图的远程地址单独记在 remoteImages（与 images 清单彻底分开）。
+// 前端画廊据此直接走 /api/image 代理逐张看，一张原图都不下。远程地址（500px/Flickr 签名链接）
+// 会过期，这是「不下载」的固有代价 —— 每张图同时记 thumb（优先稳定缩放档）尽量抗过期。
+//
 // 目录名与下载器共用 folder-name.mjs 的规则：之后点「下载原图」，队列能原地接管这张卡的目录，
 // 而不是在旁边再长一个「(1)」。
 import fsp from 'node:fs/promises';
@@ -19,7 +23,35 @@ export const REMOTE_STATUS = 'remote';
 
 const UID_PATTERN = /^[a-f0-9]{32}$/;
 const MAX_IMAGE_COUNT = 1_000_000;
+// 远程清单只为了翻图集，不是把整站几万张都塞进 info.json：卡在能覆盖绝大多数画板的水位。
+const MAX_REMOTE_IMAGES = 2000;
 export const isBoardUid = value => UID_PATTERN.test(String(value || ''));
+
+/** 把前端传来的图站条目收敛成画廊能直接用的最小结构。
+ *  url 是原图、thumb 优先用稳定缩放档；只收 http(s)，其余（视频 / 空值）丢掉。 */
+function normalizeRemoteImages(items) {
+  if (!Array.isArray(items)) return [];
+  const out = [];
+  const seen = new Set();
+  for (const item of items) {
+    if (out.length >= MAX_REMOTE_IMAGES) break;
+    if (item?.type === 'video' || item?.play) continue;
+    const url = String(item?.url || '').trim();
+    if (!/^https?:\/\//i.test(url) || url.length > 2048 || seen.has(url)) continue;
+    seen.add(url);
+    const thumb = String(item?.thumb || '').trim();
+    out.push({
+      url,
+      ...(/^https?:\/\//i.test(thumb) && thumb.length <= 2048 ? {thumb} : {}),
+      ...(item?.title ? {title: String(item.title).slice(0, 200)} : {}),
+      ...(item?.pageUrl && /^https?:\/\//i.test(String(item.pageUrl)) ? {pageUrl: String(item.pageUrl).slice(0, 2048)} : {}),
+      ...(item?.author ? {author: String(item.author).slice(0, 120)} : {}),
+      ...(Number.isFinite(item?.width) ? {width: item.width} : {}),
+      ...(Number.isFinite(item?.height) ? {height: item.height} : {}),
+    });
+  }
+  return out;
+}
 
 async function readInfo(dir) {
   try { return JSON.parse(await fsp.readFile(path.join(dir, 'info.json'), 'utf8')); }
@@ -57,7 +89,7 @@ export async function findRemoteBoardDir(folder, uid) {
  */
 export async function writePictureBoardCard({
   folder, category = '图片', uid, platform = '', url = '',
-  title = '', author = '', cover = null, imageCount = 0, tags = [],
+  title = '', author = '', cover = null, imageCount = 0, tags = [], remoteImages = [],
 } = {}) {
   if (!isBoardUid(uid)) throw Error('资产标识无效（需要 32 位十六进制）');
   if (!folder) throw Error('没有可写入的资产库目录');
@@ -74,6 +106,10 @@ export async function writePictureBoardCard({
     return { dir, title: String(previous.title || title || path.basename(dir)), imageCount: Number(previous.imageCount) || 0, skipped: true };
   }
   const merged = [...new Set([...(Array.isArray(previous?.tags) ? previous.tags : []), ...(Array.isArray(tags) ? tags : [])].filter(Boolean))];
+  // 新传的地址优先；这次没解析到就沿用上次存的，别把能翻的图集翻回去只剩封面。
+  const normalized = normalizeRemoteImages(remoteImages);
+  const keptRemote = normalized.length ? normalized
+    : (Array.isArray(previous?.remoteImages) ? previous.remoteImages : []);
   const manifest = {
     uid,
     kind: 'images',
@@ -89,8 +125,10 @@ export async function writePictureBoardCard({
     imageCount: count,
     status: REMOTE_STATUS,
     remote: true,
+    // 远程预览地址（不是 images 清单，不触发磁盘校验）。前端据此不下载也能逐张翻。
+    ...(keptRemote.length ? { remoteImages: keptRemote } : {}),
     ...(merged.length ? { tags: merged } : {}),
-    note: '远程收藏：只记录了平台页面信息（标题 / 作者 / 封面 / 张数），图片还没有下载到本机。',
+    note: '远程收藏：只记录了平台页面信息与每张图的远程地址，图片还没下载到本机（可直接翻预览，原图需点「下载原图」）。',
     exportedAt: new Date().toISOString(),
     tool: 'Arvimo / picture board',
   };

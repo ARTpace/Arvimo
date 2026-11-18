@@ -1,0 +1,115 @@
+/* 画板卡片：独立网格、封面、三图预览和悬停动效
+ * 每段通过 app.css 的占位符在原位置展开；请保留 @section 标记。
+ * 有作用域说明的段落由 app.css 外层提供 @media/@supports 条件。
+ * 修改本段内规则，或在本段末尾追加覆盖规则即可。
+ */
+/* 默认作用域 */
+/* @section part-001 */
+.bd-card.context-target{outline:2px solid var(--accent);outline-offset:-2px}/* @endsection */
+/* 默认作用域 */
+/* @section part-002 */
+.bd-deck{display:grid;gap:12px;margin:0 0 20px;padding:0}
+.bd-deck-head{display:flex;align-items:center;gap:10px;padding:0 0 10px;border-bottom:1px solid var(--av-line,#202b39)}
+.bd-deck-title{display:flex;align-items:center;gap:8px;font-size:12px;font-weight:600;color:#c3cfdd;letter-spacing:.3px}
+.bd-deck-title i{width:15px;height:15px;color:#9dbb6a}
+.bd-deck-count{font-size:10px;font-weight:500;color:#7f8c9c;background:var(--av-panel-raised,#1d2732);border-radius:5px;padding:2px 6px}
+.bd-deck-actions{margin-left:auto;display:flex;gap:6px}
+.bd-deck-btn{display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border-radius:7px;border:1px solid var(--av-line,#2c3846);background:var(--av-panel-raised,#161f29);color:#9dadbd;font-size:11px}
+.bd-deck-btn:hover{border-color:var(--av-line,#4d6152);color:var(--accent)}
+.bd-deck-btn i{width:13px;height:13px}
+.bd-deck-btn.is-smart i{color:#b6cf83}/* @endsection */
+/* 默认作用域 */
+/* @section part-012 */
+.bd-deck-grid{display:grid;align-items:stretch}
+.bd-deck-grid[hidden]{display:none}
+.bd-card{position:relative;display:flex;flex-direction:column;border:1px solid var(--av-line,#27303b);border-radius:11px;overflow:hidden;background:var(--av-panel-raised,#0f161e);cursor:pointer;min-width:0;transition:transform .2s,border-color .2s,box-shadow .2s}
+.bd-card:hover,.bd-card:focus-visible{transform:translateY(-2px);border-color:var(--av-line,#33414f);box-shadow:0 10px 22px #0000003d;outline:none}/* @endsection */
+/* 默认作用域 */
+/* @section part-016 */
+.bd-card-cover{position:relative;aspect-ratio:1;background:var(--av-panel-raised,#121a23);overflow:hidden}
+.bd-card-cover img{display:block;width:100%;height:100%;object-fit:cover}
+.bd-card-void{position:absolute;inset:0;display:grid;place-items:center;color:#3f4d5c}
+.bd-card-void i{width:26px;height:26px}
+.bd-card-badge{position:absolute;left:6px;top:6px;display:inline-flex;align-items:center;gap:3px;padding:3px 6px;border-radius:5px;background:var(--av-panel-solid,#101821e6);border:1px solid #c9f5813d;color:#c9f581;font-size:9px;letter-spacing:.3px}
+.bd-card-badge i{width:10px;height:10px}/* @endsection */
+/* 默认作用域 */
+/* @section part-022 */
+.bd-card-strip{display:flex;gap:6px;padding:0;background:var(--av-panel-raised,#0f151d)}
+.bd-card-thumb{position:relative;flex:1 1 0;min-width:0;aspect-ratio:1;border-radius:3px;overflow:hidden;background:var(--av-panel-raised,#202832);display:grid;place-items:center;color:#3f4d5c;
+  transition:transform .18s cubic-bezier(.22,.61,.36,1),box-shadow .18s,filter .18s}
+.bd-card-thumb img{display:block;width:100%;height:100%;object-fit:cover}
+.bd-card-thumb.is-empty{background:var(--av-panel-raised,#1a222c)}
+.bd-card-thumb i{width:12px;height:12px}/* @endsection */
+/* 默认作用域 */
+/* @section part-027 */
+.bd-card-thumb:hover{transform:translateY(-4px) scale(1.06);transform-origin:50% 100%;filter:brightness(1.12);box-shadow:0 8px 16px #0007;z-index:2}/* @endsection */
+/* @media(prefers-reduced-motion:reduce) */
+/* @section part-028 */
+.bd-card-thumb{transition:none}.bd-card-thumb:hover{transform:none}/* @endsection */
+/* 默认作用域 */
+/* @section part-030 */
+.bd-card-foot{position:absolute;left:0;right:0;bottom:0;z-index:2;display:flex;align-items:center;gap:8px;
+  padding:30px 12px 9px;background:linear-gradient(0deg,var(--av-panel-solid,#050a0fe6) 24%,var(--av-panel-solid,#050a0f00));pointer-events:none}
+.bd-card-foot strong{flex:1 1 auto;min-width:0;font-size:13px;font-weight:600;line-height:1.5;color:#f2f6fa;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-shadow:0 1px 3px #0009}
+.bd-card.is-smart .bd-card-foot strong{color:#dcf0b8}
+.bd-card-meta{flex:0 0 auto;font-size:11px;line-height:1.4;color:#c3cfdb;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-variant-numeric:tabular-nums;text-shadow:0 1px 3px #0009}/* @endsection */
+/* 默认作用域 */
+/* @section part-034 */
+.bd-card-tools{position:absolute;right:6px;top:6px;display:none;align-items:center;gap:4px}
+.bd-card:hover .bd-card-tools,.bd-card:focus-within .bd-card-tools{display:flex}
+.bd-card-tool{width:26px;height:26px;padding:5px;border-radius:50%;color:#e6eef7;background:var(--av-panel-solid,rgba(9,14,20,.55));backdrop-filter:blur(3px)}
+.bd-card-tool:hover{background:var(--av-panel-solid,rgba(9,14,20,.86));color:#fff}
+.bd-card-tool i{width:16px;height:16px}/* @endsection */
+/* 默认作用域 */
+/* @section part-039 */
+.bd-card-canvas{position:absolute;left:6px;top:6px;display:none;z-index:2}
+.bd-card:hover .bd-card-canvas,.bd-card:focus-within .bd-card-canvas{display:inline-flex;align-items:center;justify-content:center}/* @endsection */
+/* 默认作用域 */
+/* @section part-041 */
+.bd-card--drop{outline:2px solid #c9f581;outline-offset:-2px;box-shadow:0 0 0 4px #c9f58126}
+.bd-drop-active .bd-card:not(.is-smart){cursor:copy}/* @endsection */
+/* 默认作用域 */
+/* @section part-043 */
+.bd-deck-empty{margin:0;font-size:11px;line-height:1.7;color:#6d7b8a}/* @endsection */
+/* @media(max-width:780px) */
+/* @section part-044 */
+.bd-deck{margin-bottom:16px}.bd-deck-btn span{display:none}.bd-deck-btn{padding:6px 8px}.bd-card-strip{gap:4px}.bd-card-foot{padding:24px 11px 8px}/* @endsection */
+/* 默认作用域 */
+/* @section part-054 */
+.bd-deck-grid{align-items:start;grid-template-columns:repeat(auto-fill,minmax(0,232px));justify-content:start;gap:26px 22px;padding:14px 5px 10px}
+.bd-card{isolation:isolate;overflow:visible;width:100%;max-width:232px;border-radius:14px;border-color:#b9cda32b;background:var(--av-panel-raised,#151c25);box-shadow:0 5px 15px #0003;transition:transform .24s cubic-bezier(.2,.65,.3,1),border-color .24s,box-shadow .24s}
+.bd-card::before,.bd-card::after{content:'';position:absolute;pointer-events:none;z-index:-1;inset:0 8px 20px;border:1px solid #a9cb7c28;border-radius:14px;background:var(--av-panel-raised,#26312b);transform:translateY(-6px) rotate(-1.5deg);transform-origin:50% 100%;transition:transform .28s cubic-bezier(.2,.65,.3,1)}
+.bd-card::before{inset-inline:15px;background:var(--av-panel,#1c2725);transform:translateY(-11px) rotate(1deg)}
+.bd-card:hover,.bd-card:focus-visible{transform:translateY(-3px);border-color:#a9cb7c66;box-shadow:0 12px 24px #0005}
+.bd-card:hover::after,.bd-card:focus-visible::after{transform:translateY(-8px) rotate(-2.5deg)}
+.bd-card:hover::before,.bd-card:focus-visible::before{transform:translateY(-14px) rotate(2deg)}
+.bd-card:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+.bd-card:active{transform:translateY(-1px)}
+.bd-card-cover{aspect-ratio:6/5;border-radius:13px 13px 0 0}
+.bd-card-cover>img{transition:transform .4s cubic-bezier(.2,.65,.3,1)}
+.bd-card:hover .bd-card-cover>img{transform:scale(1.035)}
+.bd-card-foot{flex-direction:column;align-items:flex-start;gap:2px;padding:40px 13px 11px;background:linear-gradient(0deg,var(--av-caption,#080e15ed),transparent)}
+.bd-card-foot strong{flex:none;max-width:100%;font-size:14px;letter-spacing:.2px}
+.bd-card-meta{font-size:11px;color:#bdc8d2}
+.bd-card-strip{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));align-items:start;gap:6px;padding:8px;background:var(--av-panel-raised,#151c25);border-radius:0 0 13px 13px}
+.bd-card-thumb{border-radius:6px}
+.bd-card-thumb:hover{transform:translateY(-2px);filter:brightness(1.1);box-shadow:none}
+.bd-card-thumb.is-empty{background:linear-gradient(135deg,#ffffff07,#ffffff02)}
+.bd-card-tool{width:30px;height:30px;background:transparent;border:0;color:#c0c9d2;backdrop-filter:none;filter:drop-shadow(0 1px 3px #000)}
+.bd-card-tool:hover{background:transparent;color:#fff}
+.bd-card-tools{gap:3px;z-index:3}/* @endsection */
+/* @media(max-width:560px) */
+/* @section part-076 */
+.bd-deck-grid{grid-template-columns:repeat(auto-fill,minmax(0,min(232px,100%)))}/* @endsection */
+/* @media(prefers-reduced-motion:reduce) */
+/* @section part-077 */
+.bd-card,.bd-card::before,.bd-card::after,.bd-card-cover>img{transition:none}.bd-card:hover,.bd-card:active,.bd-card:focus-visible,.bd-card:hover .bd-card-cover>img{transform:none}/* @endsection */
+/* 默认作用域 */
+/* @section part-079 */
+.bd-card-thumb{width:100%;min-height:0;min-width:0;aspect-ratio:1}
+.bd-card-thumb img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}/* @endsection */
+
+/* UI 自定义覆盖：新增样式优先写在这一段内。 */
+/* @section custom */
+
+/* @endsection */

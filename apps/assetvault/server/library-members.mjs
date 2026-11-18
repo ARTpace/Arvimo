@@ -140,9 +140,9 @@ const READ_POST_ROUTES = new Set([
 ]);
 const HOST_ROUTES = new Set([
   '/api/platforms', '/api/platforms/test', '/api/library/delete',
-  '/api/library/import-roots', '/api/library/import-preflight', '/api/library/import-file', '/api/library/drop-import', '/api/library/relink-file', '/api/library/pick-folder', '/api/library/browse-folder',
+  '/api/library/import-roots', '/api/library/import-preflight', '/api/library/import-file', '/api/library/drop-import', '/api/library/drop-import/flush', '/api/library/relink-file', '/api/library/pick-folder', '/api/library/browse-folder',
   '/api/library/sync', '/api/library/backups/restore', '/api/library/import/eagle',
-  '/api/library/import/eagle/probe', '/api/ai/key', '/api/ai/settings', '/api/ai/test',
+  '/api/library/import/eagle/probe', '/api/ai/key', '/api/ai/settings', '/api/ai/test', '/api/ai/models', '/api/ai/probe', '/api/ai/probe-models',
   '/api/downloads/settings', '/api/downloads/pick-folder', '/api/downloads/browse-folders',
   '/api/downloads/reveal',
 ]);

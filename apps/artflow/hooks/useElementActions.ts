@@ -1,3 +1,4 @@
+import type { DrawingOptions } from '../types';
 
 import { useCallback, useRef } from 'react';
 // 修复：补全 ShapeElement 导入
@@ -29,7 +30,7 @@ interface ElementActionsProps {
     setCroppingState: (state: any) => void;
     croppingState: any;
     setContextMenu: (state: { x: number; y: number; elementId: string | null } | null) => void;
-    setDrawingOptions: (updater: (prev: { strokeColor: string; strokeWidth: number; opacity: number }) => { strokeColor: string; strokeWidth: number; opacity: number }) => void;
+    setDrawingOptions: (updater: (prev: DrawingOptions) => DrawingOptions) => void;
 }
 
 export const useElementActions = ({

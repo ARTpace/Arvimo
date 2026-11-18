@@ -17,8 +17,8 @@ test('收藏、下载与导出控件共用一行，导出控件保留真实任�
  assert.match(html,/aria-label="导出到 Blender"/);
  assert.match(html,/>Blender</);
 });
-test('未下载资产显示禁用的占位键，不误发下载任务',()=>{
+test('未下载资产不显示无效的导出占位键',()=>{
  const html=previewActions({model:{uid:'b'.repeat(32)},favorite:false,icon});
- assert.match(html,/>收藏</);assert.match(html,/disabled title="下载后可发送到其它软件"/);
+ assert.match(html,/>收藏</);assert.doesNotMatch(html,/disabled|preview-blender/);
  assert.doesNotMatch(html,/data-action="export-go"/);
 });

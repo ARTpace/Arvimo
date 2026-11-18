@@ -353,7 +353,7 @@ function auto() {
     assert.deepEqual(readThemeMixes(new Set(['dark', 'light'])), [valid]);
   });
 
-  check('floating host opts in without blocking canvas; studio applies only on request', () => {
+  check('floating host opts in without blocking canvas; studio saves control changes immediately', () => {
     const read = rel => fs.readFileSync(path.join(ROOT, rel), 'utf8');
     const host = read('plugin-runtime/panel-host.tsx');
     const studio = read('builtin-plugins/ui-skin-picker/ThemeStudio.tsx');
@@ -375,9 +375,13 @@ function auto() {
     assert(studio.includes('h-[min(38rem,calc(100dvh-10rem))]'), 'studio height stays bounded in floating and standalone hosts');
     assert(read('builtin-plugins/ui-skin-picker/UiThemeControls.tsx').includes('data-bp-ui-controls'));
     const wallpaper = read('builtin-plugins/ui-skin-picker/WallpaperControls.tsx');
-    assert(wallpaper.includes('relative h-36 max-h-36'), 'wallpaper preview keeps its height without a selected image');
+    assert(!wallpaper.includes('data-bp-wallpaper-preview'), 'workspace itself previews wallpaper without a duplicate preview panel');
+    assert(!studio.includes('<footer'), 'no extra apply action is required');
+    assert(studio.includes('if (active.isDirty()) active.commit()'), 'each control change commits immediately');
+    assert(studio.includes('await themeWallpaperStore.commitDrafts([entry.id])'), 'imported wallpaper is stored before selection is committed');
     assert(wallpaper.includes('max-h-56 grid-cols-[repeat(auto-fill,minmax(110px,1fr))]'), 'wallpaper library stays compact');
-    assert(wallpaper.includes('<details') && !wallpaper.includes('<details open'), 'wallpaper advanced controls start collapsed');
+    assert(!wallpaper.includes('<details'), 'wallpaper effects are directly accessible');
+    assert(studio.includes('workspaceOnly settings={uiSettings}'), 'workspace controls share the background page');
     const baseMapCss = read('builtin-plugins/ui-skin-picker/ui-theme-map.css');
     assert(baseMapCss.includes('UNIFIED UI THEME:'), '工具界面主题映射应由主题插件持有');
     assert(baseMapCss.includes('data-bp-ui-surface-override'));
@@ -417,6 +421,8 @@ function auto() {
       'radial-gradient(circle at 5% 5%, rgba(0, 255, 0, 0.35) 0 10%, transparent 10.6%)');
     assert.equal(resolveUiChrome(resolveSkinTokens({ mode: 'dark', canvas: { dots: 'off' } }), defaults)
       .vars['--bp-canvas-dot-image'], 'none');
+    assert.notEqual(resolveUiChrome(resolveSkinTokens({ mode: 'dark', canvas: { dots: 'off' } }), on)
+      .vars['--bp-canvas-dot-image'], 'none', 'explicit switch-on overrides a theme with dots disabled');
     // 非法输入一律回落，不写坏变量。
     assert.deepEqual(normalizeUiThemeSettings({ canvasDots: 'yes', dotColor: 'javascript:alert(1)', dotSize: 999, dotOpacity: 5 }), defaults);
   });

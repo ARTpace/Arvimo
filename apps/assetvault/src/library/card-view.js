@@ -4,24 +4,54 @@
 // file? is it in the library? is the artwork a Marmoset scene?) is decided outside. That split is
 // why this file can be grown or restyled without touching how the grid decides what to render.
 // Two collaborators are passed as getters because they are wired up later than this module exists.
+import {classifyAsset} from './asset-classification.js';
 import {coverRendition} from './gallery-view.js';
 import {authorButton} from './asset-author.js';
 import {assetCard,cardMedia} from './card-shell.js';
 import {userMetaFor} from './library-state.js';
 import {uiElementSlot} from './ui-element-preview.js';
 import {registerFavoriteTarget,favoriteButtonHtml} from './favorite-targets.js';
+import {formatKind,canPreviewModelInViewer} from './format-registry.js';
 
-export function createCardView({icon,esc,fmt,state,queuePulse,imageDownload,sendControl,platformLabel,artstationUI=()=>null,downloadsUI=()=>null,isVisitor=false}){
+/** /api/local/thumb 只对光栅图出 PNG；模型等非图片格式会回退成原始二进制流，
+ *  <img> 拿到的不是图片，必然裂图（2026-11-14）。这类资产直接给格式占位，不发无效请求。
+ *  例外是 3D 模型：它的封面由前端离屏渲好后写进同一个缓存，所以仍要出 <img>，
+ *  由 library-view 在 error 时触发 model-thumb.js 渲染并重试（.model-thumb 是唯一标记）。 */
+const NON_IMAGE_KINDS=new Set(['model','video','audio','document','archive','font']);
+function localThumbRel(raw){
+ const value=String(raw||'');
+ if(!/^\/(?!\/)/.test(value))return '';
+ try{
+  const u=new URL(value,'http://127.0.0.1');
+  return u.pathname==='/api/local/thumb'?(u.searchParams.get('rel')||''):'';
+ }catch{return '';}
+}
+
+/** A downloaded image must preview its own file, never a same-named model's cover. */
+export function localImageThumbnail(model={}){
+ if(classifyAsset(model).kind!=='images')return '';
+ let root=model.localRoot,rel=model.localRel;
+ if((!root||!rel)&&String(model.previewUrl||'').startsWith('/api/local/file?')){
+  const params=new URL(model.previewUrl,'http://local').searchParams;
+  root=params.get('root');rel=params.get('rel');
+ }
+ if(!root||!rel||formatKind(rel)!=='image')return '';
+ return `/api/local/thumb?${new URLSearchParams({root,rel,w:'384'})}`;
+}
+
+export function createCardView({albumCard,icon,esc,fmt,state,queuePulse,imageDownload,sendControl,platformLabel,artstationUI=()=>null,downloadsUI=()=>null,isVisitor=false}){
 /** 封面一律走本地代理，代理负责按需降级到能取到的档位；
  *  画廊额外点名要轻一档的等比图，好让瀑布流按原图比例排且不吃带宽。 */
 /** 同源相对地址（托管副本 / 本地索引文件的缩略图，如 /api/local/thumb?…）已经是本机直出，
  *  再套一层 /api/image 代理会被「只支持图床地址」的白名单挡下来 —— 卡片上就是一张裂图。 */
 function isLocalUrl(url){return /^\/(?!\/)/.test(String(url||''));}
 function imageUrl(model,{gallery=false}={}){
+ const ownImage=localImageThumbnail(model);
+ if(ownImage)return ownImage;
  if(!model.thumbnail)return '';
  if(isLocalUrl(model.thumbnail))return model.thumbnail;
  const rendition=coverRendition({platform:model.platform,gallery});
- return `/api/image?url=${encodeURIComponent(model.thumbnail)}${rendition?`&rendition=${rendition}`:''}`;
+ return `/api/image?url=${encodeURIComponent(model.thumbnail)}&card=1${rendition?`&rendition=${rendition}`:''}`;
 }
 /** 材质精度选择（卡片下载键左边、预览面板各一份，同一份标记）：选择经全局 change 委托写回
  *  模型对象，重渲染按它回填，下载时队列从同一个字段读——不复制第二份状态。 */
@@ -32,6 +62,9 @@ function isMaterial(m){return m.platform==='ambientcg'&&(!m.assetType||m.assetTy
  *  归到独立标记而不是复用 isMaterial：那只是「是不是贴图」，与「要不要裁切」无关。 */
 function needsFullThumb(m){return m.platform==='local'||m.platform==='sketchfab'||m.platform==='polyhaven'||m.platform==='ambientcg'||m.platform==='freestylized';}
 function isHdri(m){return ['polyhaven','ambientcg'].includes(m.platform)&&m.assetType==='hdris';}
+/** FreeStylized 的天空盒：库里可能存原始值 skybox，也可能存归一后的 hdris（跨平台统一值）。
+ *  两值都要认，否则精度下拉 / 分辨率标记会在这个类型上整体失效。 */
+function isFsSkybox(m){return m.platform==='freestylized'&&(m.assetType==='skybox'||m.assetType==='hdris');}
 /** 精度下拉里给已下载的档位打勾：只下载过 4K 时，1K/2K/8K 都不该被误标。
  *  downloadedRes 由卡片侧从后端任务现算（state==='saved' 且文件还在，无 options 的老任务算默认 2K）。 */
 function materialFormat(m){return m.sourceType==='substance'?'SBSAR':m.materialFormat==='PNG'||m.materialFormat==='SBSAR'?m.materialFormat:'JPG';}
@@ -50,10 +83,11 @@ function materialFormatSelect(m){
 }
 function materialResolutionSelect(m,downloadedRes=new Set()){
  if(m.platform==='ambientcg'&&materialFormat(m)==='SBSAR')return '';
- if(!isMaterial(m)&&!isHdri(m)&&!(m.platform==='freestylized'&&m.assetType==='skybox'))return '';
+ if(!isMaterial(m)&&!isHdri(m)&&!isFsSkybox(m))return '';
  return `<select class="material-resolution" data-material-resolution="${m.uid}" aria-label="材质下载精度" title="材质贴图下载精度（已下载精度会标注）">${['1K','2K','4K','8K'].map(r=>`<option value="${r}"${(m.materialResolution||'2K')===r?' selected':''}>${r}${downloadedRes.has(r)?'（已下载）':''}</option>`).join('')}</select>`;
 }
 function card(m,{gallery=false}={}){
+ if(m.albumPackage&&albumCard)return albumCard(m);
  const pictureMode=state.route==='discover'&&m.platform==='artstation'&&!state.modelOnly;
  const art=m.platform==='artstation',art3d=art&&artstationUI().has3dScene(m),saved=state.favorites.has(m.uid),selected=state.selected.has(m.uid),backendJobs=downloadsUI()?.jobs||[],task=backendJobs.findLast(t=>t.uid===m.uid)||state.tasks.findLast(t=>t.uid===m.uid);
  // 所有模型平台（含 ArtStation 图片模式）都登记成可收藏目标：图片模式以前不画心形键，
@@ -61,7 +95,7 @@ function card(m,{gallery=false}={}){
  registerFavoriteTarget(m.uid,m);
  // 有精度选择的资产（材质/HDRI/天空盒），「已下载」必须按精度对上：8K 下载过不代表 2K 也
  // 有了。历史任务没记精度的一律视为默认 2K，老记录不会集体变灰。
- const hasResSelect=isMaterial(m)||isHdri(m)||m.platform==='freestylized'&&m.assetType==='skybox';
+ const hasResSelect=isMaterial(m)||isHdri(m)||isFsSkybox(m);
  const savedJob=backendJobs.findLast(t=>t.uid===m.uid&&t.state==='saved'&&t.fileExists!==false&&t.id&&(!hasResSelect||sameMaterialTier(t,m)));
  const pulse=queuePulse.has(m.uid)&&Date.now()-queuePulse.get(m.uid)<6000;
  const busy=pulse||task&&['queued','held','retry_wait','running','transferring','validating','saving','cancelling'].includes(task.state),downloaded=!!savedJob||task&&task.fileExists!==false&&['saved','sent'].includes(task.state)&&(!hasResSelect||sameMaterialTier(task,m));
@@ -73,12 +107,14 @@ function card(m,{gallery=false}={}){
  // ——没有场景的图片套一层弹窗等于白点，用户要的是这张图的出处。
  // Poly Haven 只有 models 有网格可转，HDRI 是全景图、贴图是平铺图，转不了视角就别写「3D 预览」。
  // FreeStylized 的资源包 / Alpha / 智能材质里没有可渲染的东西（点开是官方页面），角标跟着改。
- const fsNoScene=m.platform==='freestylized'&&!['models','textures','skybox'].includes(m.assetType||'models');
+ const fsNoScene=m.platform==='freestylized'&&!isFsSkybox(m)&&!['models','textures'].includes(m.assetType||'models');
  // 本地素材（拖入导入 / 导入文件夹入库，platform='local'）根本没有 3D 场景可转，
  // 按资产形态给实话：图片就写「查看图片」，视频「播放视频」，其余「打开文件」。
- const localLabel=m.platform==='local'?(m.assetType==='video'?'播放视频':m.assetType==='image'?'查看图片':'打开文件'):'';
+ // 例外是能在内置查看器里转的模型格式（glb/gltf/fbx/obj/stl/ply/3mf）—— 它们现在真的能预览，
+ // 文案还写「打开文件」等于把用户赶去系统看图器。
+ const localModel=m.platform==='local'&&canPreviewModelInViewer(m.ext||m.name);
+ const localLabel=m.platform==='local'?(m.assetType==='video'?'播放视频':m.assetType==='image'?'查看图片':localModel?'3D 预览':'打开文件'):'';
  const previewLabel=localLabel||(art&&!art3d?'查看作品图片':fsNoScene?'打开官方页面':'交互式 3D 预览');
- const previewIcon=localLabel?(m.assetType==='video'?'play':m.assetType==='image'?'image':'external'):(art&&!art3d?'image':fsNoScene?'external':'rotate');
  // 「加入模型库」徽标和「打开下载文件夹」小图标已收进右键菜单：封面上只留预览热区、
  // 收藏心形、选择方块与资源类型角标，别让四个角各摆一颗带中文的按钮。
  // savedJob 仍供下面的导出控件 / 下载态判定使用。
@@ -103,6 +139,11 @@ function card(m,{gallery=false}={}){
  // 本地素材（platform='local'）文件就在本机，没有「下载」这个动作可做：给它一颗点了必然失败的键
 // 只会误导，直接不渲染 —— 打开/预览走封面热区。
 const downloadButton=(downloaded&&!isVisitor)||m.platform==='local'?'':`<button class="card-download${dlBusy?' busy':''}" data-action="download" data-uid="${m.uid}" ${dlDisabled?'disabled':''} title="${dlTitle}" aria-label="${dlAria}">${icon(busy?'clock':'download')}<span>${dlLabel}</span></button>`;
+ // 发现页瀑布流：`.card-bottom` 整块是 display:none，底栏那颗下载键会跟着消失，
+ // 于是封面右下角补一颗悬浮键。沿用封面上其它图标（收藏 / 信息）的语言 ——
+ // 无底无边框、只在卡片 hover（或选中 / 键盘聚焦）时浮现，已下载与本地素材不再给键。
+ const galleryDownload=gallery&&state.route==='discover'&&!(downloaded&&!isVisitor)&&m.platform!=='local'
+  ?`<button class="card-dl${dlBusy?' busy':''}" data-action="download" data-uid="${m.uid}" ${dlDisabled?'disabled':''} title="${dlTitle}" aria-label="${dlAria}">${icon(dlBusy?'clock':'download')}</button>`:'';
  // meta 一行化：作者与平台标签重复时（如 ambientCG）不再显示，只留「标题 · 作者 · 许可」。
  const byline=m.author&&m.author.trim()!==platformLabel(m.platform)?authorButton(m,'card-byline'):'';
  // 左上角只放资源类型标志（模型/材质/HDRI/天空盒…）。下载与导出状态由左下角「已加入模型库」、
@@ -147,13 +188,21 @@ const downloadButton=(downloaded&&!isVisitor)||m.platform==='local'?'':`<button 
   // UI 元素（Uiverse）没有可用的封面图（官方 CDN 在很多网络下连不上），
   // 而且它的价值就是「会动」—— 所以封面直接是现场渲染的动效，不是静态图。
   const isUiElement=m.assetType==='uielement'||m.platform==='uiverse';
+  const thumbRel=localThumbRel(m.thumbnail);
+  const thumbKind=thumbRel?formatKind(thumbRel):'';
+  // 能被出封面的 3D 格式：glb/gltf/fbx/obj/stl/ply/3mf 由前端 three.js 渲，
+  // .blend / .usd* 由服务端出图（见 server/model-cover.mjs）。这里只决定要不要出 <img>。
+  // .blend 在注册表里 kind 是 other，不能只看 kind，否则它会被当成「无封面」直接占位。
+  const modelCover=!!thumbRel&&/\.(glb|gltf|fbx|obj|stl|ply|3mf|blend|usd|usda|usdc|usdz)$/i.test(thumbRel);
+  const noCover=NON_IMAGE_KINDS.has(thumbKind)&&!modelCover;
+  const coverText=noCover?'该格式不生成缩略图':'暂无缩略图';
   const media=isUiElement?uiElementSlot(m,{esc})
-    :m.thumbnail?cardMedia({src:esc(imageUrl(m,{gallery})),alt:esc(m.name)}):cardMedia({icon:icon('cube'),text:'暂无缩略图'});
+    :m.thumbnail&&!noCover?cardMedia({src:esc(imageUrl(m,{gallery})),alt:esc(m.name),className:modelCover?'thumbnail model-thumb':'thumbnail'}):cardMedia({icon:icon('cube'),text:coverText});
   // UI 元素卡片的封面上不能盖热区：那层 .preview-hit 会把指针全吃掉，组件本身就点不动了。
   // 交互留给组件自己（悬停 / 按下都有真实反馈），打开信息弹窗走这颗悬浮键 —— 只占底部一小条，
   // 不挡组件的中部操作；标题键同样能开弹窗，键盘与触屏都有入口。
   const uiOpen=isUiElement?`<button class="ui-element-open" data-action="preview" data-uid="${m.uid}" title="查看 UI 信息并复制代码" aria-label="查看 ${esc(m.name)} 的信息与代码">${icon('scan')}<span>查看信息 · 代码</span></button>`:'';
-  const previewHit=isUiElement?uiOpen:`<button class="preview-hit" data-action="preview" data-uid="${m.uid}" aria-label="${previewLabel} ${esc(m.name)}"><span>${icon(previewIcon)}${previewLabel}</span></button>`;
+  const previewHit=isUiElement?uiOpen:`<button class="preview-hit" data-action="preview" data-uid="${m.uid}" aria-label="${previewLabel} ${esc(m.name)}"></button>`;
   return assetCard({
   keyName:'uid',
   keyValue:m.uid,
@@ -168,7 +217,7 @@ const downloadButton=(downloaded&&!isVisitor)||m.platform==='local'?'':`<button 
  // 材质格式 / 精度这些次要控件留在缩略图下方常驻区（标签键已移除，平台标签自动读取、AI 标签后台生成）。
  // 导出控件移到卡片底部动作行、与下载键同处一行：未下载时显示「下载」，下载完成后原地变成
  // 「软件选择 + 导出」——软件选择始终在导出键左边，底部因此不再多占一行。
- metaActions:materialResolution,
+ metaActions:materialResolution+galleryDownload,
  // 「发送到」是库专属动作（要有本地文件才能发到 Blender 等），发现页一律不显示；发现页只留下载。
  actions:`${state.route!=='discover'?exportControl:''}${downloadButton}${state.route!=='discover'&&!isVisitor?trashActions:''}`,
 });

@@ -6,6 +6,7 @@ class Node {
  constructor(){this.listeners={};this.textContent='';this.innerHTML='';this.disabled=false;this.children=[];}
  addEventListener(type,fn){this.listeners[type]=fn;}
  appendChild(node){this.children.push(node);node.parent=this;}
+ insertAdjacentElement(_position,node){this.adjacent=node;}
  remove(){this.parent.children=this.parent.children.filter(node=>node!==this);}
  querySelectorAll(){return this.buttons||[];}
  setAttribute(){}
@@ -51,7 +52,7 @@ test('在线根选相对文件导入：默认链接/跳过，同名不覆盖、�
  assert.equal(h.changed,1);assert.equal(h.changedData.status,'imported');assert.equal(h.changedData.asset.name,'<img>.png');assert.match(h.$('#local-import-status').textContent,/链接入库（未复制）/);
  assert.equal(h.$('#local-import-status').innerHTML,'');assert.equal(h.rootButton.disabled,false);
  assert.equal(h.$('#local-import-roots').children.length,1);
- const notice=h.$('#local-import-roots').children[0];assert.match(notice.children[0].textContent,/刷新资产库后显示新资产/);
+ const notice=h.$('#local-import-roots').children[0];assert.match(notice.children[0].textContent,/自动更新到资产库/);
  assert.equal(h.reloaded,0,'不自动刷新丢失草稿');notice.children[1].listeners.click();assert.equal(h.reloaded,1);
 });
 

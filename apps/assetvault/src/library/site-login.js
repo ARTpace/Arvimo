@@ -83,3 +83,47 @@ export function bindSiteLogin(button,platform,{onClosed,toast}={}){
   }
  };
 }
+
+// ── 平台菜单里的账号登录（2026-11-18）──────────────────────────────────────────
+// 平台下拉每一项右侧的「登录」图标靠这两个函数：先问服务端哪些平台登记了登录入口
+// （权威名单在 server/picture-sites.mjs 的 PICTURE_LOGIN_URLS），再看 cookie 仓判断是否已登录。
+// 不在前端硬编码名单，否则新接一个站要改两处、迟早对不上。
+
+let targetCache = null;
+
+/** 平台 → 登录入口地址。成功后整页复用；失败不缓存，下次调用再试。 */
+export async function loginTargets(){
+ if(targetCache)return targetCache;
+ try{
+  const response=await fetch('/api/browser/logins',{headers:{'x-sfx-local':'1'}});
+  if(!response.ok)throw new Error('登录入口读取失败');
+  targetCache=(await response.json())?.platforms||{};
+ }catch{ targetCache=null; }
+ return targetCache||{};
+}
+
+/**
+ * 各平台当前登录态：'ok' 已登录、'have' 有 cookie 但站点没确认、不出现＝未登录。
+ * 判定口径与 markSiteLogin 一致：同一站点域下存在 login===true 的 cookie 记录即算已登录。
+ * 读不到 cookie 仓时返回空表（菜单就不显示登录标识，而不是乱标）。
+ */
+export async function loginStates(){
+ const targets=await loginTargets();
+ const ids=Object.keys(targets);
+ const out={};
+ if(!ids.length)return out;
+ let rows=[];
+ try{
+  const response=await fetch('/api/browser/cookies',{headers:{'x-sfx-local':'1'}});
+  if(!response.ok)return out;
+  rows=(await response.json())?.hosts||[];
+ }catch{ return out; }
+ for(const id of ids){
+  let host='';
+  try{ host=new URL(targets[id]).hostname; }catch{ continue; }
+  const hit=rows.filter(row=>sameSite(row.domain,host));
+  if(!hit.length)continue;
+  out[id]=hit.some(row=>row.login===true)?'ok':'have';
+ }
+ return out;
+}

@@ -1,3 +1,4 @@
+import {assembleLibraryStyles} from '../scripts/lib/library-styles.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -34,7 +35,7 @@ test('gallery: Uiverse cards do get the waterfall, and stay square inside it',()
  assert.equal(galleryAvailable(state),true);
  assert.equal(galleryActive(state),true);
  assert.equal(displayGridClass(state),'model-grid gallery');
- const css=fs.readFileSync(new URL('../src/library/app.css',import.meta.url),'utf8');
+ const css=assembleLibraryStyles();
  assert.match(css,/\.gallery \.ui-element-card \.card-media\{aspect-ratio:1\}/,'瀑布流里 UI 卡片封面必须锁 1:1，否则高度塌成 0');
 });
 

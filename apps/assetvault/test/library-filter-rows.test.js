@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import {runInNewContext} from 'node:vm';
 import {readFileSync, readdirSync} from 'node:fs';
 
 const read = name => readFileSync(new URL(`../src/library/${name}`, import.meta.url), 'utf8');
@@ -35,4 +36,23 @@ test('筛选行：注册表里的每个 id 在 index.html 都有对应节点', (
   for (const id of ids) {
     assert.ok(html.includes(`id="${id}"`), `index.html 缺 #${id}`);
   }
+});
+
+
+test('发现页：全部平台显示统一分类，单平台只显示自己的分类，无分类时不能留白', () => {
+ const ids=[...read('library-view.js').match(/export const FILTER_ROWS=\[([^\]]+)\]/)[1].matchAll(/'([^']+)'/g)].map(match=>match[1]);
+ const nodes=new Map(ids.map(id=>[id,{hidden:true,textContent:''}]));
+ const state={platform:'all'};
+ const source=app.match(/function renderFilters\(platform\)\{[\s\S]*?\n\}/)[0];
+ const render=runInNewContext('('+source+')',{$:selector=>nodes.get(selector.slice(1)),FILTER_ROWS:ids,state,ALL:'all',mergedFilters:{refresh(){},release(){}}});
+ render({filters:['filters-merged']});
+ assert.equal(nodes.get('filters-merged').hidden,false);
+ state.platform='artstation';render({label:'ArtStation',filters:'filters-artstation'});
+ assert.equal(nodes.get('filters-artstation').hidden,false);
+ assert.equal(nodes.get('filters-merged').hidden,true);
+ assert.equal(nodes.get('filters-platform-empty').hidden,true);
+ state.platform='civitai';render({label:'Civitai',picture:true,filters:[]});
+ assert.equal(nodes.get('filters-platform-empty').hidden,false);
+ assert.match(nodes.get('filters-platform-empty').textContent,/Civitai.*未接入原站分类/);
+ assert.equal(nodes.get('filters-artstation').hidden,true);
 });

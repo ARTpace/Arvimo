@@ -35,3 +35,9 @@ scripts/.gen/
 /_local/
 /scratch/
 /dist/
+
+# Local browser diagnostics, UI drafts, and runtime output
+.playwright-cli/
+.oil-ui/
+output/
+*.lnk

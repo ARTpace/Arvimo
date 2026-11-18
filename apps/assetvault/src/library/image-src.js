@@ -12,14 +12,28 @@ const SAME_ORIGIN = /^\/(?!\/)/;
 // blob: / data: 是页面自己生成的内存图，代理取不到，必须直出。
 const INLINE = /^(blob:|data:)/i;
 
-export function thumbSrc(raw, {rendition = '', full = false} = {}) {
+export function thumbSrc(raw, {rendition = '', full = false, card = false} = {}) {
   const url = String(raw || '').trim();
   if (!url) return '';
   if (SAME_ORIGIN.test(url) || INLINE.test(url)) return url;
   const params = [`url=${encodeURIComponent(url)}`];
   if (rendition) params.push(`rendition=${encodeURIComponent(rendition)}`);
   if (full) params.push('full=1');
+  else if (card) params.push('card=1');
   return `/api/image?${params.join('&')}`;
 }
 
 export const isSameOriginImage = url => SAME_ORIGIN.test(String(url || ''));
+
+/** Recognition keeps more detail while card rendering retains its small, cached thumbnails. */
+export function visualTagSrc(raw) {
+  const src=thumbSrc(raw,{rendition:'large'});
+  if(!src)return '';
+  const url=new URL(src,'http://127.0.0.1');
+  if(url.pathname==='/api/local/thumb'){
+    url.searchParams.delete('full');
+    url.searchParams.set('purpose','tags');
+    return url.pathname+url.search;
+  }
+  return src;
+}

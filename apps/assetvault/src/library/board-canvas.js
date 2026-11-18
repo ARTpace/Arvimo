@@ -19,6 +19,7 @@ const Z_MIN = 0.05;
 const Z_MAX = 6;
 const CARD_MIN = 48;
 const DRAG_SLOP = 3;        // 按下到拖动的最小平移（px），小于它算点击
+const PAN_SLOP = 4;         // 右键按下后走够这么远才算拖动平移，否则算右键单击
 const SNAP_PX = 6;          // 吸附判定的屏幕像素；换算成世界单位时要除以 zoom
 const GRID_STEP = 8;
 const HANDLE_SIZE = 9;
@@ -53,6 +54,9 @@ export function createBoardCanvas(ctx = {}) {
   let interaction = null;
   let raf = 0;
   let guides = {x: [], y: []};
+  // 右键：pointerup 里已经处理过（弹菜单或平移结束），浏览器随后补发的 contextmenu
+  // 要吞掉，不然会弹两次菜单。标志只活到下一个任务，避免长期残留。
+  let swallowMenu = false;
 
   const canvas = () => docState.canvases.find(item => item.id === activeId) || docState.canvases[0];
   const elements = () => canvas().elements;
@@ -441,16 +445,19 @@ export function createBoardCanvas(ctx = {}) {
   }
 
   function beginInteraction(event) {
-    if (event.button === 2) return;
     const handle = event.target.closest?.('.cv-handle');
     const hitId = handle ? [...selection][0] : elementAt(event.clientX, event.clientY);
     const start = toWorld(event.clientX, event.clientY);
     lastPointer = {x: event.clientX, y: event.clientY};
 
     // 中键 / 空格 / 右键拖动 = 平移（Artflow 同一套：空白拖动留给框选）。
+    // 右键先不判定成败：没超过阈值的位移在 pointerup 里算「单击」，改为弹菜单。
     const panning = event.button === 1 || spaceDown || event.button === 2;
     if (panning) {
-      interaction = {type: 'pan', startClient: {x: event.clientX, y: event.clientY}, startCam: {...camera}};
+      interaction = {
+        type: 'pan', button: event.button, moved: false,
+        startClient: {x: event.clientX, y: event.clientY}, startCam: {...camera},
+      };
       canvasEl.classList.add('is-panning');
       event.preventDefault();
       return;
@@ -541,6 +548,13 @@ export function createBoardCanvas(ctx = {}) {
     const now = toWorld(event.clientX, event.clientY);
 
     if (interaction.type === 'pan') {
+      // 位移用「起点绝对值」算，所以过阈值那一刻不会跳；阈值之前一律不动，
+      // 让右键单击保持「点哪就是哪」（否则偶尔抖 2px 会留下看不见的偏移）。
+      if (!interaction.moved) {
+        const travel = Math.hypot(event.clientX - interaction.startClient.x, event.clientY - interaction.startClient.y);
+        if (travel < PAN_SLOP) return;
+        interaction.moved = true;
+      }
       camera.x = interaction.startCam.x + (event.clientX - interaction.startClient.x);
       camera.y = interaction.startCam.y + (event.clientY - interaction.startClient.y);
       scheduleCamera();
@@ -615,7 +629,7 @@ export function createBoardCanvas(ctx = {}) {
     }
   }
 
-  function onPointerUp() {
+  function onPointerUp(event) {
     if (!interaction) return;
     const finished = interaction;
     interaction = null;
@@ -639,7 +653,17 @@ export function createBoardCanvas(ctx = {}) {
       commit();
       return;
     }
-    if (finished.type === 'pan') { saveSoon(); return; }
+    if (finished.type === 'pan') {
+      // 右键分两种收场：拖动过 = 纯平移（不弹菜单）；没走够阈值 = 单击，弹元素菜单。
+      // 两种都要先挂上 swallowMenu —— 浏览器在 pointerup 之后还会补发一次 contextmenu。
+      if (finished.button === 2 && event?.type !== 'pointercancel') {
+        swallowMenu = true;
+        setTimeout(() => { swallowMenu = false; }, 0);
+        if (!finished.moved) openMenuAt(event.clientX, event.clientY);
+      }
+      saveSoon();
+      return;
+    }
     if (finished.type === 'resize' || finished.type === 'rotate') { commit(); return; }
     if (finished.type === 'drag' && !finished.moved) { paintHandles(); }
   }
@@ -840,12 +864,12 @@ export function createBoardCanvas(ctx = {}) {
       if (element) openElement(element);
     });
     canvasEl.addEventListener('contextmenu', event => {
-      // 右键留给平移；在元素上右键则弹一个精简菜单。
-      const id = elementAt(event.clientX, event.clientY);
-      if (!id) { event.preventDefault(); return; }
+      // 右键的语义由 pointerup 判定（拖动 = 平移，单击 = 菜单），这里只兜底：
+      // pointerup 已经处理过的吞掉；剩下的来源（触屏长按、键盘菜单键）没有
+      // pointerup(button=2)，仍然按老规则给元素弹精简菜单。
       event.preventDefault();
-      if (!selection.has(id)) setSelection([id]);
-      showContextMenu(event.clientX, event.clientY);
+      if (swallowMenu) { swallowMenu = false; return; }
+      openMenuAt(event.clientX, event.clientY);
     });
 
     hudEl.addEventListener('click', event => {
@@ -921,6 +945,14 @@ export function createBoardCanvas(ctx = {}) {
     current.name = String(name).slice(0, 60);
     renderCanvasPicker();
     commit();
+  }
+
+  /** 在坐标处弹元素菜单。空白处右键不弹 —— 右键的主要用途是平移画布。 */
+  function openMenuAt(clientX, clientY) {
+    const id = elementAt(clientX, clientY);
+    if (!id) return;
+    if (!selection.has(id)) setSelection([id]);
+    showContextMenu(clientX, clientY);
   }
 
   function showContextMenu(clientX, clientY) {

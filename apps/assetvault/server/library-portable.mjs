@@ -175,7 +175,7 @@ export async function importLibrary({storage, payload, mode = 'merge', actor = '
     if (mode === 'replace') {
       report.removed = Number(conn.all('SELECT count(*) AS n FROM assets')[0].n);
       for (const table of ['collection_assets', 'smart_collections', 'collections',
-        'asset_vectors', 'asset_tags', 'tags', 'asset_formats', 'assets_fts', 'tag_counts', 'content_tags', 'assets']) {
+        'asset_vectors', 'asset_tags', 'tags', 'asset_formats', 'assets_fts', 'tag_counts', 'content_tags', 'file_locations', 'tag_rejections', 'asset_label_progress', 'label_backfill', 'assets']) {
         conn.run(`DELETE FROM ${table}`);
       }
       // 定点 op 会读取 state_meta 的种子：同 UID 的旧标注和探测缓存也必须先清理。

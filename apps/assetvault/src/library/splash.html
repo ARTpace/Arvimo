@@ -8,9 +8,13 @@
 <style>
 
 *{box-sizing:border-box}
+html{background:transparent}
 body{margin:0;min-height:100vh;display:grid;place-items:center;overflow:hidden;
-  background:#04070a;color:#e1e7ed;font-synthesis:none;
-  font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+  --av-window-radius:12px;border-radius:var(--av-window-radius);clip-path:inset(0 round var(--av-window-radius));isolation:isolate;
+  background:transparent;color:#e1e7ed;font-synthesis:none;
+  font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+/* 不把背景画在 body 上：浏览器会将其传播到文档画布，填满透明圆角。 */
+body::before{content:"";position:fixed;inset:0;z-index:-1;pointer-events:none;border-radius:var(--av-window-radius);background-color:#04070a;
   background-image:radial-gradient(circle at 50% 30%,rgba(200,243,83,.05) 0%,transparent 60%),
     radial-gradient(circle at 80% 80%,rgba(20,35,50,.4) 0%,transparent 50%)}
 /* 两团缓慢漂移的黄绿光斑 */

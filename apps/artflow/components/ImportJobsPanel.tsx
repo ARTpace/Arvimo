@@ -1,3 +1,4 @@
+import { canvasMessage } from '../utils/canvas-messages';
 import React, { useState } from 'react';
 import type { ManagedImportJob } from '../types';
 import type { ManagedImportJobUpdate } from '../utils/managedProjectStorage';
@@ -40,7 +41,7 @@ export const ImportJobsPanel: React.FC<ImportJobsPanelProps> = ({
 }) => {
   const [cancellingJobId, setCancellingJobId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
-  const { t } = useTranslation();
+  const { t, language } = useTranslation();
 
   if (!isOpen) return null;
 
@@ -110,7 +111,7 @@ export const ImportJobsPanel: React.FC<ImportJobsPanelProps> = ({
 
         {actionError && (
           <p role="alert" className="mb-3 rounded-lg border border-rose-300/30 bg-rose-400/10 px-3 py-2 text-xs text-rose-100">
-            {actionError}
+            {canvasMessage(actionError, language)}
           </p>
         )}
 

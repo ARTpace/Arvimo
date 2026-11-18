@@ -15,7 +15,7 @@ interface KeyboardShortcutsProps {
     handleStopEditing: () => void;
     activeTool: Tool;
     setActiveTool: (tool: Tool) => void;
-    shiftEraseOriginalTool: React.MutableRefObject<Tool | null>;
+    temporaryEraseOriginalTool: React.MutableRefObject<Tool | null>;
     handleUndo: () => void;
     handleRedo: () => void;
     selectedElementIds: string[];
@@ -39,7 +39,7 @@ export const useKeyboardShortcuts = ({
     handleStopEditing,
     activeTool,
     setActiveTool,
-    shiftEraseOriginalTool,
+    temporaryEraseOriginalTool,
     handleUndo,
     handleRedo,
     selectedElementIds,
@@ -92,6 +92,9 @@ export const useKeyboardShortcuts = ({
             }
 
             if (isTyping) return;
+            if (e.key === 'Escape' && ['draw','erase','highlighter'].includes(activeTool)) {
+                e.preventDefault();setActiveTool('select');return;
+            }
 
             // F键 聚焦
             if (e.key.toLowerCase() === 'f') {
@@ -100,9 +103,13 @@ export const useKeyboardShortcuts = ({
                 return;
             }
 
-            // Shift 临时橡皮擦
-            if (e.key === 'Shift' && !e.repeat && (activeTool === 'draw' || activeTool === 'highlighter')) {
-                shiftEraseOriginalTool.current = activeTool;
+            if ((e.ctrlKey||e.metaKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase()==='d') {
+                e.preventDefault();setActiveTool(['draw','erase','highlighter'].includes(activeTool)?'select':'draw');return;
+            }
+
+            // Alt 临时橡皮擦；Shift 留给钢笔直线约束。
+            if (e.key === 'Alt' && !e.repeat && (activeTool === 'draw' || activeTool === 'highlighter')) {
+                temporaryEraseOriginalTool.current = activeTool;
                 setActiveTool('erase');
                 return;
             }
@@ -135,20 +142,22 @@ export const useKeyboardShortcuts = ({
         };
 
         const handleKeyUp = (e: KeyboardEvent) => {
-            if (e.key === 'Shift' && shiftEraseOriginalTool.current) {
-                setActiveTool(shiftEraseOriginalTool.current);
-                shiftEraseOriginalTool.current = null;
+            if (e.key === 'Alt' && temporaryEraseOriginalTool.current) {
+                setActiveTool(temporaryEraseOriginalTool.current);
+                temporaryEraseOriginalTool.current = null;
             }
         };
 
         const handlePasteEvent = async (e: ClipboardEvent) => {
+            if (e.defaultPrevented) return;
             const target = e.target as HTMLElement;
             const isTyping = target.tagName === 'INPUT' || 
                              target.tagName === 'TEXTAREA' || 
                              target.isContentEditable;
             if (isTyping) return;
 
-            const center = getCanvasCenterPoint ? getCanvasCenterPoint() : { x: 0, y: 0 };
+            const center = (e as ClipboardEvent & {canvasPoint?: Point}).canvasPoint
+                ?? (getCanvasCenterPoint ? getCanvasCenterPoint() : { x: 0, y: 0 });
 
             // 1. Check if files in clipboard
             if (e.clipboardData?.files && e.clipboardData.files.length > 0) {
@@ -279,6 +288,6 @@ export const useKeyboardShortcuts = ({
         handleAddFiles,
         addElementsWithParenting,
         getCanvasCenterPoint,
-        shiftEraseOriginalTool
+        temporaryEraseOriginalTool
     ]);
 };

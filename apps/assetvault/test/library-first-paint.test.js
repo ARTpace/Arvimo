@@ -20,7 +20,17 @@ const collapse=read('src/library/sidebar-collapse.js');
 const view=read('src/library/library-view.js');
 const server=read('server/library.mjs');
 const build=read('scripts/build-library.mjs');
-const masonrySource=read('src/library/masonry.js').replaceAll('export function','function');
+
+test('按需图片解码模块同时有构建产物和服务端入口',()=>{
+ assert.ok(server.includes("'/image-decoders.js'"));
+ assert.ok(build.includes("'image-decoders.js'"));
+});
+// masonry.js 从 gallery-view.js 取「横版跨两列」的判定（比例从哪来、跨几列是同一份知识，
+// 不在排版引擎里再抄一份）。这里把两个模块拼成一段脚本跑：vm 不认 import 语句，
+// 所以先把 import 行去掉、把 export 改成普通声明。
+const stripModule=s=>s.replaceAll('export function','function').replaceAll('export const','const');
+const gallerySource=stripModule(read('src/library/gallery-view.js'));
+const masonrySource=gallerySource+'\n'+stripModule(read('src/library/masonry.js')).replace(/^import\s.*$/gm,'');
 
 test('折叠态在首帧就是对的：同源脚本阻塞解析，不靠内联脚本',()=>{
  // CSP 只放行 'self'：任何没有 src 的内联脚本都不会执行，等于这条早设 class 的逻辑不存在。
@@ -43,23 +53,62 @@ test('折叠态在首帧就是对的：同源脚本阻塞解析，不靠内联�
 });
 
 // 一个够用的假网格：children 是卡片，clientWidth 可改，样式写进每张卡自己的 Map。
-function makeGrid(width){
- let frame=0;const listeners={};
+function makeGrid(width,timedResize=false){
+ let timerId=0;const timers=new Map();
+ let frame=0,resize,mutate;const records=[],listeners={};
  const style=()=>{const values=new Map();return {values,getPropertyValue:key=>values.get(key)||'',setProperty:(key,value)=>values.set(key,value)};};
  const root={children:[],clientWidth:width,style:style(),matches:selector=>selector.includes('model-grid'),
   querySelectorAll:()=>[],addEventListener:(name,fn)=>{listeners[name]=fn;},closest:()=>root};
- const card=height=>({height,style:style(),closest(){return this;},getBoundingClientRect(){return {height:this.height};}});
- const context={window:{innerWidth:1200,addEventListener(){}},document:{},
+ const card=height=>({height,classList:{contains:()=>false},style:style(),closest(){return this;},getBoundingClientRect(){return {height:this.height};}});
+ const context={window:{innerWidth:1200,addEventListener(){},...(timedResize?{setTimeout:fn=>{timers.set(++timerId,fn);return timerId;},clearTimeout:id=>timers.delete(id)}:{})},document:{},
   // masonry.js 读 --lib-gap-x/y 与 --lib-col-min 用 getComputedStyle；沙箱里给个回落，
   // 缺变量时 masonry 自己会走 12/14/190 默认值，不影响这里对坐标写入时机的断言。
   getComputedStyle:el=>el.style||{getPropertyValue:()=>''},
-  requestAnimationFrame:fn=>{frame=fn;return 1;},MutationObserver:class{constructor(fn){this.fn=fn;}observe(){}},
-  ResizeObserver:class{observe(){}},root};
+  requestAnimationFrame:fn=>{frame=fn;return 1;},MutationObserver:class{constructor(fn){mutate=fn;}observe(){}takeRecords(){return records.splice(0);}},
+  cancelAnimationFrame:()=>{frame=0;},
+  ResizeObserver:class{constructor(fn){resize=fn;}observe(){}},root};
  vm.runInNewContext(masonrySource+';this.__api=observeMasonry(root);',context);
  // frame() 只在真的排了帧时跑它；已经直接 layout 过（没有待跑帧）就什么也不做。
- return {root,card,frame:()=>{const fn=frame;frame=0;if(typeof fn==='function')fn();},api:context.__api,listeners};
+ return {root,card,timers,frame:()=>{const fn=frame;frame=0;if(typeof fn==='function')fn();},pending:()=>!!frame,queue:record=>records.push(record),deliver:()=>mutate(records.splice(0)),resize:width=>resize([{contentRect:{width}}]),api:context.__api,listeners};
 }
 const placed=card=>card.style.getPropertyValue('--masonry-left')!==''&&card.style.getPropertyValue('--masonry-top')!=='';
+
+test('同步排版消费未派发的 DOM 变更，下一帧不再重复测量',()=>{
+ const grid=makeGrid(800);let reads=0;
+ const card=grid.card(200);card.getBoundingClientRect=()=>{reads++;return {height:200};};grid.root.children=[card];
+ grid.queue({type:'attributes',target:grid.root});grid.api.flush();
+ const before=reads;grid.deliver();assert.equal(grid.pending(),false);
+ grid.frame();assert.equal(reads,before);
+});
+
+test('瀑布流尺寸连续跟随滑块，不等跨过列数阈值才变化',()=>{
+ const grid=makeGrid(800);
+ grid.root.children=[grid.card(300),grid.card(200)];
+ grid.root.style.setProperty('--lib-col-min','150.25');
+ grid.api.flush();
+ assert.equal(grid.root.children[0].style.getPropertyValue('--masonry-width'),'150.25px');
+ grid.root.style.setProperty('--lib-col-min','150.75');
+ grid.api.flush();
+ assert.equal(grid.root.children[0].style.getPropertyValue('--masonry-width'),'150.75px');
+});
+
+test('同步排版消费待执行帧，网格自身高度变化不再触发重排',()=>{
+ const grid=makeGrid(800);
+ grid.root.children=[grid.card(300),grid.card(200)];
+ assert.equal(grid.pending(),true);
+ grid.api.flush();
+ assert.equal(grid.pending(),false,'flush cancels the already queued layout');
+ grid.resize(800);grid.frame();
+ grid.resize(800);
+ assert.equal(grid.pending(),false,'height-only resize must not schedule layout');
+ grid.root.clientWidth=600;grid.resize(600);
+ assert.equal(grid.pending(),true,'width resize still schedules live layout');
+ grid.frame();
+ assert.ok(grid.root.children.every(placed));
+ grid.resize(0);grid.frame();
+ grid.resize(600);
+ assert.equal(grid.pending(),true,'showing a hidden grid schedules layout again');
+});
 
 test('整块重建后在同一个任务里摆好位，不等下一帧',()=>{
  const grid=makeGrid(800);
@@ -105,4 +154,20 @@ test('绘制层在瀑布流重建后主动 flush，而不是等下一帧',()=>{
  assert.match(view,/const masonry=observeMasonry\(\$\('#grid'\)\)/,'要留住 observeMasonry 的返回值');
  assert.ok(view.includes('masonry.flush()'),'写完后同一任务内摆位');
  assert.ok(/if\(gallery\)masonry\.flush\(\);/.test(view),'只有瀑布流需要抢帧；平铺网格是正常流');
+});
+
+test('连续窗口变宽只在停止后重排一次，期间图片加载不触发全量测量',()=>{
+ const grid=makeGrid(800,true),card=grid.card(200);let reads=0;
+ card.getBoundingClientRect=()=>{reads++;return {height:200};};grid.root.children=[card];
+ grid.frame();grid.resize(800);grid.frame();const before=reads;
+ for(let width=801;width<=900;width++){
+  grid.root.clientWidth=width;grid.resize(width);
+  grid.listeners.load({target:card});grid.frame();
+ }
+ assert.equal(reads,before,'拖动期间不反复恢复卡片自然布局');
+ assert.equal(grid.timers.size,1,'所有宽度事件合并为一次尾部更新');
+ const run=[...grid.timers.values()][0];grid.timers.clear();run();grid.frame();
+ assert.ok(reads>before,'停止拖动后测量最终宽度');
+ assert.equal(parseFloat(card.style.getPropertyValue('--masonry-width')),216,'采用最终 900px 的四列布局');
+ grid.listeners.load({target:card});grid.frame();assert.ok(reads>before+1,'普通图片加载继续即时更新');
 });

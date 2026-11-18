@@ -1,3 +1,4 @@
+import {assembleLibraryStyles} from '../scripts/lib/library-styles.mjs';
 // 筛选图标条：维度注册表、激活判定、token 协议、持久化与装配契约。
 // 面板涉及 DOM，这里用「纯函数真值 + 源码静态断言」两层钉住，避免引入 jsdom 依赖。
 import test from 'node:test';
@@ -133,7 +134,7 @@ test('命令条：1440 不折行、图标带悬停短标签、长状态压成「
   // 抽屉的 DOM 模板已拆到 filter-panel-drawer.js；filter-dock.js 只管状态编排。
   const dock = read('filter-dock.js');
   const drawer = read('filter-panel-drawer.js');
-  const css = read('app.css');
+  const css = assembleLibraryStyles();
   const html = read('index.html');
   const app = read('app.js');
 

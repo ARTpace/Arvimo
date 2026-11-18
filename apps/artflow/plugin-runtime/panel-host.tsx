@@ -128,6 +128,18 @@ export const PluginPanelHost: React.FC<PluginPanelHostProps> = ({ kernel, isOpen
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [isOpen, onClose, floating]);
   useLayoutEffect(() => {
+    if (!isOpen || !floating || activePanel?.value.quickEntry !== 'appearance') return;
+    const button = document.querySelector<HTMLElement>('[data-bp-appearance-shortcut]');
+    const panel = panelRef.current;
+    if (!button || !panel) return;
+    const toolbar = button.closest<HTMLElement>('[data-bp-ui-floating-shell]') ?? button;
+    const anchor = toolbar.getBoundingClientRect();
+    const top = Math.min(anchor.bottom + 8, window.innerHeight - 68);
+    // Fit below the toolbar before clamping; a tall panel must not be pushed over its trigger.
+    panel.style.maxHeight = `${Math.max(56, window.innerHeight - top - 12)}px`;
+    movePanel({ x: anchor.right - panel.offsetWidth, y: top });
+  }, [isOpen, floating, activePanelId, poppedOut]);
+  useLayoutEffect(() => {
     if (!isOpen || !floating) return;
     movePanel(positionRef.current);
   }, [isOpen, floating, collapsed]);

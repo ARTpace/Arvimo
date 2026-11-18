@@ -9,6 +9,11 @@
 //   state_meta 存前端原始 blob 字符串（权威，保证与 /api/library-state 字节级一致）；
 //   assets / tags / assets_fts 是从 blob 派生的索引副本，任何时候都能重建。
 import {createHash} from 'node:crypto';
+import {V7_SQL} from './schema/v7-file-locations.mjs';
+import {V8_SQL} from './schema/v8-tag-backfill.mjs';
+import {V9_SQL} from './schema/v9-tag-management.mjs';
+import {V10_SQL} from './schema/v10-label-rules.mjs';
+import {V11_SQL} from './schema/v11-seed-key-compat.mjs';
 import {V2_SQL} from './schema/v2-scale.mjs';
 import {V3_SQL} from './schema/v3-query-index.mjs';
 import {V4_SQL} from './schema/v4-tag-cover-index.mjs';
@@ -105,6 +110,11 @@ export const MIGRATIONS = Object.freeze([
   entry(4, 'tag-cover-index', V4_SQL),
   entry(5, 'derive-columns', V5_SQL),
   entry(6, 'semantic-vectors', V6_SQL),
+  entry(7, 'stable-file-locations', V7_SQL),
+  entry(8, 'resumable-tag-backfill', V8_SQL),
+  entry(9, 'custom-tag-management', V9_SQL),
+  entry(10, 'taxonomy-split-rules', V10_SQL),
+  entry(11, 'legacy-v8-seed-key-compat', V11_SQL),
 ]);
 export const SUPPORTED_SCHEMA_VERSION = MIGRATIONS.at(-1).version;
 
@@ -167,7 +177,10 @@ export function planMigrations(applied = [], chain = MIGRATIONS) {
   const pending = [];
   for (const item of chain) {
     const old = known.get(item.version);
-    if (old && old.checksum !== item.checksum) {
+    // 仅兼容已核对的早期 v8（未含 seed_key）；v11 负责补字段，不改写旧迁移记录。
+    const legacyV8=item.version===8&&item.checksum==='ecc02fa8c71d3163d10d42d64099eabf2dc73d1d574d5cc4bb201584d416ffd2'
+      &&old?.checksum==='eb50f21a908d606a3422e42a0c3331c1aa04d32b72fc4f1302886aebb62c063a';
+    if (old && old.checksum !== item.checksum && !legacyV8) {
       throw Error(`资产库迁移 v${item.version} 的 checksum 不匹配，拒绝打开被改动过的库`);
     }
     if (!old) pending.push(item);

@@ -1,16 +1,28 @@
+import {assembleLibraryStyles} from '../scripts/lib/library-styles.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
-import {assetMenuItems,packageMenuItems,fileMenuItems,copyText} from '../src/library/card-context-menu.js';
+import {assetMenuItems,packageMenuItems,fileMenuItems,sequenceMenuItems,copyText} from '../src/library/card-context-menu.js';
 
-const css=fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)),'..','src','library','app.css'),'utf8');
+const css=assembleLibraryStyles();
 const icons=fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)),'..','src','library','icon-set.js'),'utf8');
 
 const uid='u'.repeat(32);
 const model={uid,name:'Robot',author:'stud',platform:'sketchfab',url:'https://sketchfab.com/models/abc'};
 const labels=items=>items.filter(i=>!i.separator).map(i=>i.label);
+
+test('库内菜单合并本地获取入口，并按当前画板上下文显示移出',()=>{
+ const ctx={card:{},model,uid,canDownload:true,revealId:'job',onReveal(){},inLibrary:true,onBoardPicker(){},onDelete(){}};
+ const names=labels(assetMenuItems(ctx).items);
+ assert.equal(names.filter(name=>/文件夹/.test(name||'')).length,1);
+ assert.ok(!names.includes('下载到本地'));
+ assert.ok(!names.includes('从画板移出'));
+ assert.ok(names.includes('移入回收站（保留文件）'));
+ assert.ok(names.includes('删除资产及本地文件…'));
+ assert.ok(labels(assetMenuItems({...ctx,inBoard:true}).items).includes('从画板移出'));
+});
 
 test('远端资产卡菜单：预览/下载/收藏/标签/加入模型库都在',()=>{
  const spec=assetMenuItems({card:{},model,uid,canDownload:true,revealId:'',canExport:false,favorite:false,inLibrary:false,isTrash:false,isVisitor:false});
@@ -50,7 +62,7 @@ test('已下载的卡片：给「打开下载文件夹」而不是「下载到�
  assert.ok(names.includes('打开下载文件夹'),'已下载应给打开文件夹');
  assert.ok(!names.includes('下载到本地'),'已下载不该再给下载');
  assert.ok(names.includes('取消收藏'),'已收藏时文案应变成取消收藏');
- assert.ok(names.includes('从模型库移除'),'已在库中应给移除');
+ assert.ok(names.includes('移入回收站（保留文件）'),'明确区分保留文件和连文件删除');
  assert.ok(names.includes('发送到其它软件…'),'已下载才有导出');
  // 打开文件夹要用 reveal-download + data-id，和卡片上的按钮同一套动作
  const reveal=spec.items.find(i=>i.label==='打开下载文件夹');
@@ -114,6 +126,35 @@ test('零散文件菜单：打开文件 / 复制路径',()=>{
  assert.ok(names.includes('打开文件'));
  assert.ok(names.includes('复制路径'));
  assert.equal(spec.title,'a.png');
+});
+
+// 2026-11-16 用户要求：右键菜单能直接打开文件在磁盘上的文件夹。
+// 四类本地卡都必须有这一项，且真的会去调 onReveal（不是只画一颗键）。
+test('四类本地卡的右键菜单都能打开所在文件夹',()=>{
+ const revealed=[];
+ const asset=assetMenuItems({card:{},model:{...model,storageMode:'linked',localRoot:'C:\\Assets',localRel:'a/b.glb'},uid,canDownload:false,revealId:'',canExport:false,favorite:false,inLibrary:true,isTrash:false,isVisitor:false,onReveal:()=>revealed.push('asset')});
+ assert.ok(labels(asset.items).includes('打开所在文件夹'));
+ const pkg=packageMenuItems({card:{},pkg:{title:'Pack',root:'C:\\Assets',rel:'assets/pack'},canRegister:false,onReveal:()=>revealed.push('package')});
+ assert.ok(labels(pkg.items).includes('打开所在文件夹'));
+ const file=fileMenuItems({card:{click(){}},file:{root:'C:\\Assets',name:'a.png',rel:'a.png'},onReveal:()=>revealed.push('file')});
+ assert.ok(labels(file.items).includes('打开所在文件夹'));
+ const seq=sequenceMenuItems({seq:{root:'C:\\Assets',label:'frames',count:3},uid:'seq:x',onReveal:()=>revealed.push('sequence')});
+ assert.ok(labels(seq.items).includes('打开所在文件夹'));
+ for(const spec of [asset,pkg,file,seq]){
+  const item=spec.items.find(i=>i.label==='打开所在文件夹');
+  assert.ok(item.run,'打开所在文件夹必须是 run 型：没有对应的 data-action');
+  item.run();
+ }
+ assert.deepEqual(revealed,['asset','package','file','sequence']);
+});
+
+test('没有本地路径的资产卡不硬塞「打开所在文件夹」',()=>{
+ // 只在线的资产：点了只会报「没有本地路径」，不如不给。
+ const spec=assetMenuItems({card:{},model,uid,canDownload:true,revealId:'',canExport:false,favorite:false,inLibrary:false,isTrash:false,isVisitor:false});
+ assert.ok(!labels(spec.items).includes('打开所在文件夹'));
+ // 没传 onReveal 的本地卡同理（新建的卡片类型还没接路径时也不会出现死按钮）。
+ const file=fileMenuItems({card:{click(){}},file:{name:'a.png',rel:'a.png'}});
+ assert.ok(!labels(file.items).includes('打开所在文件夹'));
 });
 
 test('样式：菜单挂在 body 上（fixed），且有危险项配色',()=>{

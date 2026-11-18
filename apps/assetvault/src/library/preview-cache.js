@@ -1,7 +1,7 @@
 // ponytail: 原始压缩资源存浏览器磁盘缓存；内存只保留最近 24 MB，不转码、不降低画质。
-export function createPreviewCache(fetchResource,{storage=globalThis.caches,maxMemoryBytes=24*1024*1024,maxDiskBytes=512*1024*1024,maxEntries=96,now=Date.now}={}){
+export function createPreviewCache(fetchResource,{storage=globalThis.caches,maxMemoryBytes=24*1024*1024,maxDiskBytes=512*1024*1024,maxEntries=96,maxQueuedBytes=32*1024*1024,now=Date.now}={}){
  const memory=new Map(),pending=new Map();
- let memoryBytes=0,writes=Promise.resolve();
+ let memoryBytes=0,writes=Promise.resolve(),generation=0,queuedBytes=0;
  const maxAge=7*24*60*60*1000;
  async function disk(){try{return await storage?.open('assetvault-preview-v1');}catch{return null;}}
  function remember(key,blob){
@@ -14,6 +14,8 @@ export function createPreviewCache(fetchResource,{storage=globalThis.caches,maxM
   }
  }
  function persist(cache,key,blob){
+  if(blob.size>maxDiskBytes||queuedBytes+blob.size>maxQueuedBytes)return;
+  queuedBytes+=blob.size;
   // 写盘不挡首帧；串行维护容量，避免并行贴图写入互相淘汰。
   writes=writes.catch(()=>{}).then(async()=>{
    if(blob.size>maxDiskBytes)return;
@@ -30,23 +32,24 @@ export function createPreviewCache(fetchResource,{storage=globalThis.caches,maxM
     const entry=entries.shift();await cache.delete(entry.request);total-=entry.size;
    }
    await cache.put(key,new Response(blob,{headers:{'x-assetvault-size':String(blob.size),'x-assetvault-saved':String(now())}}));
-  }).catch(()=>{}); // 磁盘满、隐私模式或缓存不可用时仍然正常预览。
+  }).catch(()=>{}).finally(()=>{queuedBytes-=blob.size;}); // 磁盘满、隐私模式或缓存不可用时仍然正常预览。
  }
  async function load(key){
+  const token=generation;
   const cache=await disk();
   if(cache){
    try{
-    await writes;
+    // 读取不能等待其它资源的慢速写盘，未命中时直接取源资源。
     const response=await cache.match(key);
     if(response&&now()-Number(response.headers.get('x-assetvault-saved'))<=maxAge){
-     const blob=await response.blob();remember(key,blob);return blob;
+     const blob=await response.blob();if(token===generation)remember(key,blob);return blob;
     }
    }catch{}
   }
   const response=await fetchResource(key);
   if(!response.ok)throw Error(`代理请求失败 HTTP ${response.status}`);
   const blob=await response.blob();
-  remember(key,blob);
+  if(token===generation)remember(key,blob);
   if(cache)persist(cache,key,blob);
   return blob;
  }
@@ -58,7 +61,7 @@ export function createPreviewCache(fetchResource,{storage=globalThis.caches,maxM
    if(!pending.has(key))pending.set(key,load(key).finally(()=>pending.delete(key)));
    return pending.get(key);
   },
-  clearMemory(){memory.clear();memoryBytes=0;},
+  clearMemory(){generation++;memory.clear();memoryBytes=0;},
   // 用于退出前等待写盘及验证持久化，不要求正常预览等待。
   flush:()=>writes,
  };

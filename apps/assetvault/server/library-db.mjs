@@ -6,11 +6,15 @@
 // 桌面版由 sidecar-server/node_modules 提供原生模块（装配见 desktop scripts/copy-sqlite-native.mjs）；
 // 默认裸导入让 Node 自己逐级向上解析，不写死任何绝对路径。
 import {createRequire} from 'node:module';
+import {V11_ADD_SEED_KEY} from './schema/v11-seed-key-compat.mjs';
 import {MIGRATIONS, SUPPORTED_SCHEMA_VERSION, MAIN_STATE_KEY, PROBE_STATE_KEY, STATE_KEYS, STATE_STAMP_PREFIX, stateStampKey, planMigrations} from './library-schema.mjs';
 import {assembleState, splitState, categoryTextOf} from './library-blob.mjs';
 import {probeOfModel} from './model-probe.mjs';
 import {syncVocab} from './vocab-sync.mjs';
 import {createTagWriter} from './library-tags-write.mjs';
+import {createLocationRegistry} from './file-locations.mjs';
+import {anchorPackage} from './asset-claim.mjs';
+import {localPlatformCover} from './platform-cover.mjs';
 // 归一化键必须与词表种子用同一套规则（NFKC + 压空白 + 小写），
 // 否则全角/多空格的标签在库里查不到别名，检索文本也会与内存侧对不上。
 import {normOf, compareBinary} from './library-vocab.mjs';
@@ -22,8 +26,15 @@ export function createLibraryDb({Database, file, now = Date.now, onWarn = WARN} 
   if (typeof Database !== 'function') throw Error('缺少 SQLite 驱动');
   if (!file) throw Error('缺少资产库文件路径');
   const db = new Database(file);
-  db.pragma('journal_mode = WAL');
-  db.pragma('synchronous = NORMAL');
+  // 单文件日志模式（不用 WAL）：库数据目录现在住在资产根里，会跟着整库被拷走、
+  // 被网盘/微力同步搬运。WAL 的 .db/.db-wal/.db-shm 三个文件必须同进同退，
+  // 同步工具只按文件搬运，漏一个或版本错位就是一份撕裂的库。成熟素材库
+  // （Billfish 的 .bf/billfish.db）同样用单文件模式。切回单文件时 SQLite 会
+  // 自动 checkpoint 并删掉遗留的 -wal/-shm。
+  db.pragma('journal_mode = DELETE');
+  // 单文件模式下 NORMAL 在断电瞬间仍有极小概率留下坏页；库要能"拔了就走"，
+  // 这里用 FULL 换确定性。写入频率是单人操作量级，fsync 开销无感。
+  db.pragma('synchronous = FULL');
   db.pragma('foreign_keys = ON');
   db.pragma('busy_timeout = 3000');
 
@@ -35,7 +46,9 @@ export function createLibraryDb({Database, file, now = Date.now, onWarn = WARN} 
     if (pending.length) db.transaction(() => {
       for (const item of pending) {
         // 记录语句必须等建表 SQL 执行完才能 prepare（表本来就不存在）。
-        db.exec(item.sql);
+        const sql=item.version===11&&db.prepare("SELECT 1 FROM pragma_table_info('tag_terms') WHERE name='seed_key'").get()
+          ?item.sql.replace(V11_ADD_SEED_KEY,''):item.sql;
+        db.exec(sql);
         db.prepare('INSERT INTO schema_migrations (version, name, checksum, applied_at) VALUES (?, ?, ?, ?)')
           .run(item.version, item.name, item.checksum, new Date(now()).toISOString());
       }
@@ -254,6 +267,25 @@ export function createLibraryDb({Database, file, now = Date.now, onWarn = WARN} 
   }
 
   /** V2 新增列对老派生行必须有默认值，否则绑定命名参数会直接抛错。 */
+  const locations = createLocationRegistry(db);
+  // 一次性兼容认领旧本地资产。保留 UID / 用户域；异常定位留在原记录中等待诊断。
+  if (getMetaStmt.get('file-locations-v1')?.value !== '1') try { db.transaction(() => {
+    const update = db.prepare('UPDATE assets SET payload = ? WHERE uid = ?');
+    const page = db.prepare('SELECT rowid,uid,payload FROM assets WHERE rowid>? ORDER BY rowid LIMIT 256');
+    let cursor = 0;
+    for (;;) {
+      const rows = page.all(cursor);
+      if (!rows.length) break;
+      for (const row of rows) {
+        let model;
+        try { model = JSON.parse(row.payload); } catch { continue; }
+        if (!model || typeof model !== 'object' || !model.localRoot) continue;
+        update.run(JSON.stringify(locations.apply({...model, uid: row.uid})), row.uid);
+      }
+      cursor = rows.at(-1).rowid;
+    }
+    setMetaStmt.run('file-locations-v1', '1');
+  })(); } catch(error) { db.close(); throw error; }
   const withAssetDefaults = row => ({
     kind: null, width: null, height: null, long_edge: null, bytes: null,
     color_h: null, duration: null, content_hash: null, rev: 1, updated_at: row.added_at,
@@ -352,7 +384,34 @@ export function createLibraryDb({Database, file, now = Date.now, onWarn = WARN} 
         touchedTerms.add(termId);
       }
       const text = searchTextOf(rawTags, termIds, valueOf, aliasOf);
-      upsertAsset.run(withAssetDefaults({...row, rating, note, favorite, tags_text: text}));
+      const model = locations.apply(JSON.parse(row.payload));
+      /**
+       * 归属锚点：把「这个资产占着哪个包目录」写成事实字段。
+       *
+       * 这里写最省事也最全——所有入库来源（下载器、素材包登记、迁移脚本、前端手工编辑）
+       * 最终都要经过这一处同步落库，所以补在这里等于「不管谁写的记录，落库时都有锚点」。
+       * 不补的话记录里只有主文件路径，扫描侧只能靠前缀反推包目录，主文件一改名就断，
+       * 于是包卡与资产卡并存、同一资产出两张（2026-11-16 的重复卡）。
+       */
+      anchorPackage(model);
+      /**
+       * 卡片缩略图优先级：包内 preview.*（平台官方渲染图，离线可看）> 平台外链 > 包内其它图。
+       * 入库时如果 payload.thumbnail 被换成包内 Color.jpg（平铺贴图），材质卡就不再是
+       * 平台那颗材质球了 —— 这是 2026-11-16 「库里的图和平台搜索不一样」的成因。
+       * 平台外链只认 http(s) 且平台不是 local（本地图床/宿主机地址不是平台图）。
+       */
+      const platformThumb = /^https?:\/\//.test(String(model.platformThumbnail || ''))
+        ? String(model.platformThumbnail)
+        : (/^https?:\/\//.test(String(model.thumbnail || '')) && model.platform && model.platform !== 'local'
+          ? String(model.thumbnail) : '');
+      if (platformThumb) model.platformThumbnail = platformThumb;
+      // 包内 preview.* 是「下载进包里的平台官方渲染图」，比外链更可靠（离线可看、不会失效），
+      // 所以它是第一优先；其次才是平台外链；最后才退回包内任意贴图。
+      const localPreview = localPlatformCover(model.thumbnail);
+      upsertAsset.run(withAssetDefaults({...row, payload: JSON.stringify(model),
+        name: model.name || row.name,
+        url: model.url || row.url, thumbnail: localPreview || platformThumb || model.thumbnail || row.thumbnail,
+        rating, note, favorite, tags_text: text}));
       // upsert 的 ON CONFLICT 分支刻意不碰用户域三列；遗留通道要显式改它们。
       if (useBlobUser && !fresh) updateUserColumns.run(rating, note, favorite, row.uid);
 
@@ -377,6 +436,7 @@ export function createLibraryDb({Database, file, now = Date.now, onWarn = WARN} 
         for (const [kind, list] of [['user', bucket.user], ['ai', bucket.ai]]) {
           for (const tag of list) {
             const termId = resolveTerm(tag, cache, stamp);
+            if(kind==='ai'&&db.prepare('SELECT 1 FROM tag_rejections WHERE uid=? AND term_id=? AND source=?').get(row.uid,termId,kind))continue;
             // tags 表是「这份资产有哪些原始标签」的权威，检索文本与协作取数都读它；
             // 只写 asset_tags 会让词表别名从 FTS 里消失，也会让远端同步拿不到标签。
             insertTag.run(row.uid, kind, tag);
@@ -519,6 +579,8 @@ export function createLibraryDb({Database, file, now = Date.now, onWarn = WARN} 
       return {uids: rows.map(row => row.uid), total: rows.length};
     },
     writeValues(values, options) { write(values, options); },
+    // 仅供已经校验内容的服务端重定位调用，普通 asset:patch 不允许覆盖权威位置。
+    rebindFileLocation(model) { return locations.rebind(model); },
     getMeta(key) { return getMetaStmt.get(key)?.value ?? null; },
     setMeta(key, value) { setMetaStmt.run(key, String(value)); },
     /** 阶段 2 的检索入口：trigram MATCH 支持中文子串，短词退回 LIKE 防 FTS 语法报错。 */
@@ -602,6 +664,7 @@ export function createLibraryDb({Database, file, now = Date.now, onWarn = WARN} 
     applyTagOps(ops, options) {
       return tagWriter.apply(ops, options);
     },
+    refreshTagSearch(uids) {return tagWriter.refresh(uids);},
     /**
      * 阶段 5.1 / ADR-05：目录域定点写（asset:add / asset:patch / asset:remove）。
      *
@@ -646,6 +709,9 @@ export function createLibraryDb({Database, file, now = Date.now, onWarn = WARN} 
             delAssetTagsOne.run(op.uid);
             delTagsOne.run(op.uid);
             delFormatsOne.run(op.uid);
+            db.prepare('DELETE FROM file_locations WHERE asset_uid=?').run(op.uid);
+            db.prepare('DELETE FROM tag_rejections WHERE uid=?').run(op.uid);
+            db.prepare('DELETE FROM asset_label_progress WHERE uid=?').run(op.uid);
             delAssetOne.run(op.uid);
             audit.run(stamp, actor, 'asset.remove', op.uid, Number(existing.rev) || 1);
             changes.push({kind: 'asset.remove', uid: op.uid, rev: null});
@@ -683,6 +749,7 @@ export function createLibraryDb({Database, file, now = Date.now, onWarn = WARN} 
             trashed: trashed ? [model] : [],
           });
           mergeDerived(values, stamp, false);
+          model = JSON.parse(db.prepare('SELECT payload FROM assets WHERE uid=?').get(op.uid).payload);
           if (existing) {
             const targetState = move ? (trashed ? 'trashed' : 'active') : existing.state;
             const targetTrashedAt = trashed ? (Number(model?.trashedAt) || existing.trashed_at || stamp) : null;
@@ -692,6 +759,7 @@ export function createLibraryDb({Database, file, now = Date.now, onWarn = WARN} 
           }
           const rev = Number(selRev.get(op.uid)?.rev) || 1;
           audit.run(stamp, actor, op.op, op.uid, rev);
+          db.prepare('DELETE FROM asset_label_progress WHERE uid=?').run(op.uid);
           changes.push({kind: op.op, uid: op.uid, rev});
           touched.push({uid: op.uid, model, trashed});
         }
@@ -739,6 +807,9 @@ export function createLibraryDb({Database, file, now = Date.now, onWarn = WARN} 
           db.prepare('DELETE FROM asset_tags WHERE uid = ?').run(uid);
           db.prepare('DELETE FROM tags WHERE uid = ?').run(uid);
           db.prepare('DELETE FROM asset_formats WHERE uid = ?').run(uid);
+          db.prepare('DELETE FROM file_locations WHERE asset_uid = ?').run(uid);
+          db.prepare('DELETE FROM tag_rejections WHERE uid=?').run(uid);
+          db.prepare('DELETE FROM asset_label_progress WHERE uid=?').run(uid);
           db.prepare('DELETE FROM assets WHERE uid = ?').run(uid);
           db.prepare('INSERT INTO audit_log (at, actor, action, uid, term_id, detail, rev) VALUES (?, ?, ?, ?, ?, ?, ?)')
             .run(now(), actor, 'asset.remove', uid, null, null, null);
@@ -851,12 +922,13 @@ async function loadSqliteDriver(importer) {
 }
 
 /** 异步惰性入口：加载失败返回 null，由上层决定降级，不抛到服务启动路径。 */
-export async function openLibraryDb({file, now = Date.now, onWarn = WARN, importer} = {}) {
+export async function openLibraryDb({file, now = Date.now, onWarn = WARN, importer, throwOnError = false} = {}) {
   try {
     const module = await loadSqliteDriver(importer);
     const Database = module.default || module.Database || module;
     return createLibraryDb({Database, file, now, onWarn});
   } catch (error) {
+    if (throwOnError) throw error;
     const hint = /NODE_MODULE_VERSION|compiled against|specified module could not be found|Cannot find module|\.node/i.test(error.message)
       ? '（原生模块缺失或 ABI 不匹配：源码版执行 npm rebuild better-sqlite3；桌面版重新运行 build-installer.cmd 装配随包依赖）'
       : '';

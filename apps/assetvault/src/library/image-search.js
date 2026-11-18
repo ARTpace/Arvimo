@@ -20,7 +20,7 @@ function loadBitmap(file) {
 }
 
 /** 压到视觉模型够用的尺寸，避免 base64 把请求体撑爆（服务端上限 8MB）。 */
-async function toDataUrl(file, edge = MAX_EDGE) {
+export async function toDataUrl(file, edge = MAX_EDGE) {
   const bitmap = await loadBitmap(file);
   const width = bitmap.width || 1;
   const height = bitmap.height || 1;

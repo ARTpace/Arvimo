@@ -11,7 +11,7 @@
 const style = `
 .av-account{display:flex;align-items:center;height:48px;min-height:48px;flex-shrink:0;margin:1px 0;
   border-radius:7px;color:#94a0b0;transition:background .18s ease,color .18s ease,transform .18s cubic-bezier(.22,.61,.36,1)}
-.av-account:hover{background:#131c26;transform:translateX(2px)}
+.av-account:hover{background:var(--av-panel-hover,#131c26);transform:translateX(2px)}
 .av-account-main{display:flex;align-items:center;gap:10px;flex:1;min-width:0;height:100%;
   padding:12px 0 12px 14px;background:none;border:0;border-radius:7px;
   /* 15px 是 .sidebar .nav 的实际字号（帮助 / 设置就是它），账号名必须一样大才对得齐 */
@@ -37,13 +37,13 @@ html.side-collapsed .av-account-name,html.side-collapsed .av-account-out{display
 #av-password-dialog .dialog-header{font-size:13px;font-weight:600}
 #av-password-dialog .dialog-body{padding:16px 20px 20px}
 #av-password-dialog .av-me{display:flex;align-items:center;gap:10px;padding:11px 12px;margin:0 0 14px;
-  border:1px solid #2b3c46;border-radius:9px;background:#10161f}
+  border:1px solid var(--av-line,#2b3c46);border-radius:9px;background:var(--av-panel,#10161f)}
 #av-password-dialog .av-me .av-account-avatar{width:26px;height:26px;flex:0 0 26px;font-size:12px}
 #av-password-dialog .av-me strong{display:block;font-size:12.5px;font-weight:600;color:#dfe7ef}
 #av-password-dialog .av-me small{display:block;margin-top:3px;font-size:10.5px;color:#7f91a4}
 #av-password-dialog .field{margin:0;padding:9px 0;border-bottom:1px solid #222c38;font-size:11.5px;color:#a9b8c9}
 #av-password-dialog .field:last-of-type{border-bottom:0}
-#av-password-dialog .field input{width:100%;padding:10px 11px;font-size:12.5px;border-radius:7px}
+#av-password-dialog .field input{width:100%;padding:10px 11px;font-size:12.5px;border-radius:7px;background:var(--av-field,#10161f);border-color:var(--av-line,#27303d)}
 #av-password-dialog .field input::placeholder{color:#5b6878}
 #av-password-dialog .field input:focus{outline:none;border-color:#8fae63;box-shadow:0 0 0 2px #c9f58114}
 #av-password-dialog .av-hint{margin:10px 0 0;font-size:11px;line-height:1.7;color:#7f91a4}

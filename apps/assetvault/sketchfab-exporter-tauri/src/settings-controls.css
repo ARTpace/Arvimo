@@ -1,4 +1,7 @@
 /* ponytail: one stylesheet for host controls and live canvas settings in Shadow DOM. */
+/* 注入宿主的画布 section：portal 根不能自带卡片底色/描边/圆角，
+   否则会和外层的宿主设置卡叠成「外框套内框」。外观统一交给宿主容器。 */
+[data-arvimo-settings]{background:none!important;border:0!important;box-shadow:none!important;border-radius:0!important;padding:0!important}
 :where(.settings-content,[data-arvimo-settings]){font:13px/1.5 system-ui,"Microsoft YaHei",sans-serif;color:var(--st-text);color-scheme:dark;--bp-ui-text:var(--st-text);--bp-ui-muted:var(--st-muted);--bp-ui-raised:var(--st-raise);--bp-ui-border:var(--st-line);--bp-ui-radius:var(--st-r);--bp-ui-focus:var(--st-accent);--bp-ui-hover:var(--st-raise-2);--bp-ui-accent-text:var(--st-accent);--bp-ui-accent-soft:var(--st-accent-weak);--bp-ui-selected-bg:var(--st-accent-weak);--bp-ui-selected-border:var(--st-accent);--bp-ui-surface-strong:var(--st-bg)}
 [data-arvimo-settings] [data-bp-ui-section]{border:0;border-radius:0;background:none;overflow:visible;margin-bottom:18px}
 [data-arvimo-settings] [data-bp-ui-section]>button{background:transparent;color:var(--st-text);font-size:12px;font-weight:600;padding:10px 0;border-bottom:1px solid var(--st-line);border-radius:0}
@@ -15,7 +18,9 @@
 [data-arvimo-settings] [data-bp-ui-segmented]{background:var(--st-raise);border:1px solid var(--st-line);flex-wrap:wrap}
 [data-arvimo-settings] [data-bp-ui-segmented] button{color:var(--st-muted);background:transparent;box-shadow:none}
 [data-arvimo-settings] [data-bp-ui-segmented] [data-bp-ui-active=true], [data-arvimo-settings] [data-bp-ui-action=primary]{background:var(--st-accent-weak);border-color:var(--st-accent);color:var(--st-accent)}
-[data-arvimo-settings] :is(.text-gray-400,.text-neutral-300,.text-neutral-400){color:var(--st-muted)}
+[data-arvimo-settings] :is(.text-gray-400,.text-neutral-300,.text-neutral-400,.text-neutral-500){color:var(--st-muted)}
+/* 扁平分区的灰色小标题：与宿主「分区标题」一致，去掉默认外距 */
+[data-arvimo-settings] [data-bp-ui-section][data-flat]>h3{margin:0 0 4px;font-size:11px;font-weight:600;letter-spacing:.4px;color:var(--st-dim)}
 [data-arvimo-settings] input[type=color]{width:42px;height:30px;padding:2px;border:1px solid var(--st-line);border-radius:6px;background:var(--st-raise)}
 @media(max-width:700px){[data-arvimo-settings] [data-bp-ui-row]{flex-wrap:wrap}[data-arvimo-settings] [data-bp-ui-row]>span{flex-basis:100%}}
 

@@ -16,6 +16,7 @@ import {
 
 /** 分面数据一次取回后复用：面板反复开关不再打接口，词表版本变了才需要重取。 */
 let facetsPromise = null;
+export function invalidateTagFacets(){facetsPromise=null;}
 function loadFacets() {
   if (!facetsPromise) {
     facetsPromise = fetch('/api/library/tags/facets?limit=200', {cache: 'no-store', headers: {'X-SFX-Local': '1'}})

@@ -12,8 +12,8 @@ const read = name => readFileSync(new URL(`../src/library/${name}`, import.meta.
 
 test('模式轨：固定 5 个常驻图标，没有「全部」、没有计数、没有平台', () => {
   // 2026-11 新增 ui 模式（Uiverse），顺序即 mode-presets.js 的 MODE_PRESETS。
-  assert.deepEqual(MODE_TABS.map(entry => entry.id), ['images', 'models', 'ui', 'documents', 'videos']);
-  assert.deepEqual(MODE_TABS.map(entry => entry.label), ['图片', '模型', 'UI', '文本', '视频']);
+  assert.deepEqual(MODE_TABS.map(entry => entry.id), ['images', 'models', 'ui', 'documents', 'videos', 'audio']);
+  assert.deepEqual(MODE_TABS.map(entry => entry.label), ['图片', '3D 资产', 'UI', '文档', '视频', '音频']);
   assert.ok(!MODE_TABS.some(entry => entry.id === 'all'));
   assert.equal(Object.isFrozen(MODE_TABS), true);
   assert.equal(modeTabs(), MODE_TABS, '常驻集合不认 route / counts，永远是这 4 个');
@@ -41,7 +41,7 @@ test('本地文件扩展名派生视频 / 音频 / HDRI，附带文档不污染�
   assert.ok(contentKindsOf({assetType: 'image', filePath: 'C:/lib/ambience.wav'}).includes('audio'));
   assert.ok(contentKindsOf({assetType: 'image', filePath: 'C:/lib/studio.hdr'}).includes('hdris'));
   const pack = contentKindsOf({assetType: 'model', entries: [{rel: 'robot.fbx'}, {rel: 'albedo.png'}]});
-  assert.ok(pack.includes('models') && pack.includes('images'), '一个包里两种格式要同时归两类');
+  assert.deepEqual(pack,['models'], '模型贴图不再重复计入图片分类');
   assert.deepEqual(contentKindsOf(null), []);
 });
 
@@ -49,7 +49,8 @@ test('激活态：显式模式 > 内容模式 > 本地类型下拉；都没有�
   assert.equal(activeModeId({route: 'library', contentKind: 'videos'}), 'videos');
   assert.equal(activeModeId({route: 'library', libraryMode: 'model'}), 'models');
   assert.equal(activeModeId({}, () => 'models'), 'models');
-  assert.equal(activeModeId({route: 'library', contentKind: 'audio'}), '', '非常驻类型不该点亮任何图标');
+  assert.equal(activeModeId({route: 'library', contentKind: 'audio'}), 'audio', '音频已升为母类，要能点亮自己的图标');
+  assert.equal(activeModeId({route: 'library', contentKind: 'textures'}), '', '非常驻类型不该点亮任何图标');
   assert.equal(activeModeId({}, () => ''), '');
   assert.equal(activeModeId({}, () => 'textures'), '');
 });
@@ -68,8 +69,8 @@ test('持久化：只恢复常驻模式，兼容旧键并清掉旧值', () => {
     rememberMode('videos');
     assert.equal(store.get('av:content-mode:v1'), 'videos');
     assert.equal(store.has('av:content-kind:v1'), false);
-    store.set('av:content-mode:v1', 'audio');
-    assert.equal(savedMode(), '', '已下线的模式值不能恢复成无图标的空筛选');
+    store.set('av:content-mode:v1', 'media');
+    assert.equal(savedMode(), '', '已下线的模式值（旧的「影音」）不能恢复成无图标的空筛选');
     rememberMode('');
     assert.equal(store.has('av:content-mode:v1'), false);
   } finally {
@@ -114,7 +115,7 @@ test('组件：5 个图标常驻、无计数 / 分隔线 / 平台，DOM 只建�
   const state = {route: 'library'};
   const tabs = createContentKindTabs({host, state, readKind: () => ''});
   tabs.render();
-  assert.deepEqual(host.buttons.map(button => button.dataset.mode), ['images', 'models', 'ui', 'documents', 'videos']);
+  assert.deepEqual(host.buttons.map(button => button.dataset.mode), ['images', 'models', 'ui', 'documents', 'videos', 'audio']);
   assert.ok(host.html.includes('<svg'), '每个键都要是 SVG 图标');
   assert.ok(!host.html.includes('ck-count'), '不显示数量');
   assert.ok(!host.html.includes('ck-sep'), '不显示分组线');
@@ -132,8 +133,8 @@ test('组件：点未激活键进入模式，再点激活键 / Esc 退出，各�
   const picked = [], exits = [];
   const tabs = createContentKindTabs({
     host, state, readKind: () => '',
-    onPick: entry => { picked.push(entry.id); state.contentKind = entry.id; tabs.render(); },
-    onExit: () => { exits.push(1); state.contentKind = ''; tabs.render(); },
+    onPick: entry => { picked.push(entry.id); state.mode=entry.id; state.contentKind = modePresetById(entry.id).groupId; tabs.render(); },
+    onExit: () => { exits.push(1); state.mode=''; state.contentKind = ''; tabs.render(); },
   });
   tabs.render();
   const images = host.buttons.find(button => button.dataset.mode === 'images');

@@ -6,7 +6,7 @@ import {buildVocab, normOf, validateVocab} from '../server/library-vocab.mjs';
 test('种子词表自身合法：面齐全、无重词、无别名撞名、无坏父级', () => {
   assert.deepEqual(validateVocab(TERMS, FACETS), []);
   assert.ok(VOCAB_REV >= 1);
-  assert.deepEqual(Object.keys(FACETS), ['style', 'subject', 'material', 'usage', 'mood', 'tech']);
+  assert.deepEqual(Object.keys(FACETS), ['style', 'subject', 'material', 'usage', 'mood', 'tech', 'software', 'license', 'platform']);
 });
 
 test('归一键吃掉大小写、全角与多余空白，但不改显示用 value', () => {
@@ -38,7 +38,8 @@ test('层级：检索时向下展开，含自身；无子级只返回自身', ()
   const vocab = buildVocab();
   assert.deepEqual(vocab.descendantValues('木材').sort(), ['松木', '木材', '橡木'].sort());
   assert.deepEqual(vocab.descendantValues('石材').sort(), ['大理石', '石材', '花岗岩'].sort());
-  assert.deepEqual(vocab.descendantValues('建筑'), ['建筑']);
+  assert.ok(vocab.descendantValues('建筑').includes('客厅'));
+  assert.deepEqual(vocab.descendantValues('客厅'), ['客厅']);
   assert.deepEqual(vocab.descendantValues('不存在的词'), []);
 });
 

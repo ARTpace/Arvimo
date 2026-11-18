@@ -1,3 +1,4 @@
+import { isElementColor } from './utils/elementColors';
 import { provideLiveService } from './plugin-runtime/live-service';
 import { createDocumentSDK, DOCUMENT_PROVIDER, DOCUMENT_SERVICE, OPERATIONS_SERVICE } from './plugin-runtime/document-sdk';
 import { createServiceDirectory, SERVICE_DIRECTORY, type ServiceDirectory } from './plugin-runtime/service-directory';
@@ -14,6 +15,11 @@ import { CanvasSettings } from './components/CanvasSettings';
 import { LayerPanel } from './components/LayerPanel';
 import { BoardPanel } from './components/BoardPanel';
 import { ContextMenu } from './components/ContextMenu';
+import { AskDialogHost } from './components/AskDialog';
+import { transformReferenceImage } from './utils/referenceImageTools';
+import { DrawingToolbar } from './components/DrawingToolbar';
+import type { DrawingOptions } from './types';
+import type { ContextMenuItem } from './plugin-runtime/menu-contributions';
 import { MainCanvas } from './components/MainCanvas';
 import { WorkspaceWallpaper, WorkspaceWallpaperSwitch } from './builtin-plugins/ui-skin-picker/WorkspaceWallpaper';
 import { WindowChrome } from './components/WindowChrome';
@@ -261,7 +267,7 @@ const App: React.FC = () => {
     } = useFileSystem();
 
     const [activeTool, setActiveTool] = useState<Tool>('select');
-    const [drawingOptions, setDrawingOptions] = useState({ strokeColor: '#FFFFFF', strokeWidth: 5, opacity: 1 });
+    const [drawingOptions, setDrawingOptions] = useState<DrawingOptions>({ strokeColor: '#c78e28', strokeWidth: 6, opacity: 1, penStyle: 'solid', eraseMode:'partial' });
     const [selectedElementIds, setSelectedElementIds] = useState<string[]>([]);
     // PureRef 对齐 ③⑤：背景网格 + 视图辅助（去色/暗化非选中）。
     // 持久化后端是主进程 config/preferences.json（旧键 artflow.canvas-view.v1 /
@@ -317,6 +323,7 @@ const App: React.FC = () => {
     );
     const [croppingState, setCroppingState] = useState<{ elementId: string; originalElement: ImageElement; cropBox: Rect } | null>(null);
     const [alignmentGuides, setAlignmentGuides] = useState<Guide[]>([]);
+    const [isReferenceHelpOpen, setIsReferenceHelpOpen] = useState(false);
     const [contextMenu, setContextMenu] = useState<{ x: number; y: number; elementId: string | null } | null>(null);
     const [editingElement, setEditingElement] = useState<{ id: string; text: string; } | null>(null);
     const [lassoPath, setLassoPath] = useState<Point[] | null>(null);
@@ -353,7 +360,7 @@ const App: React.FC = () => {
         generate: () => aiGenerateRef.current(),
     });
 
-    const shiftEraseOriginalTool = useRef<Tool | null>(null);
+    const temporaryEraseOriginalTool = useRef<Tool | null>(null);
 
     const {
         presentationState,
@@ -799,6 +806,7 @@ const App: React.FC = () => {
             // 存档（projectDocument v2）对 href 透明，只存 URL —— 画布成为资产库的活视图。
             importReferences: async (refs: AssetReference[], dropPoint?: { x: number; y: number }) => {
                 if (!refs || refs.length === 0) return 0;
+                documentState.ensureActiveBoard();
                 const importGroupId = generateId();
                 const placed: CanvasElement[] = [];
                 // 定位：与扩展导入同一套约定 —— 宿主给落点就以落点为原点，没给就落在画布原点。
@@ -890,7 +898,7 @@ const App: React.FC = () => {
         handleStopEditing: () => handleStopEditing(editingElement, setEditingElement),
         activeTool,
         setActiveTool,
-        shiftEraseOriginalTool,
+        temporaryEraseOriginalTool,
         handleUndo,
         handleRedo,
         selectedElementIds,
@@ -1043,6 +1051,16 @@ const App: React.FC = () => {
             viewBookmarks: removeCanvasViewBookmark(board.viewBookmarks, id),
         }));
     };
+
+    const handleSetElementColor = useCallback((id: string, color: string) => {
+        if (color && !isElementColor(color)) return;
+        commitAction(previous => previous.map(element => {
+            if (element.id !== id || (element.colorTag ?? '') === color) return element;
+            if (color) return { ...element, colorTag: color };
+            const { colorTag: _colorTag, ...rest } = element;
+            return rest as CanvasElement;
+        }));
+    }, [commitAction]);
 
     // R22 finder is read-only until Focus; Focus preserves zoom and changes only current camera pan.
     const handleFocusCanvasFinderResult = (result: CanvasFinderResult) => {
@@ -1258,16 +1276,104 @@ const App: React.FC = () => {
         if (files.length > 0) handleAddFiles(files, dropPoint);
     }, [handleAddFiles, getCanvasPoint]);
 
+    const referenceMenuItem = (zh: string, en: string, group: string, run: () => unknown, available = true, shortcut?: string): ContextMenuItem => ({
+        label: lang => lang === 'zho' ? zh : en, group, visible: () => true, enabled: () => available,
+        run: () => run() as void | Promise<unknown>, shortcut,
+    });
+    const selectedForMenu = elements.filter(element => selectedElementIds.includes(element.id));
+    const editableForMenu = selectedForMenu.filter(element => !element.isLocked);
+    const patchMenuSelection = (patch: (element: CanvasElement) => Partial<CanvasElement>) => {
+        const ids = new Set(editableForMenu.map(element => element.id));
+        commitAction(previous => previous.map(element => ids.has(element.id) ? {...element,...patch(element)} as CanvasElement : element));
+    };
+    const imageSelection = editableForMenu.filter((element): element is ImageElement => element.type === 'image');
+    const normalizeImages = (axis: 'width' | 'height') => {
+        const target = imageSelection[0]?.[axis];
+        if (!(target > 0)) return;
+        patchMenuSelection(element => element.type === 'image' && element[axis] > 0
+            ? {width:element.width * target / element[axis],height:element.height * target / element[axis]} : {});
+    };
+    const transformMenuImages = async (operation: 'flip-h' | 'flip-v' | 'grayscale') => {
+        const boardId = activeBoardId;
+        try {
+            const patches = new Map<string, {source:string,patch:Partial<ImageElement>}>();
+            for (const image of imageSelection) patches.set(image.id, {source:image.href,patch:await transformReferenceImage(image,operation)});
+            if (documentState.getSnapshot().activeBoardId !== boardId) return;
+            commitAction(previous=>previous.map(element=>{
+                const change = patches.get(element.id);
+                return element.type === 'image' && !element.isLocked && change?.source === element.href ? {...element,...change.patch} : element;
+            }));
+        } catch { setError(language === 'zho' ? '图像处理失败，原图未修改。请检查图片是否允许跨域读取。' : 'Image processing failed. Original images were preserved.'); }
+    };
+    const referenceMenuItems: ContextMenuItem[] = [
+        referenceMenuItem('撤销','Undo','history',handleUndo,canUndo,'Ctrl+Z'),
+        referenceMenuItem('重做','Redo','history',handleRedo,canRedo,'Ctrl+Shift+Z'),
+        referenceMenuItem('复制到剪贴板','Copy to clipboard','clipboard',handleCopy,selectedForMenu.length > 0,'Ctrl+C'),
+        referenceMenuItem('粘贴','Paste','clipboard',() => pasteFromMenu(),true,'Ctrl+V'),
+        referenceMenuItem('全选','Select all','clipboard',() => setSelectedElementIds(elements.map(element => element.id)),elements.length > 0,'Ctrl+A'),
+        referenceMenuItem('文字注释','Text note','create',() => handleSetActiveTool('text')),
+        referenceMenuItem('自由绘制','Draw','create',() => handleSetActiveTool('draw')),
+        referenceMenuItem('操作帮助','Help','workspace',() => setIsReferenceHelpOpen(true)),
+        referenceMenuItem('图层列表','Layers','workspace',() => handleToggleSidePanel('layers')),
+        referenceMenuItem('设置','Settings','workspace',() => setIsSettingsPanelOpen(true)),
+        referenceMenuItem('适配全部内容','Fit all','canvas',handleFitCanvas,elements.length > 0),
+        referenceMenuItem('重置视图','Reset view','canvas',() => updateActiveBoard({panOffset:{x:0,y:0},zoom:1})),
+        referenceMenuItem('自动整理所选','Pack selection','arrange',handleMasonryLayout,editableForMenu.length > 1),
+        ...(['left','center','right','top','middle','bottom'] as const).map((alignment,index) => referenceMenuItem(
+            ['左对齐','水平居中','右对齐','顶对齐','垂直居中','底对齐'][index],alignment,'arrange',() => handleAlignSelection(alignment),selectedForMenu.length > 1 && editableForMenu.length === selectedForMenu.length)),
+        referenceMenuItem('统一宽度','Normalize width','arrange',() => normalizeImages('width'),imageSelection.length > 1),
+        referenceMenuItem('统一高度','Normalize height','arrange',() => normalizeImages('height'),imageSelection.length > 1),
+        referenceMenuItem('水平翻转','Flip horizontally','image',() => transformMenuImages('flip-h'),imageSelection.length > 0),
+        referenceMenuItem('垂直翻转','Flip vertically','image',() => transformMenuImages('flip-v'),imageSelection.length > 0),
+        referenceMenuItem('转为灰度图','Convert to grayscale','image',() => transformMenuImages('grayscale'),imageSelection.length > 0),
+        referenceMenuItem('裁剪图像','Crop image','image',() => handleStartCrop(imageSelection[0]),imageSelection.length === 1 && selectedForMenu.length === 1),
+        referenceMenuItem('向左旋转 90°','Rotate left 90°','image',() => patchMenuSelection(element => ({rotation:((('rotation' in element ? element.rotation : 0) || 0)-90)%360})),editableForMenu.length > 0),
+        referenceMenuItem('向右旋转 90°','Rotate right 90°','image',() => patchMenuSelection(element => ({rotation:((('rotation' in element ? element.rotation : 0) || 0)+90)%360})),editableForMenu.length > 0),
+        referenceMenuItem('重置旋转','Reset rotation','image',() => patchMenuSelection(() => ({rotation:0})),editableForMenu.length > 0),
+        referenceMenuItem('恢复图像原始尺寸','Original image size','image',() => patchMenuSelection(element => element.type === 'image' && element.originalPixelWidth > 0 && element.originalPixelHeight > 0 ? {width:element.originalPixelWidth,height:element.originalPixelHeight} : {}),imageSelection.some(element=>element.originalPixelWidth > 0 && element.originalPixelHeight > 0)),
+        referenceMenuItem(selectedForMenu.length > 0 && selectedForMenu.every(element=>element.isLocked)?'解锁所选':'锁定所选','Toggle selection lock','workspace',() => {
+            const ids = new Set(selectedElementIds);const locked = !selectedForMenu.every(element=>element.isLocked);
+            commitAction(previous=>previous.map(element=>ids.has(element.id)?{...element,isLocked:locked}:element));
+        },selectedForMenu.length > 0),
+        referenceMenuItem('保存项目…','Save project…','file',() => handleSaveProjectClick()),
+        referenceMenuItem('打开项目…','Open project…','file',handleOpenProjectClick),
+        referenceMenuItem('新建画布','New board','file',handleAddBoard),
+        ...(['minimize','toggle-maximize','close'] as const).map((action,index)=>referenceMenuItem(
+            ['最小化窗口','最大化 / 还原','关闭窗口'][index],['Minimize','Maximize / restore','Close window'][index],'window',
+            () => pluginKernel.use<HostPlatformService>(HOST_PLATFORM_SERVICE).windowControl(action),
+            pluginKernel.has(HOST_PLATFORM_SERVICE) && pluginKernel.use<HostPlatformService>(HOST_PLATFORM_SERVICE).canWindowControls)),
+    ];
+
     const handleContextMenu = (e: React.MouseEvent<SVGSVGElement>) => {
         e.preventDefault();
         setContextMenu(null);
+        mousePosRef.current = {x:e.clientX,y:e.clientY};
         const target = e.target as SVGElement;
         const elementId = target.closest('[data-id]')?.getAttribute('data-id');
+        if (elementId && !selectedElementIds.includes(elementId)) setSelectedElementIds([elementId]);
         setContextMenu({ x: e.clientX, y: e.clientY, elementId: elementId || null });
+    };
+
+    const pasteFromMenu = async () => {
+        try {
+            const transfer = new DataTransfer();
+            if (navigator.clipboard.read) {
+                const contents = await navigator.clipboard.read();
+                for (const item of contents) {
+                    const imageType = item.types.find(type => type.startsWith('image/'));
+                    if (imageType) transfer.items.add(new File([await item.getType(imageType)], 'Pasted image', {type:imageType}));
+                    else if (item.types.includes('text/plain')) transfer.setData('text/plain', await (await item.getType('text/plain')).text());
+                }
+            } else transfer.setData('text/plain', await navigator.clipboard.readText());
+            if (contextMenu) mousePosRef.current = {x:contextMenu.x,y:contextMenu.y};
+            const point = contextMenu ? getCanvasPoint(contextMenu.x,contextMenu.y) : undefined;
+            (svgRef.current ?? window).dispatchEvent(Object.assign(new ClipboardEvent('paste', {clipboardData:transfer,cancelable:true,bubbles:true}), {canvasPoint:point}));
+        } catch { setError(language === 'zho' ? '无法读取剪贴板，请使用 Ctrl+V 粘贴。' : 'Clipboard access denied. Use Ctrl+V to paste.'); }
     };
 
     useEffect(() => {
         const handlePaste = (e: ClipboardEvent) => { 
+            if (e.defaultPrevented) return;
             // 输入框 / 可编辑区域内粘贴交给浏览器默认行为：
             // 不要吞掉文本（否则所有输入框都粘不进来），更不要误创建一个画布文本元素。
             const pasteTarget = e.target as HTMLElement | null;
@@ -1342,28 +1448,12 @@ const App: React.FC = () => {
                     return;
                 }
 
-                if (text.trim().length > 0) {
-                    e.preventDefault();
-                    const newText: TextElement = {
-                        id: generateId(),
-                        type: 'text',
-                        name: 'Text',
-                        x: targetPoint.x,
-                        y: targetPoint.y,
-                        width: 200, 
-                        height: 40, 
-                        text: text,
-                        fontSize: 24,
-                        fontColor: '#FFFFFF',
-                        rotation: 0,
-                    };
-                    addElementsWithParenting([newText]);
-                    setSelectedElementIds([newText.id]);
-                }
+                // Unclaimed text belongs to the existing plugin/bookmark/note paste path.
+
             }
         };
-        window.addEventListener('paste', handlePaste);
-        return () => window.removeEventListener('paste', handlePaste);
+        window.addEventListener('paste', handlePaste, true);
+        return () => window.removeEventListener('paste', handlePaste, true);
     }, [handleAddFiles, handlePasteElements, getCanvasPoint, addElementsWithParenting, setSelectedElementIds]);
 
     // R25/R28: App consumes generic extension hosts and offers only a narrow, live renderer action service.
@@ -1717,9 +1807,12 @@ const App: React.FC = () => {
             setIsBoardPanelOpen,
             handleStartPresentation,
             framesCount: frames.length,
-            handleToggleSidePanel,
-            selectedElementCount: selectedElementIds.length,
-            onOpenTags: handleOpenElementTags,
+            elements,
+            onFocusCard: result => {
+                setSelectedElementIds([result.id]);
+                const card = elements.find(element => element.id === result.id);
+                if (card) zoomToBounds(getSelectionBounds([card], elements), { animated: false, minZoom: 0.02 });
+            },
             commandCount: pluginKernel.contributions.list('commands').length,
             onOpenCommandPalette: () => setIsCommandPaletteOpen(true),
             pluginPanelCount,
@@ -1905,7 +1998,7 @@ const App: React.FC = () => {
                     )}
                     {selectedExtensionElements.length > 0 && extensionHost && (
                         <div data-bp-ui-surface="" className="fixed left-4 top-1/2 z-40 w-72 -translate-y-1/2 rounded-2xl border border-white/10 bg-zinc-900/95 p-3 text-white shadow-2xl backdrop-blur">
-                            <h4 className="mb-2 text-sm font-semibold">Extension properties</h4>
+                            <h4 className="mb-2 text-sm font-semibold">{language === 'zho' ? '扩展属性' : 'Extension properties'}</h4>
                             <ExtensionNodeProperties
                                 elements={selectedExtensionElements}
                                 onCommit={(elementId, data) => extensionHost.updateNode(elementId, data)}
@@ -1961,8 +2054,23 @@ const App: React.FC = () => {
                 handleMouseLeave={handleCanvasMouseLeave}
                 handleWheel={handleWheel}
                 handleContextMenu={handleContextMenu}
-                showCanvasMenu={(x, y, elementId) => setContextMenu({ x, y, elementId })}
+                showCanvasMenu={(x, y, elementId) => { mousePosRef.current={x,y}; if(elementId && !selectedElementIds.includes(elementId)) setSelectedElementIds([elementId]); setContextMenu({ x, y, elementId }); }}
                 dismissCanvasMenu={() => setContextMenu(null)}
+                onCanvasBlankPointerDown={() => {
+                    setIsBoardPanelOpen(false);
+                    setSidePanel(previous => previous.isOpen ? { ...previous, isOpen: false } : previous);
+                    setIsWorkspacePanelOpen(false);
+                    setIsViewBookmarksPanelOpen(false);
+                    setIsCanvasFinderPanelOpen(false);
+                    setIsImportJobsPanelOpen(false);
+                    setIsExtensionImportPanelOpen(false);
+                    setIsCommandPaletteOpen(false);
+                    setTagEditorElementIds(null);
+                    setIsPanelHostOpen(false);
+                    setIsSettingsPanelOpen(false);
+                    setRequestedSettingsSectionId(null);
+                    setContextMenu(null);
+                }}
                 windowPlatform={windowPlatform}
                 activeTool={activeTool}
                 focusImage={handleFocusImage}
@@ -1976,6 +2084,7 @@ const App: React.FC = () => {
                 rotateStartInfo={rotateStartInfo.current}
                 rotateDialPoint={rotateDialPoint}
                 isElementVisible={isElementVisible}
+                onSetElementColor={handleSetElementColor}
                 setEditingElement={setEditingElement}
                 handleStopEditing={() => handleStopEditing(editingElement, setEditingElement)}
                 setElements={setElements}
@@ -2014,6 +2123,34 @@ const App: React.FC = () => {
             
             <WorkspaceWidgetHost kernel={pluginKernel} placement="prompt" />
             <WorkspaceWidgetHost kernel={pluginKernel} placement="presentation" />
+            {['draw','erase','highlighter'].includes(activeTool) && <DrawingToolbar tool={activeTool} setTool={handleSetActiveTool} options={drawingOptions} setOptions={setDrawingOptions} language={language} onUndo={handleUndo} onRedo={handleRedo} canUndo={canUndo} canRedo={canRedo}/> }
+            {isReferenceHelpOpen && <div data-bp-ui-scrim="" className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 p-4"
+                onMouseDown={event=>{if(event.target===event.currentTarget)setIsReferenceHelpOpen(false);}}
+                onKeyDown={event=>{if(event.key==='Escape'){event.stopPropagation();setIsReferenceHelpOpen(false);}}}>
+                <section data-bp-ui-surface="" role="dialog" aria-modal="true" aria-labelledby="reference-help-title" className="max-w-md w-full rounded-xl border border-white/15 p-5 shadow-2xl" style={{background:'var(--bp-ui-surface-strong,#20242c)'}}>
+                    <div className="flex items-center justify-between mb-4"><h2 id="reference-help-title">{language==='zho'?'画布操作帮助':'Canvas help'}</h2>
+                        <button type="button" autoFocus onClick={()=>setIsReferenceHelpOpen(false)} aria-label={language==='zho'?'关闭':'Close'}>×</button></div>
+                    <ul className="space-y-3 text-sm leading-relaxed">
+                        {(language==='zho' ? [
+                            '右键打开菜单；右键未选中的对象会先选中它，右键多选中的对象会保留多选。',
+                            'Ctrl+C 复制，Ctrl+V 粘贴；“创建副本”直接在画布上复制一份。',
+                            'Ctrl+Z 撤销，Ctrl+Shift+Z 重做；图像翻转、灰度和排列均可撤销。',
+                            '选择“文字注释”后点击画布编辑；选择“自由绘制”后拖动绘画。',
+                            '选择多个对象可对齐、编组和整理；选中多张图片可统一宽高。',
+                            '灰色菜单项表示当前条件不满足；锁定对象可从菜单解锁。',
+                            '保存/打开使用 Arvimo 项目；窗口控制仅在支持的桌面宿主中可用。',
+                        ] : [
+                            'Right-click for actions. Right-clicking a new object selects it; existing multi-selection is preserved.',
+                            'Ctrl+C copies; Ctrl+V pastes. Duplicate creates another copy on the canvas.',
+                            'Ctrl+Z undoes; Ctrl+Shift+Z redoes. Image operations and arrangement support undo.',
+                            'Choose Text note then click to edit, or choose Draw then drag.',
+                            'Select multiple objects to align, group or arrange. Select images to normalize their dimensions.',
+                            'Disabled actions require a different selection. Locked objects can be unlocked in the menu.',
+                            'Save/open use Arvimo projects. Window controls require a supported desktop host.',
+                        ]).map(line=><li key={line}>{line}</li>)}
+                    </ul>
+                </section>
+            </div>}
             {contextMenu && (
                 <ContextMenu
                     kernel={pluginKernel}
@@ -2023,6 +2160,7 @@ const App: React.FC = () => {
                     elementId={contextMenu.elementId}
                     elements={elements}
                     selectedElementIds={selectedElementIds}
+                    items={referenceMenuItems}
                     actions={{
                         layerAction: handleLayerAction,
                         group: handleGroup,
@@ -2082,6 +2220,7 @@ const App: React.FC = () => {
                     </div>
                 </div>
             )}
+            <AskDialogHost />
         </div>
     );
 };

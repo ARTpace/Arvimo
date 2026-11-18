@@ -22,6 +22,8 @@ export function setupSidebarCollapse() {
   let collapsed = root.classList.contains('side-collapsed');
   try { collapsed = localStorage.getItem(KEY) === '1'; } catch { /* 隐私模式读不到就按展开算 */ }
   let settleTimer = 0;
+  let contentAnimation;
+  const main = document.querySelector('main');
 
   const settle = () => {
     root.classList.remove('side-animating');
@@ -30,13 +32,24 @@ export function setupSidebarCollapse() {
   };
 
   const apply = (next, animate=false) => {
+    const moving = animate && !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    // Read the visible position before cancelling: rapid clicks reverse from this frame.
+    const previousLeft = moving && main ? main.getBoundingClientRect().left : 0;
+    contentAnimation?.cancel();
     collapsed = next;
     clearTimeout(settleTimer);
-    root.classList.toggle('side-animating', animate);
+    root.classList.toggle('side-animating', moving);
     root.classList.toggle('side-collapsed', next);
+    if (moving && main?.animate) {
+      const offset = previousLeft - main.getBoundingClientRect().left;
+      contentAnimation = main.animate([
+        {transform:`translateX(${offset}px)`}, {transform:'translateX(0)'}
+      ], {duration:ANIM_MS, easing:'cubic-bezier(.22,.61,.36,1)'});
+    }
     // 用定时器兜底而不是 transitionend：侧栏和 main 各有一条过渡，且子元素冒泡会误判；
     // 减少动效偏好下 CSS 本来就无过渡，多等这 280ms 也不会有视觉代价。
-    if (animate) settleTimer = setTimeout(settle, ANIM_MS + 40);
+    if (moving) settleTimer = setTimeout(settle, ANIM_MS + 40);
+    else if (animate) settle();
     if (!button) return;
     // 文案跟着状态翻转：折叠时这个按钮是「展开」，别让无障碍标签说反。
     const label = next ? '展开侧边栏' : '收起侧边栏';

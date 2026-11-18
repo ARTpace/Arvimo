@@ -1,8 +1,10 @@
+import {showActionCard} from './action-card.js';
+import {withRemovalMotion} from './removal-motion.js';
 // 画板选择器：卡片右键 / 批量栏共用。视觉沿用「少文字 + 图标 + 颜色」，类名一律 bd-*。
 // 自建 dialog，不改 index.html；确认后只调 store.addItems / removeItems，不碰渲染链。
 import {searchBoards} from './board-store.js';
 
-export function createBoardPicker({esc, icon, toast, store, document: doc = globalThis.document} = {}) {
+export function createBoardPicker({esc, icon, toast, store, onRemoved, document: doc = globalThis.document} = {}) {
   if (!store || !doc) throw Error('画板选择器缺少依赖');
   const dialog = doc.createElement('dialog');
   dialog.className = 'bd-dialog bd-picker';
@@ -99,6 +101,19 @@ export function createBoardPicker({esc, icon, toast, store, document: doc = glob
 
   return {
     open(nextUids = [], options = {}) {
+      if (options.mode === 'remove' && store.activeId) {
+        const id = store.activeId;
+        const members = [...new Set((Array.isArray(nextUids) ? nextUids : []).filter(Boolean))];
+        if (!members.length) return Promise.resolve(false);
+        const selected = new Set(members);
+        const cards = [...doc.querySelectorAll('#grid [data-uid]')].filter(node => selected.has(node.dataset.uid));
+        return withRemovalMotion(cards, async () => {
+          await store.removeItems(id, members);
+          await onRemoved?.(id);
+        })
+          .then(() => { toast('已移出当前画板'); return true; })
+          .catch(error => { toast(error?.message || '移出画板失败'); return false; });
+      }
       uids = [...new Set((Array.isArray(nextUids) ? nextUids : []).filter(Boolean))];
       mode = options.mode === 'remove' ? 'remove' : 'add';
       chosen = new Set();
@@ -106,7 +121,7 @@ export function createBoardPicker({esc, icon, toast, store, document: doc = glob
       newBox.hidden = true;
       dialog.querySelector('.bd-title').textContent = mode === 'remove' ? '移出画板' : '加入画板';
       render();
-      dialog.showModal?.();
+      showActionCard(dialog);
       return new Promise(done => { resolve = done; });
     },
     close: () => finish(false),

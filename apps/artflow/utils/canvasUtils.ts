@@ -1,3 +1,4 @@
+import { drawingPathData, drawingDash, drawingArrowHead } from './drawingGeometry';
 
 import { Point, Element, ImageElement, VideoElement, FrameElement, PathElement, Board, Rect, ImageAspectRatio } from '../types';
 import React from 'react';
@@ -71,13 +72,14 @@ export const getElementBounds = (element: Element, allElements: Element[] = []):
         if (!points || points.length === 0) return { x: element.x || 0, y: element.y || 0, width: 0, height: 0 };
         let minX = points[0].x, maxX = points[0].x;
         let minY = points[0].y, maxY = points[0].y;
-        for (const p of points) {
+        for (const p of [...points,...drawingArrowHead(element)]) {
             minX = Math.min(minX, p.x);
             maxX = Math.max(maxX, p.x);
             minY = Math.min(minY, p.y);
             maxY = Math.max(maxY, p.y);
         }
-        return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
+        const pad = element.smooth || element.penStyle ? element.strokeWidth/2 : 0;
+        return { x: minX-pad, y: minY-pad, width: maxX-minX+pad*2, height: maxY-minY+pad*2 };
     }
     return { x: (element as any).x || 0, y: (element as any).y || 0, width: (element as any).width || 0, height: (element as any).height || 0 };
 };
@@ -125,8 +127,8 @@ export const rasterizeElement = (element: Exclude<Element, ImageElement | VideoE
         switch (element.type) {
             case 'path': {
                 const pointsWithOffset = element.points.map(p => ({ x: p.x + offsetX, y: p.y + offsetY }));
-                const pathData = pointsWithOffset.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x} ${p.y}`).join(' ');
-                elementSvgString = `<path d="${pathData}" stroke="${element.strokeColor}" stroke-width="${element.strokeWidth}" fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-opacity="${element.opacity || 1}" />`;
+                const pathData = drawingPathData({...element,points:pointsWithOffset});
+                elementSvgString = `<path d="${pathData}" stroke="${element.strokeColor}" stroke-width="${element.strokeWidth}" fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-opacity="${element.opacity ?? 1}" ${drawingDash(element) ? `stroke-dasharray="${drawingDash(element)}"` : ''} />`;
                 break;
             }
             case 'shape': {
@@ -237,8 +239,8 @@ export const rasterizeElements = (elementsToRasterize: Exclude<Element, ImageEle
             switch (element.type) {
                  case 'path': {
                     const pointsWithOffset = element.points.map(p => ({ x: p.x + offsetX, y: p.y + offsetY }));
-                    const pathData = pointsWithOffset.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x} ${p.y}`).join(' ');
-                    elementSvgString = `<path d="${pathData}" stroke="${element.strokeColor}" stroke-width="${element.strokeWidth}" fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-opacity="${element.opacity || 1}" />`;
+                    const pathData = drawingPathData({...element,points:pointsWithOffset});
+                    elementSvgString = `<path d="${pathData}" stroke="${element.strokeColor}" stroke-width="${element.strokeWidth}" fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-opacity="${element.opacity ?? 1}" ${drawingDash(element) ? `stroke-dasharray="${drawingDash(element)}"` : ''} />`;
                     break;
                  }
                 case 'shape': {
@@ -500,8 +502,8 @@ const renderBoardThumbnail = (elements: Element[], bgColor: string): string => {
    const svgContent = elements.map(el => {
         if (!el) return '';
         if (el.type === 'path' && (el as PathElement).points) {
-           const pathData = (el as PathElement).points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x} ${p.y}`).join(' ');
-           return `<path d="${pathData}" stroke="${el.strokeColor}" stroke-width="${el.strokeWidth}" fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-opacity="${el.opacity || 1}" />`;
+           const pathData = drawingPathData(el as PathElement);
+           return `<path d="${pathData}" stroke="${el.strokeColor}" stroke-width="${el.strokeWidth}" fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-opacity="${el.opacity ?? 1}" ${drawingDash(el) ? `stroke-dasharray="${drawingDash(el)}"` : ''} />`;
         }
         if (el.type === 'image') {
             return `<image href="${el.thumbnailHref || el.mediumHref || el.href}" x="${el.x}" y="${el.y}" width="${el.width}" height="${el.height}" opacity="${el.opacity ?? 1}"/>`;

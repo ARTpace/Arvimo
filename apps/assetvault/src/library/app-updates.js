@@ -1,4 +1,5 @@
 import {icon} from './icon-set.js';
+import {askConfirm} from './ask-dialog.js';
 export function createAppUpdates({hasActiveTasks=()=>false,onState=()=>{}}={}){
  const card=document.createElement('div');card.className='settings-card update-card';
  // 三张卡片：主状态（版本 + 检查按钮）、自动检查开关、退出应用。
@@ -68,7 +69,7 @@ export function createAppUpdates({hasActiveTasks=()=>false,onState=()=>{}}={}){
  }).catch(()=>{if(versionNode)versionNode.textContent='版本读取失败';});
  const quit=card.querySelector('[data-quit]'),quitRow=card.querySelector('[data-quit-row]');
  quitRow.hidden=false;
- quit.onclick=async()=>{if(hasActiveTasks()&&!confirm('仍有下载或导出任务，退出会中断这些任务。确定退出应用？'))return;try{await invoke('quit_app');}catch(error){open();status.textContent=`退出失败：${String(error)}`;}};
+ quit.onclick=async()=>{if(hasActiveTasks()&&!await askConfirm({title: '退出应用', message: '仍有下载或导出任务，退出会中断这些任务。确定退出应用？', confirmText: '退出', danger: true}))return;try{await invoke('quit_app');}catch(error){open();status.textContent=`退出失败：${String(error)}`;}};
  async function install(){
   if(hasActiveTasks()){status.textContent='仍有下载或导出任务，请完成或暂停后再更新。';sync();return;}
   busy=true;sync();status.textContent='正在启动安装器，应用将退出并在更新后重新打开…';

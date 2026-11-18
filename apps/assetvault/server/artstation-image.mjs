@@ -14,6 +14,7 @@ import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {artstationHash,fetchProjectJson,projectImageAssets,projectJsonUrl} from './artstation-project.mjs';
+import {normalizePlatformCategories} from './platform-categories.mjs';
 import {coverUrl} from './artstation-cdn.mjs';
 import {artstationStem} from './artstation.mjs';
 import {downloadImage,sniffContainer,imageStem,IMAGE_MAX_BYTES,IMAGE_TOTAL_BYTES} from './image-store.mjs';
@@ -190,6 +191,7 @@ export async function artstationImageEntries({work,meta,uid,files}){
     uid,
     kind:IMAGE_BUNDLE_KIND,
     platform:'artstation',
+    platformCategories:meta.platformCategories||[],
     title:meta.title||null,
     author:meta.author||null,
     url:meta.artworkUrl,
@@ -235,6 +237,7 @@ export async function runArtstationImageJob({uid,url,output,deliver='zip',workRo
   signal?.throwIfAborted();
   const hash=artstationHash(url);
   const meta={
+    platformCategories:normalizePlatformCategories('artstation',[...(Array.isArray(json.categories)?json.categories:[]),...(Array.isArray(json.category_ids)?json.category_ids:[])]),
     artworkUrl:String(url).replace(/\/$/,''),
     projectUrl:projectJsonUrl(url),
     title:typeof json.title==='string'&&json.title.trim()?json.title.trim():null,

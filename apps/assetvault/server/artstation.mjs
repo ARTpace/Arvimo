@@ -188,10 +188,10 @@ export async function resolveArtstationModel(rawUrl,{open=openPublic,headless,pr
   const artwork=normalizeArtstationUrl(rawUrl);
   signal?.throwIfAborted();
   // 1) 首选：公开的项目 JSON 接口（作品页已是 SPA 空壳，直接抓 HTML 拿不到 embed）。
-  let embedIds=[],title=null,author=null;
+  let embedIds=[],title=null,author=null,platformCategories=[];
   try{
     const viaApi=await fetchProjectAssets(artwork.href,{open,signal});
-    if(viaApi){embedIds=viaApi.ids;title=viaApi.title;author=viaApi.author;}
+    if(viaApi){embedIds=viaApi.ids;title=viaApi.title;author=viaApi.author;platformCategories=viaApi.platformCategories||[];}
   }catch{/* 网络层失败时退回 HTML 抓取 */}
   // 2) 兜底：抓作品页 HTML（老页面仍把 Marmoset iframe 直接内联在 HTML 里）。
   if(!embedIds.length){
@@ -217,7 +217,7 @@ export async function resolveArtstationModel(rawUrl,{open=openPublic,headless,pr
     // must produce a model the shared download queue can identify, verify and dedupe. The thumbnail
     // goes through the same CDN rule as search rows, so a future embed template handing back a
     // square rendition cannot leave this card broken while the grid stays fine.
-    return {uid:artstationUid(artstationHash(artwork.href)),artworkUrl:artwork.href,embedUrl:`https://www.artstation.com/embed/${id}`,mviewUrl:found.mviewUrl,thumbnail:coverUrl(found.thumbnail)??found.thumbnail,title:found.title||title,author,size};
+    return {uid:artstationUid(artstationHash(artwork.href)),artworkUrl:artwork.href,embedUrl:`https://www.artstation.com/embed/${id}`,mviewUrl:found.mviewUrl,thumbnail:coverUrl(found.thumbnail)??found.thumbnail,title:found.title||title,author,size,platformCategories,categories:platformCategories.map(row=>row.name||row.slug).filter(Boolean)};
   }
   throw Error('embed 页面中没有找到 marmoset 场景（该作品可能不含 Marmoset 预览）');
 }
@@ -302,15 +302,31 @@ export function artstationStem(name){
   return stem.replace(/[. ]+$/,'').slice(0,80)||'artstation-model';
 }
 
-function urlHash(url){
-  let h1=0xdeadbeef,h2=0x41c6ce57;
-  for(let i=0;i<String(url).length;i++){
-    const ch=String(url).charCodeAt(i);
-    h1=Math.imul(h1^ch,2654435761);h2=Math.imul(h2^ch,1597334677);
-  }
-  h1=Math.imul(h1^(h1>>>16),2246822507)^Math.imul(h2^(h2>>>13),3266489909);
-  h2=Math.imul(h2^(h2>>>16),2246822507)^Math.imul(h1^(h1>>>13),3266489909);
-  return (h2>>>0).toString(16).padStart(8,'0').slice(0,8)+(h1>>>0).toString(16).padStart(8,'0').slice(0,4);
+/** 外层交付 stem：标题 - 作者，不带 hash/uid 尾巴（ZIP / 文件夹名用）。 */
+export function artstationModelStem(meta){
+  const title=artstationStem(meta.title||'ArtStation');
+  const author=artstationStem(meta.author||'');
+  return author?`${title} - ${author}`:title;
+}
+
+/** 包内文件 stem：只要作品标题，不带作者（作者已体现在外层文件夹名里）。 */
+export function artstationTitleStem(meta){
+  return artstationStem(meta.title||'ArtStation');
+}
+
+/** mviewer 的 scene.glb -> 标题.glb；mat{c}_{通道} -> 标题_mat{c}_{语义后缀}。
+ *  GLB 贴图内嵌 bufferView，FBX 也 embed_textures，改名只动散落副本，不影响模型加载。 */
+export function prettyArtstationEntry(name,stem){
+  if(/^scene\.(glb|gltf|fbx)$/i.test(name))return stem+path.extname(name);
+  const m=/^mat(\d+)_([a-z_]+)(\.[a-z0-9]+)$/i.exec(name);
+  if(!m)return name;
+  const role={
+    c:'BaseColor',c_rgba:'BaseColor',c_alpha:'BaseColor',
+    n:'Normal',
+    r_metalrough:'MetallicRoughness',c_metalrough:'MetallicRoughness',
+    a:'Alpha',o:'AmbientOcclusion',g:'Gloss',s:'Specular',r:'Reflectivity',
+  }[m[2].toLowerCase()];
+  return role?`${stem}_mat${m[1]}_${role}${m[3]}`:name;
 }
 
 /** Collect mviewer output files + info.json into flat entries (`name` uses `/` separators). */
@@ -318,20 +334,24 @@ export async function artstationEntries({outDir,meta,format,uid}){
   const names=await fsp.readdir(outDir);
   const entries=[];
   const used=new Set();
+  const stem=artstationModelStem(meta);      // 外层 ZIP / 文件夹：标题 - 作者
+  const fileStem=artstationTitleStem(meta);  // 包内文件：只要标题，不带作者
   for(const name of names.sort()){
     const p=path.join(outDir,name);
     const st=await fsp.stat(p);
     if(!st.isFile()||used.has(name))continue;
     used.add(name);
-    entries.push({name,data:await fsp.readFile(p)});
+    const pretty=prettyArtstationEntry(name,fileStem);
+    used.add(pretty);
+    entries.push({name:pretty,data:await fsp.readFile(p)});
   }
   // `uid` is required: the shared archive verifier checks provenance by matching
   // info.json.uid against the job's uid, exactly like the Sketchfab exporter does.
   // The job's uid wins; re-deriving it here would let any URL-normalisation difference
   // between the resolver and this writer fail verification on every save.
-  const info={uid:uid||artstationUid(artstationHash(meta.artworkUrl)),platform:'artstation',title:meta.title||null,author:meta.author||null,url:meta.artworkUrl,embedUrl:meta.embedUrl||null,source:meta.mviewUrl,format,exportedAt:new Date().toISOString(),tool:`sketchfab-exporter ArtStation / mviewer ${MVIEWER_VERSION}`,note:'由 ArtStation 作品内嵌的 Marmoset Viewer 场景（.mview）转换而来。请遵守原作品许可。'};
+  const info={uid:uid||artstationUid(artstationHash(meta.artworkUrl)),platform:'artstation',platformCategories:meta.platformCategories||[],categories:meta.categories||[],title:meta.title||null,author:meta.author||null,url:meta.artworkUrl,embedUrl:meta.embedUrl||null,source:meta.mviewUrl,format,exportedAt:new Date().toISOString(),tool:`sketchfab-exporter ArtStation / mviewer ${MVIEWER_VERSION}`,note:'由 ArtStation 作品内嵌的 Marmoset Viewer 场景（.mview）转换而来。请遵守原作品许可。'};
   entries.push({name:'info.json',data:Buffer.from(JSON.stringify(info,null,2),'utf8')});
-  return {zipName:`${artstationStem(meta.title)}-${urlHash(meta.mviewUrl)}.zip`,entries};
+  return {zipName:`${stem}.zip`,entries};
 }
 
 /** Historical name: existing callers and tests read the entry list off this. */

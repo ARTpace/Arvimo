@@ -1,0 +1,4 @@
+export const V9_SQL = `
+ALTER TABLE tag_terms ADD COLUMN retired INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE tag_terms ADD COLUMN edit_rev INTEGER NOT NULL DEFAULT 1;
+`;

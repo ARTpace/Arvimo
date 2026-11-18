@@ -24,15 +24,24 @@ export function createLibraryPaging({$, state, onMore, onRemoteMore, icon}) {
 
   let visible = PAGE_SIZE;
   let signature = '', busy = false;
+  let currentScope='library';const pages=new Map();
+  let nearBottom=false,pendingAuto=false;
+  const autoLoad=()=>{
+    if(!nearBottom||document.hidden||state.route!=='library'){pendingAuto=false;return;}
+    if(document.documentElement.classList.contains('av-scrolling')){pendingAuto=true;return;}
+    pendingAuto=false;void loadMore();
+  };
   const observer = typeof IntersectionObserver === 'function' ? new IntersectionObserver(entries => {
-    if (entries.some(entry => entry.isIntersecting)) void loadMore();
+    nearBottom=entries.some(entry => entry.isIntersecting);autoLoad();
   }, {rootMargin: '320px 0px'}) : null;
+  document.addEventListener('assetvault:scroll-idle',()=>{if(pendingAuto)autoLoad();});
   function observe() {
     observer?.disconnect();
     if (!bar.hidden && !moreButton.hidden && state.route === 'library') observer?.observe(bar);
   }
   async function loadMore() {
     if (busy || bar.hidden || moreButton.hidden || state.route !== 'library') return;
+    pendingAuto=false;
     busy = true; moreButton.disabled = true;
     const before = state.remotePaging?.loaded ?? visible;
     try {
@@ -60,12 +69,13 @@ export function createLibraryPaging({$, state, onMore, onRemoteMore, icon}) {
     ]);
   }
 
-  function slice(rows) {
+  function slice(rows,{local=false,scope='library'}={}) {
+    if(scope!==currentScope){pages.set(currentScope,{visible,signature});const previous=pages.get(scope);pages.delete(scope);currentScope=scope;visible=previous?.visible||PAGE_SIZE;signature=previous?.signature||'';while(pages.size>3)pages.delete(pages.keys().next().value);}
     if (state.route === 'discover') { bar.hidden = true; return rows; }
     const next = fingerprint();
     if (next !== signature) { signature = next; visible = PAGE_SIZE; }
 
-    const remote = state.remotePaging;
+    const remote = local?null:state.remotePaging;
     if (remote) {
       bar.hidden = false;
       moreButton.hidden = !remote.hasMore;
@@ -89,6 +99,6 @@ export function createLibraryPaging({$, state, onMore, onRemoteMore, icon}) {
 
   return {
     slice,
-    reset() { visible = PAGE_SIZE; signature = ''; },
+    reset() { visible = PAGE_SIZE; signature = ''; pages.clear(); },
   };
 }

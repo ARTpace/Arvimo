@@ -81,6 +81,17 @@ export function buildMeta(pack, uid) {
     license: String(pack.license || ''),
     // 平台包（sketchfab / artstation / ambientcg）由各自的写入器负责；这里是本地导入。
     source: String(pack.platform || 'local-import'),
+    // ── 平台身份三件套：只增不改 ──────────────────────────────────────────
+    // 下载包一旦落到磁盘，这三个字段就是「这个资产从哪来、平台叫什么、官方长什么样」的唯一凭证。
+    // 少了它们，DB 一旦重建/换机，材质就退化成一张平铺贴图、模型点开是空白 iframe。
+    // 历史教训：旧实现把 platform 写成 source（本地导入时变成 'local-import'）、assetId 与
+    // thumbnail 干脆不写，扫描器拿不到 `thumb` 只能退到包内 Color.jpg 当封面。
+    platform: String(pack.platform || ''),
+    assetId: String(pack.assetId || ''),
+    // 平台官方缩略图（材质球 / 渲染图）。扫描器读它当 `thumb`，卡片优先用它而不是包内贴图。
+    thumbnail: /^https?:\/\//i.test(String(pack.thumb || pack.thumbnail || '')) ? String(pack.thumb || pack.thumbnail) : '',
+    // 平台来源页：能点回原模型的那条链接。
+    sourceUrl: /^https?:\/\//i.test(String(pack.sourceUrl || '')) ? String(pack.sourceUrl) : '',
     kind: String(pack.category || 'model'),
     resolution: String(pack.resolution || ''),
     format: String(pack.format || ''),

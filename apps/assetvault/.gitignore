@@ -70,3 +70,9 @@ sketchfab-exporter-tauri/src/splash.css
 # ── Artflow 构建产物拷贝（由 build-library / 打包脚本生成，不入库）──
 /sketchfab-exporter-tauri/src/artflow/
 /sketchfab-exporter-tauri/src/doc-render.js
+
+# Additional generated viewer bundles (build-library.mjs)
+/sketchfab-exporter-tauri/src/image-decoders.js
+/sketchfab-exporter-tauri/src/model-thumb.js
+/sketchfab-exporter-tauri/src/model-preview.html
+/sketchfab-exporter-tauri/src/model-preview.js

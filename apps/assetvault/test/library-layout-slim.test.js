@@ -1,3 +1,4 @@
+import {assembleLibraryStyles} from '../scripts/lib/library-styles.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -10,7 +11,7 @@ import {fileURLToPath} from 'node:url';
 //    各状态计数并进筛选页签——把版面留给任务列表本身。
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const read=f=>fs.readFileSync(path.join(root,f),'utf8');
-const css=read('src/library/app.css');
+const css=assembleLibraryStyles();
 const html=read('src/library/index.html');
 const view=read('src/library/library-view.js');
 const ui=read('src/library/download-ui.js');
@@ -108,7 +109,7 @@ test('the download center is slimmed down and the task list owns the page',()=>{
 // 钉死 —— 高分屏上 3D 区就只有 620px 高，全屏反而显小；同时 iframe 硬编码 height:465px，
 // 容器越宽越扁，和平台预览器的内容比例（约 3:2）对不上就左右留大片白。
 test('预览弹窗随视口伸缩，3D 区宽高比恒定',()=>{
- const css=read('src/library/app.css');
+ const css=assembleLibraryStyles();
  assert.match(css,/\.preview-dialog\{--pv-h:min\(90vh,1040px\)[^}]*height:var\(--pv-h\)/,
   '弹窗高度吃满视口（留上限防超大屏拉空侧栏），全屏时 3D 区跟着变大而非钉死在 620px');
  assert.match(css,/\.preview-dialog\{[^}]*width:min\(96vw,calc\(\(var\(--pv-h\) - 88px\) \* 1\.5 \+ 240px\)\)/,

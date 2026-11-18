@@ -27,16 +27,22 @@ export function matchesWindowsOwner(owner,actual){
  return owner.executable.toLowerCase()===actual.executable.toLowerCase()&&Math.abs(owner.startedAt-actual.startedAt)<1000;
 }
 
-export function lockOwnerAlive(owner){
+export function lockOwnerAlive(owner,inspect=execFileSync){
  if(!Number.isSafeInteger(owner?.pid)||owner.pid<=0)throw Error('下载记录目录锁无效，请检查 manager.lock');
  if(owner.pid===process.pid)return owner.startedAt?matchesWindowsOwner(owner,processIdentity()):false;
  if(process.platform==='win32'){
+  // ESRCH definitively means the old owner exited. Avoid launching PowerShell on every hot restart.
+  // A successful probe can include retained kernel handles, so it still requires CIM identity checks.
+  try{process.kill(owner.pid,0);}catch(error){if(error.code==='ESRCH')return false;}
   try{
    // CIM excludes exited processes whose kernel handles are still open; kill(pid, 0) does not.
    const script=`$ErrorActionPreference='Stop'; $p=Get-CimInstance Win32_Process -Filter 'ProcessId=${owner.pid}'; if($null -eq $p){'null'}else{@{executable=$p.ExecutablePath;startedAt=([DateTimeOffset]$p.CreationDate).ToUnixTimeMilliseconds();isLibrary=($p.Name -match '^node.*\\.exe$' -and $p.CommandLine -match 'library\\.mjs')}|ConvertTo-Json -Compress}`;
-   const actual=JSON.parse(execFileSync('powershell.exe',['-NoProfile','-NonInteractive','-Command',script],{encoding:'utf8',windowsHide:true,timeout:5000}).trim());
+   const actual=JSON.parse(inspect('powershell.exe',['-NoProfile','-NonInteractive','-Command',script],{encoding:'utf8',windowsHide:true,timeout:5000}).trim());
    return matchesWindowsOwner(owner,actual);
-  }catch{return true;} // Inspection failure must not permit concurrent writers.
+  }catch(error){
+   console.warn('[目录锁检查失败]',error.code||error.message);
+   return true; // Inspection failure must not permit concurrent writers.
+  }
  }
  try{process.kill(owner.pid,0);return true;}catch(error){return error.code!=='ESRCH';}
 }

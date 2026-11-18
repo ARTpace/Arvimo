@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import {writeArtstationDeliverable,artstationEntries,buildArtstationZip} from '../server/artstation.mjs';
+import {writeArtstationDeliverable,artstationEntries,buildArtstationZip,prettyArtstationEntry} from '../server/artstation.mjs';
 import {verifyFolder} from '../server/folder-archive.mjs';
 import {verifyArchive} from '../server/archive.mjs';
 import {fixtureGlb} from './download-fixture.mjs';
@@ -33,11 +33,11 @@ test('folder delivery writes loose files into a directory, not an archive',async
   assert.equal(result.folder,true);
   // The staging path must really be a directory - this is the case that used to throw EISDIR.
   assert.equal((await fsp.stat(output)).isDirectory(),true);
-  assert.equal((await fsp.stat(path.join(output,'scene.glb'))).isFile(),true);
+  assert.equal((await fsp.stat(path.join(output,'Token Hammer.glb'))).isFile(),true);
   assert.equal(JSON.parse(await fsp.readFile(path.join(output,'info.json'),'utf8')).uid,UID);
   assert.equal(result.fileCount,2);
   assert.ok(result.bytes>0);
-  assert.equal(result.zipName.endsWith('.zip'),true);   // the name is reused for folder naming upstream
+  assert.equal(result.zipName,'Token Hammer - tester.zip');   // the name is reused for folder naming upstream
 
   // The shared folder verifier is the real acceptance criterion: if this passes, the job can be saved.
   const verification=await verifyFolder(output,{uid:UID});
@@ -91,13 +91,26 @@ test('the default delivery stays ZIP so older callers keep working',async()=>{
  }finally{await fsp.rm(root,{recursive:true,force:true});}
 });
 
+test('mviewer texture names are mapped to semantic PBR roles with a title-only stem',()=>{
+ // 包内文件只要作品标题，不带作者；外层 ZIP / 文件夹名仍用「标题 - 作者」。
+ const stem='Token Hammer';
+ assert.equal(prettyArtstationEntry('scene.glb',stem),'Token Hammer.glb');
+ assert.equal(prettyArtstationEntry('scene.fbx',stem),'Token Hammer.fbx');
+ assert.equal(prettyArtstationEntry('mat0_c_rgba.png',stem),'Token Hammer_mat0_BaseColor.png');
+ assert.equal(prettyArtstationEntry('mat2_c.jpg',stem),'Token Hammer_mat2_BaseColor.jpg');
+ assert.equal(prettyArtstationEntry('mat1_n.jpg',stem),'Token Hammer_mat1_Normal.jpg');
+ assert.equal(prettyArtstationEntry('mat0_r_metalrough.png',stem),'Token Hammer_mat0_MetallicRoughness.png');
+ assert.equal(prettyArtstationEntry('preview.jpg',stem),'preview.jpg');
+ assert.equal(prettyArtstationEntry('info.json',stem),'info.json');
+});
+
 test('entry collection is flat and keeps the historical buildArtstationZip name',async()=>{
  const root=await fsp.mkdtemp(path.join(os.tmpdir(),'sfx-as-entries-'));
  try{
   const outDir=await staged(root);
   const {entries,zipName}=await artstationEntries({outDir,meta,format:'glb',uid:UID});
-  assert.deepEqual(entries.map(e=>e.name),['scene.glb','info.json']);
-  assert.match(zipName,/-[0-9a-f]{12}\.zip$/);
+  assert.deepEqual(entries.map(e=>e.name),['Token Hammer.glb','info.json']);
+  assert.equal(zipName,'Token Hammer - tester.zip');
   // Existing callers and tests read `.entries` off buildArtstationZip.
   const legacy=await buildArtstationZip({outDir,meta,format:'glb',uid:UID});
   assert.deepEqual(legacy.entries.map(e=>e.name),entries.map(e=>e.name));

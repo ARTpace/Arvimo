@@ -6,8 +6,8 @@
 //                                  旧版本是单文件 JSON + 同目录的 <id>.<ext>
 //
 // 导入策略刻意「先落地再入库」：
-//   1. 原图复制进 <dataDir>/imports/<库名>/<Eagle 文件夹路径>/，缩略图进 _thumbs/；
-//      不引用原位置 —— 用户删掉 Eagle 之后库还得能看；
+//   1. 原图复制进 <资产根>/<分组>/<子类型>/（与平台下载同一套分类目录），缩略图进
+//      <资产根>/.assetvault-cache/eagle-thumbs/<库名>/；不引用原位置 —— 用户删掉 Eagle 之后库还得能看；
 //   2. 再把整批条目拼成一份快照交给 library-portable.importLibrary —— 写入路径、
 //      种子语义、合集挂载全部复用，不另开一条能写坏数据的口子。
 //
@@ -17,6 +17,8 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import {createHash} from 'node:crypto';
 import {importLibrary, PORTABLE_FORMAT, PORTABLE_VERSION} from './library-portable.mjs';
+import {writeSidecar} from './asset-sidecar.mjs';
+import {assetFolder} from './asset-folders.mjs';
 
 const MAX_ITEMS = 20000;
 const PROBE_SAMPLES = 3;
@@ -164,7 +166,7 @@ async function pool(items, worker) {
  * 导入整个资源库。
  * @returns 报告：added / skipped / folders / collections / libraryRoot（登记为导入根的那个目录）
  */
-export async function importEagleLibrary({folder, dataDir, importRoots, storage, now = Date.now} = {}) {
+export async function importEagleLibrary({folder, dataDir, archiveRoot, importRoots, storage, now = Date.now} = {}) {
   if (!storage) throw Error('数据库不可用，暂时无法导入');
   const resolved = await resolveLibraryRoot(folder);
   if (!resolved) throw Error('这个目录不像 Eagle / Billfish 资源库（需要 metadata.json 与 images 目录）');
@@ -175,10 +177,11 @@ export async function importEagleLibrary({folder, dataDir, importRoots, storage,
 
   const folders = flattenFolders(resolved.meta);
   const libraryName = safeName(path.basename(resolved.root).replace(/\.(billfish|library)$/i, ''));
-  // 所有导入库共用一个根：本地文件扫描、缩略图接口都按「根 + 相对路径」鉴权。
-  const importRoot = path.join(dataDir, 'imports');
-  const libraryDir = path.join(importRoot, libraryName);
-  await fsp.mkdir(path.join(libraryDir, '_thumbs'), {recursive: true});
+  // 所有导入共用资产根：与平台下载、拖入导入落在同一套「分组/子类型」目录里。
+  // 缩略图放点开头的缓存目录（扫描器跳过点目录，不会被当成图片资产重复出卡）。
+  const importRoot = path.resolve(archiveRoot || path.join(dataDir, 'imports'));
+  const thumbRoot = path.join(importRoot, '.assetvault-cache', 'eagle-thumbs', libraryName);
+  await fsp.mkdir(thumbRoot, {recursive: true});
 
   const report = {library: libraryName, source: resolved.root, libraryRoot: importRoot, added: 0, skipped: 0, collections: 0, assets: [], failures: []};
   const collectionMap = new Map();
@@ -195,15 +198,16 @@ export async function importEagleLibrary({folder, dataDir, importRoots, storage,
     if (!UID.test(uid)) { report.skipped += 1; return; }
     // Eagle 的一个项目可以属于多个文件夹：第一个决定落盘位置，全部映射成合集。
     const folderIds = Array.isArray(info.folders) ? info.folders.map(String) : [];
-    const firstFolder = folderIds.map(id => folders.get(id)).find(Boolean);
-    const relativeDir = firstFolder ? [...firstFolder.parents, firstFolder.name].map(safeName).join('/') : '';
     const targetExt = ext ? `.${ext}` : path.extname(item.assetPath);
     // Eagle 的 name 一般不含扩展名；带了也不重复加，免得出现 a.jpg.jpg。
     const rawName = String(info.name || path.basename(item.assetPath));
     const fileName = safeName(targetExt && rawName.toLowerCase().endsWith(targetExt.toLowerCase()) ? rawName.slice(0, -targetExt.length) : rawName);
+    // 落盘按资产分类（图片/3D资产/…），不按 Eagle 的文件夹层级 —— 那一层已经映射成合集了，
+    // 再复制一份目录层级只会让磁盘和侧栏对不上。同名由 copyInto 加 -2 处理，不覆盖。
+    const storedName = `${fileName}${targetExt}`;
     let copied = null;
     try {
-      copied = await copyInto(item.assetPath, path.join(libraryDir, relativeDir, `${fileName}${targetExt}`));
+      copied = await copyInto(item.assetPath, path.join(importRoot, assetFolder({filename: storedName}), storedName));
     } catch (error) {
       report.skipped += 1;
       report.failures.push({name: String(info.name || ''), reason: error.message});
@@ -211,9 +215,11 @@ export async function importEagleLibrary({folder, dataDir, importRoots, storage,
     }
     let thumbUrl = '';
     if (item.thumbPath) {
+      const thumbName = `${uid}.png`;
       try {
-        await fsp.copyFile(item.thumbPath, path.join(libraryDir, '_thumbs', `${uid}.png`));
-        thumbUrl = `/api/local/thumb?w=512&root=${encodeURIComponent(importRoot)}&rel=${encodeURIComponent(`${libraryName}/_thumbs/${uid}.png`)}`;
+        await fsp.copyFile(item.thumbPath, path.join(thumbRoot, thumbName));
+        const thumbRel = path.posix.join('.assetvault-cache', 'eagle-thumbs', libraryName, thumbName);
+        thumbUrl = `/api/local/thumb?w=512&root=${encodeURIComponent(importRoot)}&rel=${encodeURIComponent(thumbRel)}`;
       } catch { /* 缩略图没有不影响条目本身 */ }
     }
     const tags = (Array.isArray(info.tags) ? info.tags : []).map(tag => String(tag).trim()).filter(Boolean).slice(0, 24);
@@ -255,6 +261,8 @@ export async function importEagleLibrary({folder, dataDir, importRoots, storage,
   if (!assets.length) {
     return {...report, collections: 0, assets: undefined, message: '这个库里没有可导入的项目'};
   }
+  // 元数据写到每个资产旁边（<资产名>.info.json），库不依赖 DB 也能自解释。
+  for (const model of assets) { try { writeSidecar(model.filePath, model); } catch {} }
 
   // 缩略图接口只认「已登记的导入根」：不登记的话卡片全是裂图。
   try { importRoots?.add?.(importRoot); } catch { /* 已存在或路径异常都不该阻断入库 */ }

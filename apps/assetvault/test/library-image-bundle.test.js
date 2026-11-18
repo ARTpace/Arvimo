@@ -54,14 +54,14 @@ test('a picture bundle carries the largest rendition, named by its bytes and ver
     assert.equal(info.platform,'sketchfab');
     assert.equal(info.uid,UID);
     assert.equal(info.imageCount,1);
-    assert.equal(info.images[0].file,'images/01-Twin Suns.png');
+    assert.equal(info.images[0].file,'images/sketchfab_01-Twin Suns.png');
     // The widest published rendition is the one that lands — the other two would be duplicates.
     assert.equal(info.images[0].width,4096);
     assert.equal(info.images[0].url,OTHER);
     assert.equal(info.images[0].format,'png');
     // The extension is chosen from the bytes, never from the URL: both agreed here, but the rule
     // that made them agree is what this asserts.
-    await fsp.access(path.join(output,'images','01-Twin Suns.png'));
+    await fsp.access(path.join(output,'images','sketchfab_01-Twin Suns.png'));
 
     const verified=await verifyFolder(output,{uid:UID});
     assert.equal(verified.images.length,1);
@@ -80,7 +80,7 @@ test('the same bundle verifies as a ZIP, and its manifest still matches the arch
     assert.equal(result.folder,false);
     const verified=await verifyArchive(output,{uid:UID});
     assert.equal(verified.images.length,1);
-    assert.equal(verified.images[0].name,'images/01-Twin Suns.png');
+    assert.equal(verified.images[0].name,'images/sketchfab_01-Twin Suns.png');
   }finally{await fsp.rm(root,{recursive:true,force:true});}
 });
 test('a failure on one picture leaves nothing behind and says which URL broke',async()=>{

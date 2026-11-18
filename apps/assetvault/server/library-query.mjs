@@ -209,9 +209,15 @@ export function toCard(row) {
     state: row.state, tags: row.tags, note: row.note, addedAt: row.added_at,
     likes: number(row.model.likes), downloadable: row.model.downloadable === true,
     assetType: text(row.model.assetType) || text(row.kind) || '',
+    localRoot: text(row.model.localRoot), localRel: text(row.model.localRel),
+    previewUrl: text(row.model.previewUrl),
+    typeOverride: row.model.typeOverride || '',
+    formatCheck: row.model.formatCheck || null,
     url: text(row.model.url),
     license: text(row.model.license),
     source: text(row.model.source),
+    // AI 生成图的提示词/工具（服务端扫描 PNG 文本块回填），前端据此归到「AI生成」子类。
+    aiMeta: row.model.aiMeta || null,
   };
 }
 

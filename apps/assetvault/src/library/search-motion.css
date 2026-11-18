@@ -1,33 +1,33 @@
 /* Scoped styles from the user-provided optimized search bar. */
 .cat-peek[data-developer-entry]{touch-action:none;user-select:none;-webkit-touch-callout:none}
-.mascot-lab{width:min(880px,calc(100vw - 32px));background:#101820;border-color:#334334;color:#dce5ee;overflow:auto}
-.mascot-lab>header{display:flex;align-items:center;justify-content:space-between;padding:22px 26px;border-bottom:1px solid #29372e}
+.mascot-lab{width:min(880px,calc(100vw - 32px));background:var(--av-panel-raised,#101820);border-color:var(--av-line,#334334);color:#dce5ee;overflow:auto}
+.mascot-lab>header{display:flex;align-items:center;justify-content:space-between;padding:22px 26px;border-bottom:1px solid var(--av-line,#29372e)}
 .mascot-lab header small{font:10px/1.5 monospace;letter-spacing:2px;color:#9bbd76}
 .mascot-lab h2{margin:5px 0 0;font-size:21px;font-weight:550}
 .mascot-lab-body{display:grid;grid-template-columns:minmax(260px, .9fr) minmax(0,1.1fr);min-height:355px}
-.mascot-lab-preview{padding:24px 16px;background:radial-gradient(ellipse at 50% 25%,#c8f35309,transparent 70%);border-right:1px solid #29372e}
+.mascot-lab-preview{padding:24px 16px;background:radial-gradient(ellipse at 50% 25%,#c8f35309,transparent 70%);border-right:1px solid var(--av-line,#29372e)}
 @media(min-width:641px){.mascot-lab-preview{position:sticky;top:0;align-self:start}}
-.mascot-lab [data-lab-stage]{min-height:230px;display:flow-root;border:1px solid #ffffff08;border-radius:13px;background:#0b1118}
+.mascot-lab [data-lab-stage]{min-height:230px;display:flow-root;border:1px solid #ffffff08;border-radius:13px;background:var(--av-field,#0b1118)}
 .mascot-lab [data-lab-stage][data-light]{background:#e4eadc}
 .mascot-lab-preview-tools{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:18px;flex-wrap:wrap}
 .mascot-lab label{display:flex;align-items:center;gap:7px;font-size:11px;color:#a9b9a3}
 .mascot-lab input{accent-color:#c8f353}
-.mascot-lab select{background:#17231b;color:#cfdcc8;border:1px solid #354735;border-radius:7px;padding:7px 9px;font-size:12px}
+.mascot-lab select{background:var(--av-panel-raised,#17231b);color:#cfdcc8;border:1px solid var(--av-line,#354735);border-radius:7px;padding:7px 9px;font-size:12px}
 .mascot-lab-controls{padding:24px;min-width:0}
-.mascot-lab [role=tablist]{display:flex;gap:4px;padding:4px;border:1px solid #2a392e;border-radius:10px;background:#0c1317}
+.mascot-lab [role=tablist]{display:flex;gap:4px;padding:4px;border:1px solid var(--av-line,#2a392e);border-radius:10px;background:var(--av-field,#0c1317)}
 .mascot-lab [role=tab]{flex:1;border:0;border-radius:7px;padding:9px 4px;background:transparent;color:#83948c;font-size:12px;cursor:pointer;white-space:nowrap}
 .mascot-lab [role=tab][aria-selected=true]{background:#c8f35314;color:#d4edac}
 .mascot-lab h3{font-size:12px;font-weight:500;margin:22px 0 10px;color:#adbdab}
 .mascot-lab p{font-size:11px;line-height:1.7;color:#879b8b}
 .mascot-lab-choices{display:flex;flex-wrap:wrap;gap:8px}
-.mascot-lab-choices button,.mascot-lab-actions button{padding:8px 12px;border:1px solid #354637;border-radius:8px;background:#17211b;color:#c4d0bd;font-size:12px;cursor:pointer}
+.mascot-lab-choices button,.mascot-lab-actions button{padding:8px 12px;border:1px solid var(--av-line,#354637);border-radius:8px;background:var(--av-panel-raised,#17211b);color:#c4d0bd;font-size:12px;cursor:pointer}
 .mascot-lab-choices button:hover,.mascot-lab-actions button:hover{border-color:#8cae59;background:#c8f35310}
 .mascot-lab-choices button[aria-pressed=true]{color:#d4f59c;border-color:#94b65a;background:#c8f35314}
 .mascot-lab-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:18px}
-.mascot-lab-layer-options{display:flex;flex-wrap:wrap;gap:16px;margin-top:18px;padding-top:14px;border-top:1px solid #2a392e}
+.mascot-lab-layer-options{display:flex;flex-wrap:wrap;gap:16px;margin-top:18px;padding-top:14px;border-top:1px solid var(--av-line,#2a392e)}
 #search-panel .bot-bubble[hidden]{display:none}
 .mascot-lab-effects{display:grid;grid-template-columns:repeat(auto-fit,minmax(76px,1fr));gap:8px}
-.mascot-lab-effects button{display:flex;flex-direction:column;align-items:center;gap:7px;min-height:70px;padding:11px 5px;border:1px solid #354637;border-radius:10px;background:#121e18;color:#a5b49f;font-size:11px;cursor:pointer;transition:border-color .15s,background .15s}
+.mascot-lab-effects button{display:flex;flex-direction:column;align-items:center;gap:7px;min-height:70px;padding:11px 5px;border:1px solid var(--av-line,#354637);border-radius:10px;background:var(--av-panel-raised,#121e18);color:#a5b49f;font-size:11px;cursor:pointer;transition:border-color .15s,background .15s}
 .mascot-lab-effects button>span:first-child{font:22px/1.1 system-ui;color:#a9c18d}
 .mascot-lab-effects button .mascot-lab-thumbnail{flex-shrink:0;width:64px;height:44px}
 .mascot-lab-effects button:hover{border-color:#78994f;background:#c8f35309}
@@ -36,23 +36,23 @@
 .mascot-lab-effects button:focus-visible{outline:2px solid #c8f353;outline-offset:2px}
 .mascot-lab [data-lab-pane="2"]>label{margin:20px 0 12px}
 .mascot-lab [data-lab-queue]{max-height:250px;overflow:auto;font-size:12px;color:#8c9c90}
-.mascot-lab [data-lab-queue] article{border-bottom:1px solid #2a392e;padding:12px 0;overflow-wrap:anywhere}
+.mascot-lab [data-lab-queue] article{border-bottom:1px solid var(--av-line,#2a392e);padding:12px 0;overflow-wrap:anywhere}
 .mascot-lab [data-lab-queue] strong{font:11px monospace;color:#c3dda5}
 .mascot-lab [data-lab-queue] small{font-size:10px;color:#93a48e}
 .mascot-lab [hidden]{display:none!important}
-@media(max-width:640px){.mascot-lab-body{grid-template-columns:1fr}.mascot-lab-preview{border-right:0;border-bottom:1px solid #29372e}.mascot-lab [data-lab-stage]{min-height:205px}.mascot-lab-controls{padding:18px}}
+@media(max-width:640px){.mascot-lab-body{grid-template-columns:1fr}.mascot-lab-preview{border-right:0;border-bottom:1px solid var(--av-line,#29372e)}.mascot-lab [data-lab-stage]{min-height:205px}.mascot-lab-controls{padding:18px}}
 body[data-route="library"] #search-panel .platform-select,
 body[data-route="library"] #theme-breakdown-btn,
 body[data-route="library"] #theme-breakdown{display:none!important}
 #search-panel{
-      --bg-panel: #0d131a;
-      --border-panel: #1b2e35;
-      --bg-input: #080c11;
-      --border-input: #15222e;
+      --bg-panel: var(--av-panel,#0d131a);
+      --border-panel: var(--av-line,#1b2e35);
+      --bg-input: var(--av-field,#080c11);
+      --border-input: var(--av-line,#15222e);
       --primary-green: #c8f353;
       --primary-green-hover: #d6fa6b; 
-      --bg-btn-dark: #131c26;
-      --border-btn-dark: #22303d;  
+      --bg-btn-dark: var(--av-panel-raised,#131c26);
+      --border-btn-dark: var(--av-line,#22303d);
       --text-main: #e1e7ed;
       --text-muted: #627282;
       --font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
@@ -173,7 +173,7 @@ body[data-route="library"] #theme-breakdown{display:none!important}
       30%           { opacity: 1; transform: translateY(-5px) scale(1.15); }
     }
 #search-panel .bot-bubble{
-      background: rgba(13, 19, 26, 0.94);
+      background: var(--av-panel-solid,rgba(13, 19, 26, 0.94));
       backdrop-filter: blur(10px);
       border: 1px solid var(--border-btn-dark);
       color: var(--primary-green);
@@ -236,7 +236,7 @@ body[data-route="library"] #theme-breakdown{display:none!important}
     }
 #search-panel .search-field:focus-within{
       border-color: rgba(200, 243, 83, 0.5);
-      background: #090e15;
+      background: var(--av-field-focus,#090e15);
       box-shadow: 0 0 20px rgba(200, 243, 83, 0.12);
     }
 #search-panel #search-clear{
@@ -299,7 +299,7 @@ body[data-route="library"] #theme-breakdown{display:none!important}
       top: calc(100% + 14px);
       left: -6px;
       width: 180px;
-      background: rgba(15, 23, 32, 0.95);
+      background: var(--av-panel-solid,rgba(15, 23, 32, 0.95));
       backdrop-filter: blur(12px);
       border: 1px solid var(--border-btn-dark);
       border-radius: 12px;
@@ -373,8 +373,8 @@ body[data-route="library"] #theme-breakdown{display:none!important}
       gap: 10px;
     }
 #search-panel kbd{
-      background: #0f1720;
-      border: 1px solid #1e2c3a;
+      background: var(--av-field,#0f1720);
+      border: 1px solid var(--av-line,#1e2c3a);
       color: var(--text-muted);
       font-size: 10.5px;
       padding: 3px 7px;
@@ -437,8 +437,8 @@ body[data-route="library"] #theme-breakdown{display:none!important}
       padding: 0 20px;
     }
 #search-panel #theme-breakdown-btn:hover{
-      background: #182433;
-      border-color: #2e4357;
+      background: var(--av-panel-hover,#182433);
+      border-color: var(--av-line,#2e4357);
       color: #fff;
       transform: translateY(-2px);
     }
@@ -512,7 +512,7 @@ body[data-route="library"] #theme-breakdown{display:none!important}
       transition: background .16s ease, border-color .16s ease, color .16s ease, transform .16s ease;
     }
 #search-panel .topic-chip:hover{
-      border-color: #344a60;
+      border-color: var(--av-line,#344a60);
       color: var(--text-main);
       transform: translateY(-2px);
       background: rgba(255, 255, 255, 0.04);
@@ -602,7 +602,8 @@ body[data-route="library"] #theme-breakdown{display:none!important}
       50%      { filter: drop-shadow(0 0 8px rgba(200, 243, 83, 0.95)); }
     }
 #search-panel .bot-eye,#search-panel .vault-bot-eye{
-      animation: av2-eye-glow-pulse 2.8s ease-in-out infinite;
+      /* Static glow avoids repainting filtered SVG eyes while the app is idle. */
+      filter: drop-shadow(0 0 3px rgba(200, 243, 83, 0.55));
     }
 @keyframes av2-bubble-bounce-in{
       0%   { opacity: 0; transform: translateY(12px) scale(0.82); }
@@ -800,12 +801,15 @@ body[data-route="library"] #theme-breakdown{display:none!important}
 @media(max-width:1050px){#search-panel .global-search kbd,#search-panel .search-mini-bot{display:none}}
 @media(max-width:900px){#search-panel #asset-search-form{display:grid;grid-template-columns:minmax(0,1fr) auto}#search-panel .platform-select .picker,#search-panel .platform-select .picker-trigger{height:auto}}
 @media(max-width:600px){#search-panel{padding:16px}#search-panel .search-field{padding:0 9px}#search-panel .platform-select{max-width:125px;margin-right:9px;padding-right:5px}#search-panel .global-search{min-width:0;gap:7px}#search-panel #asset-query{font-size:12px}#search-panel #search-button,#search-panel #theme-breakdown-btn{padding:0 15px;font-size:12px}#search-panel .vault-bot-header{left:18px;gap:6px}#search-panel .bot-bubble{font-size:10px;padding:5px 8px}}
-[data-picker-menu="search-platform"],#history-pop{border:1px solid #22303d;border-radius:14px;background:#0d131af7;backdrop-filter:blur(16px);box-shadow:0 20px 45px #0009,inset 0 1px 0 #ffffff06;scrollbar-width:thin;scrollbar-color:#34433c transparent}
+[data-picker-menu="search-platform"],#history-pop{border:1px solid var(--av-line,#22303d);border-radius:14px;background:var(--av-panel-solid,#0d131af7);backdrop-filter:blur(16px);box-shadow:0 20px 45px #0009,inset 0 1px 0 #ffffff06;}
 [data-picker-menu="search-platform"]{max-height:none;padding:6px;overflow-y:auto;overscroll-behavior:contain}
-[data-picker-menu="search-platform"] .picker-option{padding:9px 12px;border:1px solid transparent;border-radius:9px;color:#e0e7ee;font-size:14px;font-weight:600;gap:3px;transition:background .18s,color .18s,border-color .18s}
-[data-picker-menu="search-platform"] .picker-option small{font-size:10px;font-weight:400;color:#708191;line-height:1.5}
-[data-picker-menu="search-platform"] .picker-option:hover,[data-picker-menu="search-platform"] .picker-option.highlight{background:#c8f3530c;border-color:#c8f35320;color:#c8f353}
-[data-picker-menu="search-platform"] .picker-option.current{background:#c8f35314;border-color:#c8f35338;color:#c8f353}
+[data-picker-menu="search-platform"] .picker-option{padding:9px 12px;border:1px solid transparent;border-radius:9px;color:#e0e7ee;font-size:14px;font-weight:600;gap:3px;transition:transform .16s ease,color .16s ease,text-shadow .16s ease}
+[data-picker-menu="search-platform"] .picker-option small{font-size:10px;font-weight:400;color:#708191;line-height:1.5;transition:color .16s ease}
+/* 悬停：不要背景块和边框，只让文字亮起 + 轻微上浮（2026-11-18 要求）。 */
+[data-picker-menu="search-platform"] .picker-option:hover,[data-picker-menu="search-platform"] .picker-option.highlight{background:transparent;border-color:transparent;color:#c8f353;transform:translateY(-2px);text-shadow:0 0 14px #c8f35355}
+[data-picker-menu="search-platform"] .picker-option:hover small,[data-picker-menu="search-platform"] .picker-option.highlight small{color:#a7bd83}
+/* 选中项保留一层极淡的底，避免和纯悬停项撞在一起；同样不上边框。 */
+[data-picker-menu="search-platform"] .picker-option.current{background:#c8f3530d;border-color:transparent;color:#c8f353;transform:none;text-shadow:none}
 [data-picker-menu="search-platform"] .picker-option.current small{color:#92a778}
 /* 只保留尺寸层面的覆盖：颜色 / 描边 / hover 全部交给 app.css 的分组 tone，
    否则这里的 #id 选择器会把「最近检索 / 链接解析 / 今日主题 / 相近词」染成同一个绿。 */
@@ -882,7 +886,7 @@ body[data-route="library"] #theme-breakdown{display:none!important}
 #search-panel .cat-peek[data-motion] .cat-sway{animation:none;rotate:0deg;translate:0 0;scale:1;transform-origin:50% 95%}
 #search-panel .cat-peek[data-motion] .cat-svg{animation:none}
 #search-panel .cat-peek[data-motion] .cat-ear{animation:none;transform:none}
-#search-panel .cat-peek[data-motion="idle"] .cat-sway{animation:av-body-breathe 4s ease-in-out infinite}
+#search-panel .cat-peek[data-motion="idle"] .cat-sway{animation:none}
 #search-panel .cat-peek[data-motion="nod"] .cat-sway{animation:av-body-nod 1.2s ease-in-out 2}
 #search-panel .cat-peek[data-motion="tilt"] .cat-sway{animation:av-body-tilt 2.4s ease-in-out both}
 #search-panel .cat-peek[data-motion="peek"] .cat-sway{animation:av-body-peek 1.5s ease-in-out both}
@@ -974,3 +978,127 @@ body[data-route="library"] #theme-breakdown{display:none!important}
 select{appearance:none;-webkit-appearance:none;-moz-appearance:none;background-image:none}
 select::-ms-expand{display:none}
 
+/* ══ 搜索栏图标按键 hover 统一（2026-11-18 反馈）══
+ * 纯图标按键悬停一律「图标亮起 + 轻微上浮」，去掉背景块与边框，
+ * 和平台菜单 hover 的风格保持一致。构建时本文件追加在 dist/app.css 最后，
+ * 这里即最终级联。只针对图标按键；主 CTA「搜索 / 解析」保留原背景高亮。 */
+#search-panel .search-image-clear{transition:color .16s ease,transform .16s ease,background .16s ease}
+#search-panel #search-clear:hover,
+#search-panel .search-image-clear:hover{
+  background:transparent!important;
+  color:var(--search-green,#c8f353)!important;
+  transform:translateY(-1.5px) scale(1.08);
+}
+#search-panel .global-search>#theme-breakdown-btn:hover:not(:disabled){
+  background:transparent!important;
+  border-color:transparent!important;
+  color:var(--search-green,#c8f353)!important;
+  transform:translateY(-1.5px);
+}
+/* 图钉是 absolute 靠 translateY(-50%) 垂直居中，上浮必须在其基础上叠加，不能覆盖丢掉。 */
+.picker-pin{transition:opacity .16s ease,color .16s ease,transform .16s ease,background .16s ease}
+.picker-pin:hover{
+  background:transparent!important;
+  color:var(--accent)!important;
+  transform:translateY(calc(-50% - 2px));
+  opacity:1;
+}
+/* 已置顶常亮主题绿保留作状态标识，但去掉那枚浅底色块。 */
+.picker-pin.on{background:transparent!important}
+
+/* ══ 平台选择器 / 绿眼睛徽章 hover 统一（2026-11-18 反馈）══
+ * 与图标按键同一风格：悬停不出现背景块与边框，改为图标+文字亮起 + 轻微上浮。
+ * 平台选择器左侧的竖分隔线也一并去掉，让整条搜索栏更干净。 */
+#search-panel .platform-select{
+  background:transparent!important;
+  border-right:0!important;
+}
+#search-panel .platform-select .picker-trigger{
+  background:transparent!important;
+  border:0!important;
+  box-shadow:none!important;
+  transition:color .18s ease,transform .18s ease,background .18s ease;
+}
+#search-panel .platform-select .picker-trigger:hover:not(:disabled),
+#search-panel .platform-select .picker-trigger:focus-visible,
+#search-panel .platform-select .picker-trigger[aria-expanded="true"]{
+  background:transparent!important;
+  border:0!important;
+  box-shadow:none!important;
+  color:var(--search-green,#c8f353)!important;
+  transform:translateY(-1.5px);
+}
+#search-panel .platform-select .picker-trigger:hover:not(:disabled)>i{
+  color:var(--search-green,#c8f353)!important;
+}
+/* 绿眼睛徽章常驻去掉底色与描边，只留两枚发光眼睛本体。 */
+#search-panel .search-mini-bot{
+  background:transparent!important;
+  border-color:transparent!important;
+}
+
+/* ══ 侧边栏图标按键 hover 统一（2026-11-18 反馈，参考 Melo 侧边栏质感）══
+ * 要点（对照 Melo Sidebar.tsx 的真实做法）：① 整行位置完全不动，只有颜色过渡；
+ * ② 图标只 scale(1.1) 放大、不上浮不位移，hover 变白亮、主题色只留给 active；
+ * ③ 统一走 500ms 弹性曲线 cubic-bezier(.2,.8,.2,1)——这是"丝滑"的真正来源；
+ * ④ 全程无背景块/边框。 */
+#sidebar .nav{
+  transition:color .5s cubic-bezier(.2,.8,.2,1),background .5s cubic-bezier(.2,.8,.2,1),transform .5s cubic-bezier(.2,.8,.2,1);
+}
+#sidebar .nav i{
+  transition:color .5s cubic-bezier(.2,.8,.2,1),transform .5s cubic-bezier(.2,.8,.2,1);
+}
+#sidebar .nav:hover:not(.active),
+html.side-collapsed #sidebar .nav:hover:not(.active){
+  background:transparent!important;
+  box-shadow:none!important;
+  color:#f4f7fa;
+  transform:none;            /* Melo 整行不位移，只有颜色渐变 */
+}
+#sidebar .nav:hover:not(.active) i,
+html.side-collapsed #sidebar .nav:hover:not(.active) i{
+  color:#f4f7fa;             /* hover 变白亮，主题绿留给 active */
+  transform:scale(1.1);      /* 只放大，不上浮 */
+  filter:none;
+}
+/* 当前页：图标常亮主题绿 + 同幅度放大，和 hover 的白亮层级分明。 */
+#sidebar .nav.active i{
+  color:var(--accent);
+  transform:scale(1.1);
+  filter:none;
+}
+#sidebar .nav.active:hover{background:#c9f5810e}
+#sidebar .side-footer #sidebar-update:hover{background:transparent!important;color:var(--accent)}
+
+
+/* ══ 平台菜单的账号登录图标（2026-11-18）══
+   位置与图钉同一套思路：绝对定位在行右侧，只有悬停整行（或图标自身聚焦）才浮现，
+   不挤压文字布局。登录图标排在图钉左侧，所以 has-actions 给文字留 66px 内距。
+   三种状态：未登录默认隐藏、have 有 cookie 但站点没确认（淡绿，仍隐藏）、on 已登录（常亮主题绿 + 小圆点）。 */
+[data-picker-menu="search-platform"] .picker-option.has-actions{position:relative;padding-right:70px}
+.picker-login{
+  position:absolute;right:36px;top:50%;transform:translateY(-50%);
+  width:28px;height:28px;display:inline-flex;align-items:center;justify-content:center;
+  border-radius:7px;color:#6d8296;cursor:pointer;opacity:0;
+  transition:opacity .16s ease,color .16s ease,transform .16s ease;
+}
+/* 与图钉完全一致：默认隐藏，悬停整行（或图标自身聚焦）才浮现。 */
+.picker-option:hover .picker-login,.picker-login:focus-visible{opacity:1}
+.picker-login i{width:17px;height:17px}
+/* 有登录记录（have）与已登录（on）都不隐藏，作为状态标识常显。 */
+.picker-login.have{opacity:1;color:#8fa87a}
+.picker-login.on{opacity:1;color:var(--accent)}
+/* 悬停上浮动效与图钉同款（基础位移是 -50% 居中，需叠加不能覆盖）。 */
+.picker-login:hover{color:var(--accent);opacity:1;transform:translateY(calc(-50% - 2px))}
+.picker-login.on::after{
+  content:'';position:absolute;right:2px;top:3px;width:5px;height:5px;border-radius:50%;
+  background:var(--accent);box-shadow:0 0 5px #c9f35399;
+}
+
+/* 助手提示独立在图标轨上方，避免长文案覆盖分类与展开按钮。 */
+.search-sticky{padding-top:16px}
+#search-panel .bot-bubble,
+#search-panel .bot-bubble.update-bubble{position:absolute;left:0;bottom:calc(100% + 4px - var(--bubble-safe-offset,0px));margin:0;width:max-content;max-width:min(360px,calc(100vw - 180px));white-space:normal;overflow-wrap:anywhere;flex-wrap:wrap;line-height:1.5;transform:translateY(4px);border-radius:10px}
+#search-panel .bot-bubble.show{animation:none;transform:translateY(0);transition:opacity .18s ease,transform .22s cubic-bezier(.2,.7,.3,1)}
+#search-panel .update-bubble-text{white-space:normal}
+@media(max-width:780px){.search-sticky{padding-top:16px}#search-panel .bot-bubble,#search-panel .bot-bubble.update-bubble{max-width:min(320px,calc(100vw - 100px))}}

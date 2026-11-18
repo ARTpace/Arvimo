@@ -8,7 +8,7 @@ test('startup modes share user storage and preserve absolute overrides without m
  const root=fs.mkdtempSync(path.join(os.tmpdir(),'assetvault-paths-'));
  try{
   const env={APPDATA:root},next=path.join(root,'AssetVault'),legacy=path.join(root,'com.assetvault.desktop');
-  assert.deepEqual(resolveUserPaths(env),{base:next,activeStoreId:null,accountsDir:path.join(next,'accounts'),dataDir:path.join(next,'data'),downloadDir:path.join(next,'downloads')});
+  assert.deepEqual(resolveUserPaths(env),{base:next,activeStoreId:null,accountsDir:path.join(next,'accounts'),dataDir:path.join(next,'data'),archiveRoot:path.join(next,'默认资源库'),downloadDir:path.join(next,'downloads')});
   fs.mkdirSync(legacy);assert.equal(resolveUserPaths(env).base,legacy);
   fs.mkdirSync(next);assert.equal(resolveUserPaths(env).base,legacy);
   fs.rmdirSync(legacy);fs.symlinkSync(next,legacy,process.platform==='win32'?'junction':'dir');

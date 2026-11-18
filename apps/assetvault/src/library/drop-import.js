@@ -1,3 +1,4 @@
+import {planImageAlbums} from './image-albums.js';
 // 外部文件 / 文件夹拖入资产库。
 //
 // 入口挂在 document 的 capture 阶段：#search-panel 自己有个 drop 监听（以图搜图），
@@ -11,7 +12,11 @@ import {esc} from './html-esc.js';
 import {searchBoards} from './board-store.js';
 import {formatKind} from './format-registry.js';
 
-const MAX_FILES = 1000;
+// 单次收集的硬上限只用来挡「误拖整个磁盘」这种事故，不是产能边界：文件是挨个流式落盘的，
+// 入库在服务端攒成一批一次提交（/drop-import/flush），所以几千个文件也只是慢一点。
+const MAX_FILES = 20000;
+// 超过这个数量先在面板里说清楚「要跑一阵子」，不拦、也不悄悄裁掉。
+const BUSY_HINT = 2000;
 const CONCURRENCY = 4;
 // 拖整个文件夹时顺带进来的系统垃圾，直接跳过，不占名额也不报错。
 const JUNK = /^(thumbs\.db|desktop\.ini|\.ds_store|\.localized)$/i;
@@ -24,6 +29,20 @@ const fmtBytes = value => {
 };
 const safeName = name => String(name || 'file').replace(/[<>:"|?*\x00-\x1f]/g, '_').replace(/\\/g, '/').split('/').pop() || 'file';
 const isFilesDrag = dt => Array.from(dt?.types || []).includes('Files');
+
+/** 这一次拖拽是不是**站内自己发起**的。
+ *
+ *  卡片 / 预览大图从窗口里拖出去，再落回窗口时，drop 事件里的 dataTransfer 同样是 Files：
+ *  桌面版是 drag-out.js 交给 OLE 的那批真文件，网页版是 Chromium 从 <img> / 卡片合成的文件。
+ *  它和「从资源管理器拖进来」在事件层面长得一模一样，只看 types 分不出来 —— 所以由发起方
+ *  在 <html> 上挂一个标记，走到这里就跳过：
+ *    · drag-out-active —— 桌面版系统拖放进行中（drag-out.js 起拖时挂、结束摘）；
+ *    · self-drag       —— 网页版 HTML5 拖拽（卡片 / 图站图片 / 预览大图的 dragstart 挂）。
+ *  不区分的话，在发现页点开大图、按住拖一下画面（本意是平移看细节），松手就会弹出导入面板。 */
+const isSelfDrag = doc => {
+  const root = doc?.documentElement?.classList;
+  return !!root?.contains('drag-out-active') || !!root?.contains('self-drag');
+};
 
 // 批量导入期间屏蔽「远端资产变更 → 全量刷新」：一次 100 个文件会连续广播，
 // 每来一次就整库重绘的话面板会一直闪，导入结束我们自己刷一次就够了。
@@ -137,11 +156,12 @@ export function setupDropImport({toast, visitor, store, onImported, document: do
   dialog.setAttribute('aria-label', '导入到资产库');
   dialog.innerHTML = `
     <div class="bd-head"><span class="bd-head-ic">${icon('download')}</span>
-      <strong>导入到资产库</strong><span class="bd-engine">拖入的文件会复制到资产库数据目录</span>
+      <strong>导入到资产库</strong><span class="bd-engine">复制到 imports/日期/ 下；要剪切断原件请用「导入文件夹」</span>
       <button type="button" class="icon-button" data-act="close" aria-label="关闭">${icon('close')}</button></div>
     <div class="av-drop-summary" role="status"></div>
     <div class="av-drop-files"></div>
     <div class="av-drop-bar" hidden><i></i></div>
+    <label class="av-drop-board-toggle av-drop-album-toggle" hidden><input type="checkbox" class="av-drop-album"> 按原文件夹整理成图集 <span class="av-drop-album-name"></span>（每个图片文件夹一张卡，保留目录层级）</label>
     <label class="av-drop-board-toggle"><input type="checkbox" class="av-drop-use-board"> 同时加入画板</label>
     <div class="av-drop-boards" hidden>
       <div class="bd-picker-search"><label>${icon('search')}<input type="search" class="av-drop-search" placeholder="搜索画板" aria-label="搜索画板"></label>
@@ -159,6 +179,9 @@ export function setupDropImport({toast, visitor, store, onImported, document: do
   const summary = dialog.querySelector('.av-drop-summary');
   const fileList = dialog.querySelector('.av-drop-files');
   const useBoard = dialog.querySelector('.av-drop-use-board');
+  const albumToggle = dialog.querySelector('.av-drop-album-toggle');
+  const albumBox = dialog.querySelector('.av-drop-album');
+  const albumLabel = dialog.querySelector('.av-drop-album-name');
   const boardsBox = dialog.querySelector('.av-drop-boards');
   const boardList = dialog.querySelector('.bd-picker-list');
   const search = dialog.querySelector('.av-drop-search');
@@ -172,6 +195,7 @@ export function setupDropImport({toast, visitor, store, onImported, document: do
   let pending = [];
   let chosen = new Set();
   let busy = false;
+  let albumPlan=new Map();
 
   function renderBoards() {
     const rows = searchBoards(store.flat(), search.value);
@@ -195,11 +219,19 @@ export function setupDropImport({toast, visitor, store, onImported, document: do
     status.textContent = '';
     bar.hidden = true;
     barFill.style.width = '0%';
+    // 按各图片目录生成图集，父层散图独立收纳，保留原目录层级。
+    albumPlan=planImageAlbums(list);
+    const canAlbum = albumPlan.size>0;
+    const albumCount=new Set(albumPlan.values()).size;
+    albumToggle.hidden = !canAlbum;
+    albumBox.checked = canAlbum;
+    albumLabel.textContent = canAlbum ? `（${albumCount} 个图集）` : '';
     const total = list.reduce((sum, item) => sum + (item.file.size || 0), 0);
     const groups = formatGroups(list);
     const notes = [];
-    if (meta.truncated) notes.push(`超出单次上限 ${MAX_FILES} 个，先导入前 ${list.length} 个`);
+    if (meta.truncated) notes.push(`单次最多 ${MAX_FILES} 个，还有 ${meta.truncated} 个没进来（再拖一次即可）`);
     if (meta.unreadable) notes.push(`${meta.unreadable} 个读不出来已跳过`);
+    if (list.length >= BUSY_HINT) notes.push('这批文件较多，会边落盘边等入库，请让进度条走完');
     summary.textContent = `${list.length} 个文件${groups.length > 1 ? ` · ${groups.length} 种格式` : ''} · 共 ${fmtBytes(total)}${notes.length ? `（${notes.join('，')}）` : ''}`;
     const shown = groups.slice(0, 8);
     fileList.innerHTML = shown.map(row => `<div class="av-drop-file av-drop-group" title="${esc(row.samples.join('\n'))}">
@@ -225,10 +257,16 @@ export function setupDropImport({toast, visitor, store, onImported, document: do
     let lastError = '';
     let done = 0;
     let skipped = 0;
+    let staged = 0;
     const queue = pending.slice();
+    const album = !albumToggle.hidden && albumBox.checked;
+    const importedAlbums=new Set();
+    let packed = 0;
     bar.hidden = false;
     barFill.style.width = '0%';
     status.textContent = `正在导入 0/${pending.length}…`;
+    // 这一批的编号：服务端按批攒着，最后一次性入库。整库重写只付一次，几百个文件也不会逐个卡。
+    const batch = `b${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
     const step = () => {
       done++;
       barFill.style.width = `${Math.round((done / pending.length) * 100)}%`;
@@ -236,18 +274,19 @@ export function setupDropImport({toast, visitor, store, onImported, document: do
         ? `正在导入 ${done}/${pending.length}：${queue[0].rel}`
         : `已完成 ${done}/${pending.length}`;
     };
-    // 每个请求自己流式落盘，服务端串行入库；并发 4 路只为把网络与哈希时间叠起来，
-    // 一次 100 个文件不用排队等 100 个来回。
+    // 每个请求自己流式落盘，服务端只做校验 + 攒批；并发 4 路把网络与哈希时间叠起来。
     const upload = async item => {
+      const itemAlbum=album?albumPlan.get(item.rel)||'':'';
       const response = await fetch('/api/library/drop-import', {
         method: 'POST',
-        headers: {'x-sfx-local': '1', 'Content-Type': 'application/octet-stream', 'x-av-drop-name': encodeURIComponent(item.rel)},
+        headers: {'x-sfx-local': '1', 'x-av-batch': batch, 'Content-Type': 'application/octet-stream', 'x-av-drop-name': encodeURIComponent(item.rel), ...(itemAlbum ? {'x-av-album': encodeURIComponent(itemAlbum)} : {})},
         body: item.file,
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok || data.ok !== true || !data.uid) throw Error(data.error || `HTTP ${response.status}`);
-      if (data.status === 'skipped') skipped++;
-      uids.push(data.uid);
+      // 图集模式每个文件都返回同一个包 uid：只记一次，别把画板里塞 70 条一样的引用。
+      if (data.status === 'packed') { packed++; importedAlbums.add(itemAlbum); if (!uids.includes(data.uid)) uids.push(data.uid); }
+      else { if (data.status === 'skipped') skipped++; else staged++; uids.push(data.uid); }
     };
     const worker = async () => {
       while (queue.length) {
@@ -258,6 +297,30 @@ export function setupDropImport({toast, visitor, store, onImported, document: do
       }
     };
     await Promise.all(Array.from({length: Math.min(CONCURRENCY, pending.length)}, worker));
+    // 到这里文件还只是「落盘 + 校验」完成，真正入库是这一次提交：服务端把整批 asset 模型
+    // 一次 importLibrary 写进去，全库序列化只付一次。老进程没有这条路由（404）—— 它是逐个
+    // 入库的，这时 flush 属于多余动作，忽略即可，不能把成功当失败。
+    if (staged || packed) {
+      status.textContent = packed && !staged
+        ? `正在写入图集（${packed} 张 / ${importedAlbums.size} 个图集）…`
+        : `正在写入资产库（${staged} 个文件一次提交）…`;
+      try {
+        const response = await fetch('/api/library/drop-import/flush', {
+          method: 'POST',
+          headers: {'x-sfx-local': '1', 'Content-Type': 'application/json'},
+          body: JSON.stringify({batch, action: 'flush'}),
+        });
+        if (response.status !== 404) {
+          const data = await response.json().catch(() => ({}));
+          if (!response.ok || data.ok !== true) throw Error(data.error || `HTTP ${response.status}`);
+        }
+      } catch (error) {
+        // 批量提交是事务性的：这一批要么全进要么全不进，别让用户以为已经导入成功。
+        failed += staged + packed;
+        uids.length = 0;
+        lastError = `写入资产库失败：${error.message}`;
+      }
+    }
     if (boardIds.length && uids.length) {
       status.textContent = `正在把 ${uids.length} 个资产加入 ${boardIds.length} 个画板…`;
       for (const id of boardIds) {
@@ -273,7 +336,10 @@ export function setupDropImport({toast, visitor, store, onImported, document: do
     bar.hidden = true;
     dialog.close();
     const dup = skipped;
-    say(`已导入 ${uids.length} 个文件${boardIds.length && uids.length ? `，加入 ${boardIds.length} 个画板` : ''}${dup > 0 ? `，${dup} 个重复已跳过` : ''}${failed ? `，失败 ${failed} 个${lastError ? `（${lastError}）` : ''}` : ''}`);
+    const head = packed
+      ? `已将 ${packed} 张图按目录整理为 ${importedAlbums.size} 个图集`
+      : `已导入 ${uids.length} 个文件`;
+    say(`${head}${boardIds.length && uids.length ? `，加入 ${boardIds.length} 个画板` : ''}${dup > 0 ? `，${dup} 个重复已跳过` : ''}${failed ? `，失败 ${failed} 个${lastError ? `（${lastError}）` : ''}` : ''}`);
   }
 
   dialog.addEventListener('click', async event => {
@@ -310,6 +376,8 @@ export function setupDropImport({toast, visitor, store, onImported, document: do
     if (!isFilesDrag(dt) || keepForImageSearch(event, dt)) return;
     event.preventDefault();
     if (dt) dt.dropEffect = 'copy';
+    // 站内拖拽不许提示「松手导入」：那是把它拖回自己家，不是搬新文件进来。
+    if (isSelfDrag(doc)) return;
     overlay.hidden = false;
     clearTimeout(hideTimer);
     hideTimer = setTimeout(() => { overlay.hidden = true; }, 180);
@@ -317,7 +385,11 @@ export function setupDropImport({toast, visitor, store, onImported, document: do
   doc.addEventListener('drop', event => {
     const dt = event.dataTransfer;
     if (!isFilesDrag(dt) || keepForImageSearch(event, dt)) return;
+    // 默认行为必须拦掉：不拦 WebView 会把松手的文件当成「打开这个文件」直接跳走。
     event.preventDefault();
+    // 自己拖出去的东西落回窗口（见 isSelfDrag）：不入库，也不往下传 —— 站内落点（画板 / 以图搜图）
+    // 自己有自己的 drop 监听，不靠这里转发。
+    if (isSelfDrag(doc)) { overlay.hidden = true; clearTimeout(hideTimer); return; }
     event.stopPropagation();     // 挡住 #search-panel 的以图搜图 drop
     clearTimeout(hideTimer);
     // 展开文件夹可能几百毫秒，期间把浮层当进度条用，免得界面像卡死。

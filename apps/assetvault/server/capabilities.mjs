@@ -11,7 +11,7 @@
 // 所以两边都从这里取：服务端原样返回 SERVER_CAPABILITIES，启动器用 serverIsCurrent() 判定。
 // 加一个前端要用的新接口 = 在这里加一个能力位，两侧自动同步，没有第二处要记得改的地方。
 
-export const SERVER_VERSION = '3.32.3';
+export const SERVER_VERSION = '3.32.4';
 
 /**
  * 服务端当前具备的能力。新增能力位之后，旧进程会在下次启动时被自动换掉。
@@ -102,6 +102,13 @@ export const SERVER_CAPABILITIES = Object.freeze({
   // 本地文件夹索引：POST /api/library/scan + GET /api/local/file，资产库「自动认领本地素材」全靠这两条。
   // 老进程没有它们，扫描只会 404——而且因为版本没变永远不会重启，所以必须靠这一位把旧进程换掉。
   localFolderIndex: true,
+  // 本地定位与封面兜底（2026-11-16）：
+  //  · POST /api/local/reveal —— 右键「打开所在文件夹」，老进程没有这条路由，点了一律 404，
+  //    界面表现是「点了没反应」；问题就是这么出现的：前端 dist 已是新版（菜单项在），
+  //    服务端进程还是旧的（路由不在），用户怎么点都没效果。
+  //  · 素材包封面三档推导（derivedCover）+ 视频抓帧 + HDR/EXR tonemap + 压缩包内封面（w=384）。
+  // 这两件事都要求进程换掉，所以单独立一位，不藏在 localFolderIndex 里。
+  localRevealAndCovers: true,
   // 图站抓取（素材下载器整合）：GET /api/picture-site/resolve 把图站 URL 解析成整站图片清单，
   // 复用 collectImageAssets 下游（下载队列 / 本地图片库）。老进程没有这条路由，前端入队只会 404。
   pictureSiteResolve: true,

@@ -20,7 +20,7 @@ function tipElement(host){
  if(tip.parentElement!==host)host.append(tip);
  if(!tipBound){
   tipBound=true;
-  const close=()=>{tip.dataset.open='false';};
+  const close=()=>{if(tip.dataset.open==='true')tip.dataset.open='false';};
   window.addEventListener('scroll',close,{passive:true,capture:true});
   window.addEventListener('resize',close,{passive:true});
  }

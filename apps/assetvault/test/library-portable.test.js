@@ -17,6 +17,8 @@ import {MAX_MODEL_BYTES, normalizeAssetOps} from '../server/library-asset-ops.mj
 import {MAIN_STATE_KEY, USER_STATE_KEY, SESSION_STATE_KEY} from '../server/library-schema.mjs';
 import {saveCollection, setCollectionItems} from '../server/library-collections.mjs';
 import {exportLibrary, importLibrary, normalizeSnapshot, PortableRejected, PORTABLE_FORMAT} from '../server/library-portable.mjs';
+import {createTagManagement} from '../server/tag-management.mjs';
+import {createTaxonomyRules} from '../server/taxonomy-rules.mjs';
 
 const a = 'a'.repeat(32), b = 'b'.repeat(32), c = 'c'.repeat(32), d = 'd'.repeat(32);
 const model = (uid, name) => ({uid, name, platform: 'sketchfab', tags: ['stone'], addedAt: 1});
@@ -138,6 +140,21 @@ test('replace：先清空再导入，旧资产不残留', async t => {
   const catalog = await target.withDb(conn => conn.readCatalog());
   assert.equal(catalog.models.some(item => item.uid === d), false, '清空后不该有旧资产');
   assert.deepEqual(catalog.models.map(item => item.uid).sort(), [a, b].sort());
+});
+
+test('replace 保留主机自定义词表和细分规则，但清除旧资产补标进度',async t=>{
+ const {storage}=await seed(t),terms=createTagManagement({storage}),rules=createTaxonomyRules({storage});
+ const parent=await terms.mutate({action:'create',value:'本机项目分类',facets:['subject']});
+ await terms.mutate({action:'create',value:'本机项目子类',parentId:parent.id,facets:['subject']});
+ await rules.write({action:'create',source:'本机项目分类',target:'本机项目子类',match:'提示标签'});
+ const before=await rules.list();
+ await storage.withDbWrite(conn=>conn.run('INSERT INTO asset_label_progress VALUES (?,?,?,?)',[a,'taxonomy-existing-tags-v1',3,1]));
+ await importLibrary({storage,payload:emptySnapshot(),mode:'replace'});
+ assert.deepEqual(await rules.list(),before);
+ await storage.withDb(conn=>{
+  assert.equal(conn.all('SELECT count(*) n FROM asset_label_progress')[0].n,0);
+  assert.equal(conn.all('SELECT value FROM tag_terms WHERE term_id=?',[parent.id])[0].value,'本机项目分类');
+ });
 });
 
 test('形状不对的快照整份拒绝；父合集缺失时降级为根节点', async () => {

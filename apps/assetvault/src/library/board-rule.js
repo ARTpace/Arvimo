@@ -1,3 +1,4 @@
+import {showActionCard} from './action-card.js';
 // 智能画板规则编辑器：与工具栏共享筛选抽屉，独立草稿。
 import {createBoardRuleFilters} from './board-rule-filters.js';
 import {parseSearchExpression} from '../../server/search-expression.mjs';
@@ -60,7 +61,7 @@ export function createBoardRule({esc, icon, toast, store, controls, onSaved, doc
     const board=boardId ? store?.byId?.(boardId) : null;
     $('.bd-rule-title').textContent=board ? `智能画板「${board.name}」` : '新建智能画板';
     nameInput.value=board?.name || ''; saveButton.querySelector('span').textContent=board ? '保存规则' : '创建智能画板';
-    editor.load(board ? board.rule || {} : controls?.currentRule?.() || {});dialog.showModal?.();
+    editor.load(board ? board.rule || {} : controls?.currentRule?.() || {});showActionCard(dialog);
   }
   return {dialog,open,openNew:()=>open(''),refresh:()=>{if(dialog.open)refresh();}};
 }

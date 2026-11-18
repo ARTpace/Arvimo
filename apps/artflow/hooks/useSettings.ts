@@ -15,14 +15,14 @@ const USER_EFFECTS_KEY = 'canvas.userEffects';
 const GENERATE_HOTKEY_KEY = 'input.generateHotkey';
 const PRESENTATION_HOTKEYS_KEY = 'input.presentationHotkeys';
 
-const DEFAULT_GENERATE_HOTKEY: Hotkey = {
+export const DEFAULT_GENERATE_HOTKEY: Hotkey = {
     key: 'Enter',
     metaOrCtrlKey: true,
     shiftKey: false,
     altKey: false,
 };
 
-const DEFAULT_PRESENTATION_HOTKEYS: PresentationHotkeys = {
+export const DEFAULT_PRESENTATION_HOTKEYS: PresentationHotkeys = {
     nextSmooth: { key: 'ArrowDown', metaOrCtrlKey: false, shiftKey: false, altKey: false },
     prevSmooth: { key: 'ArrowUp', metaOrCtrlKey: false, shiftKey: false, altKey: false },
     nextDirect: { key: 'ArrowRight', metaOrCtrlKey: false, shiftKey: false, altKey: false },

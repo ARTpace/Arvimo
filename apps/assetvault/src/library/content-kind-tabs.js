@@ -1,28 +1,15 @@
-/**
- * 顶部模式轨：每个内容模式一枚常驻 SVG 图标，hover / focus 才横向展开文字。
- *
- * 这是「模式切换器」，不是分类 / 筛选器：
- *   - 图标固定为 图片 / 模型 / UI / 文本 / 视频，不按资产数量增减、不随页面变化、不显示数量；
- *   - 不摆「全部」按钮：默认（无激活）就是全部，再点一次当前模式即退出；
- *   - 不摆来源平台图标：平台切换归搜索区的平台下拉，是另一个维度。
- *
- * 图片 / 模型两键沿用 app.js 的 applyContentMode() 三态语义（平台 + 瀑布流 + A 站类型），
- * UI 键把下拉换成一站 Uiverse（产出的是界面代码），
- * 文本 / 视频落到 state.contentKind，由 filtered() 按本地文件类型筛（contentKindsOf）。
- *
- * 同一排键在两个页面干两件事（app.js 的 applyModeTab 按 state.route 分叉）：
- *   发现页 —— 换平台池 / 结果流 / 布局，去「发现」这个模式的资源；
- *   资产库 —— 只筛本地资产类型，原地重画网格，绝不换页。
- * 组件本身不认识路由，它只报「点了哪个模式」，落点交给宿主。
- *
- * 扩展缝：常驻哪几个模式只看 MODE_TABS 一张表；类型判定表 CONTENT_KINDS 与格式映射分开，
- * 以后想多摆一个「音频」只是配置动作，渲染器一行都不用改。
+import {orderedCategories} from './category-order.js';
+import {classifyAsset} from './asset-classification.js';
+/** Five permanent mother-category entries, shared with the sidebar through MODE_PRESETS.
+ * Discovery keeps each entry's platform context; the library filters the union of its child types.
+ * Clicking the active mother exits; clicking it from a child restores the whole mother category.
  */
 import {icon} from './icon-set.js';
 import {activeMode} from './content-modes.js';
 import {MODE_PRESETS} from './mode-presets.js';
 import {localAssetKind} from './local-filters.js';
 import {formatRegistry} from './format-registry.js';
+import {inferKindHints} from './asset-kind-heuristics.js';
 
 /** UI 状态单独存一份，不与资产库 blob 混在一起（同 sidebar-collapse.js 的做法）。 */
 export const MODE_UI_KEY = 'av:content-mode:v1';
@@ -40,6 +27,7 @@ export const modeTabs = () => MODE_TABS;
 
 /** 内容类型判定表：只管「一条资产属于哪几类」，与图标是否常驻解耦。 */
 export const CONTENT_KINDS = Object.freeze([
+  {id: 'unknown', label: '待分类', icon: 'archive'},
   {id: 'models', label: '3D 模型', icon: 'cube'},
   {id: 'images', label: '图片', icon: 'image'},
   {id: 'textures', label: '材质', icon: 'layers'},
@@ -47,7 +35,10 @@ export const CONTENT_KINDS = Object.freeze([
   {id: 'packs', label: '资源包', icon: 'archive'},
   {id: 'videos', label: '视频', icon: 'play'},
   {id: 'audio', label: '音频', icon: 'music'},
-  {id: 'documents', label: '文本', icon: 'type'},
+  {id: 'documents', label: '文档', icon: 'type'},
+  // UI 元素（Uiverse 落盘的 index.html + style.css）在顶部图标轨上是一个常驻模式，
+  // 但一直没进这张判定表 —— 侧栏类型树按 CONTENT_KINDS 铺，缺一行就等于「UI 只有顶上有、侧栏没有」。
+  {id: 'uielement', label: 'UI 元素', icon: 'layout'},
 ].map(Object.freeze));
 
 export const kindById = id => CONTENT_KINDS.find(entry => entry.id === id) || null;
@@ -67,6 +58,7 @@ export const FORMAT_TO_ID = Object.freeze({
  * 只有下拉没有的类型才会用到它（documents / videos / audio）；images / models 等走 #local-kind，已由 localFiles 自己筛。
  */
 export const LOCAL_KINDS_OF_MODE = Object.freeze({
+  unknown: Object.freeze({files: ['other'], packages: ['unknown']}),
   models: Object.freeze({files: ['model'], packages: ['model']}),
   images: Object.freeze({files: ['image'], packages: ['images']}),
   textures: Object.freeze({files: ['image'], packages: ['material']}),
@@ -74,67 +66,48 @@ export const LOCAL_KINDS_OF_MODE = Object.freeze({
   videos: Object.freeze({files: ['video'], packages: []}),
   audio: Object.freeze({files: ['audio'], packages: []}),
   documents: Object.freeze({files: ['document'], packages: []}),
-  // UI 元素落盘是 index.html + style.css，零散文件按 document kind 存；资产包不参与。
-  uielement: Object.freeze({files: ['document'], packages: []}),
+  // UI 元素落盘是 index.html + style.css：零散文件按 document kind 存，
+  // 整包扫描认出 html+css 组合后写 category='uielement'（见 server/local-assets.mjs）。
+  uielement: Object.freeze({files: ['document'], packages: ['uielement']}),
+  // 资源包：零散 .zip（kind='other'）认成包；整包 info.json 的 kind='pack' 也按包归类。
+  // 这两行必须写出来：缺一行就等于「没选模式」，modeAllowsLocalKind 会一律放行，
+  // 选「资源包」时磁盘卡片全留在网格里。
+  packs: Object.freeze({files: [], packages: ['pack']}),
 });
 
-/** 某个模式下额外卡片该不该出：没有映射（＝没选模式）就一律放行。 */
-export function modeAllowsLocalKind(modeId, surface, kind) {
+/** 某个模式下额外卡片该不该出：没有映射（＝没选模式）就一律放行。
+ *  kind 可以是字符串（磁盘 kind / 包 category），也可以直接传文件/包对象 ——
+ *  传对象时会叠加启发式（如 PBR 图片归材质、html+css 归 UI），与侧栏计数同源。 */
+/** Mother categories are unions of their child types, shared by every card surface. */
+export const localKindIds = id => MODE_PRESETS.find(preset => preset.groupId === id)?.localKinds || [id];
+export const contentMatchesKind = (model, id) => localKindIds(id).some(kind => contentKindsOf(model).includes(kind));
+
+export function modeAllowsLocalKind(modeId, surface, kind, files = null) {
+  const children = localKindIds(modeId);
+  if (children.length > 1 || children[0] !== modeId) return children.some(id => modeAllowsLocalKind(id, surface, kind, files));
   const map = LOCAL_KINDS_OF_MODE[modeId || ''];
   if (!map) return true;
-  return (map[surface] || []).includes(kind);
-}
-
-const FILE_KEYS = ['filePath', 'root', 'rel', 'folder', 'filename'];
-const LIST_KEYS = ['entries', 'files', 'downloads', 'assets'];
-
-/**
- * 只看「本地文件名」字段，不碰 thumbnail / url —— 远程收藏的缩略图也是 .jpg，
- * 若把它算进来，全库每条资产都会同时被判成图片，筛选就废了。
- */
-function localFileNames(model) {
-  const out = [];
-  const add = value => { if (typeof value === 'string' && value) out.push(value); };
-  for (const key of FILE_KEYS) add(model[key]);
-  for (const key of LIST_KEYS) {
-    if (!Array.isArray(model[key])) continue;
-    for (const item of model[key].slice(0, 200)) {
-      if (typeof item === 'string') add(item);
-      else if (item && typeof item === 'object') add(item.rel || item.name || item.path || item.file || item.filePath);
-    }
+  const allowed = map[surface] || [];
+  if (typeof kind !== 'string') {
+    const item = kind || {};
+    if(surface==='packages')return classifyAsset({...item,assetType:item.category}).kind===modeId;
+    return classifyAsset({...item,assetType:item.kind}).kind===modeId;
   }
-  return out;
+  if (allowed.includes(kind)) return true;
+  if (files && allowed.length) return inferKindHints(files, '', name => formatRegistry.kindOf(name)).includes(modeId);
+  return false;
 }
 
-/** 一条资产可能属于多个类型：一个资源包里同时有 .fbx 和 .png 就同时归两类。
- *
- *  但「主类型已明确」时，辅助文件不该再污染出新的文档 / 视频分类 ——
- *  Sketchfab 模型包里附带 .json（元数据）、.html（预览页）是常态，若把它们也算进来，
- *  每个 3D 模型都会同时被判成 documents，切到「文本」就满屏模型卡（2026-11-12 用户反馈）。
- *  规则：base 是采集 / 下载资产类（models / images / textures / hdris / packs / uielement）时，
- *  文件名扫描只补充与之不同的媒体类型（video / audio），跳过 document —— document 几乎总是
- *  元数据 / 预览页的附带文件，真正「纯文档资产」的 base 是空或 other，仍能正常归位。 */
-const PRIMARY_KINDS = new Set(['models', 'images', 'textures', 'hdris', 'packs', 'uielement']);
-
+/** Primary asset classification excludes supporting textures, covers and documentation. */
 export function contentKindsOf(model = {}) {
   if (!model || typeof model !== 'object') return [];
-  const out = new Set();
-  const base = localAssetKind(model);
-  if (base) out.add(base);
-  const suppressDocument = PRIMARY_KINDS.has(base);
-  for (const name of localFileNames(model)) {
-    const id = FORMAT_TO_ID[formatRegistry.kindOf(name)];
-    if (!id) continue;
-    // 已有明确主类型时，不让附带文档（.json/.html/.md 等）把这条资产拖进 documents。
-    if (suppressDocument && id === 'documents') continue;
-    out.add(id);
-  }
-  return [...out];
+  return [localAssetKind(model)];
 }
 
 /** 当前该点亮哪个模式：显式主状态 > 旧类型字段 > 原内容模式 > 本地类型下拉；都没有就返回空串（＝全部）。
  *  state.mode 是唯一权威：手动在下拉里换平台不会把它冲掉，高亮才不会乱跳。 */
 export function activeModeId(state = {}, readKind = () => '') {
+  if (Object.hasOwn(state, 'mode')) return modeTabById(state.mode) ? state.mode : '';
   if (modeTabById(state?.mode)) return state.mode;
   if (modeTabById(state?.contentKind)) return state.contentKind;
   const mode = activeMode(state || {});
@@ -201,7 +174,7 @@ export function createContentKindTabs({
   };
   const build = () => {
     const buttons = MODE_TABS.map(entry =>
-      `<button type="button" class="ck-tab" data-mode="${esc(entry.id)}" aria-pressed="false" aria-label="${esc(entry.label)}" title="${esc(entry.label)}">${icon(entry.icon)}<span class="ck-label">${esc(entry.label)}</span></button>`
+      `<button type="button" class="ck-tab" draggable="true" data-category-order="${esc(MODE_PRESETS.find(preset=>preset.id===entry.id).groupId)}" data-mode="${esc(entry.id)}" aria-pressed="false" aria-label="${esc(entry.label)}" title="${esc(entry.label)}">${icon(entry.icon)}<span class="ck-label">${esc(entry.label)}</span></button>`
     ).join('');
     // 不再补 .ck-spacer：轨道改成按内容宽度居中后，右侧留白会把整组图标顶偏，
     // 「居中」就名不副实了。要右对齐的东西另开一个容器，别靠这个假的占位。
@@ -232,7 +205,7 @@ export function createContentKindTabs({
     peek(button);
     const entry = modeTabById(button.dataset.mode);
     if (!entry) return;
-    if (button.classList.contains('is-active')) onExit();
+    if (button.classList.contains('is-active') && (!state.contentKind || state.contentKind === MODE_PRESETS.find(preset => preset.id === entry.id)?.groupId)) onExit();
     else onPick(entry);
   });
   host.addEventListener('keydown', event => {
@@ -247,13 +220,18 @@ export function createContentKindTabs({
   });
   return {render() {
     if (!built) build();
+    if(host.children)orderedCategories(MODE_PRESETS,state.options,row=>row.groupId).forEach((entry,index)=>{
+      const button=host.querySelector(`[data-mode="${entry.id}"]`);
+      if(button&&host.children[index]!==button)host.insertBefore(button,host.children[index]||null);
+    });
     const active = activeModeId(state, readKind);
     for (const button of host.querySelectorAll('.ck-tab')) {
       const on = !!active && button.dataset.mode === active;
       button.classList.toggle('is-active', on);
       button.setAttribute('aria-pressed', String(on));
       const label = modeTabById(button.dataset.mode)?.label || button.dataset.mode;
-      button.setAttribute('aria-label', on ? `${label}，再点一次退出模式` : label);
+      const whole = !state.contentKind || state.contentKind === MODE_PRESETS.find(preset => preset.id === button.dataset.mode)?.groupId;
+      button.setAttribute('aria-label', on ? (whole ? `${label}，再点一次退出模式` : `显示全部${label}`) : label);
     }
   }};
 }

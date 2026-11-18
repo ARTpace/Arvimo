@@ -1,3 +1,5 @@
+import { CardColorMarker } from './CanvasColorNavigator';
+import { drawingPathData, drawingDash } from '../utils/drawingGeometry';
 
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState, Profiler } from 'react';
 import { Element, ImageElement, Rect, AIRotationState } from '../types';
@@ -111,6 +113,7 @@ const ImageCanvasElement: React.FC<ImageCanvasElementProps> = ({
 
 interface CanvasElementProps {
   element: Element;
+  onSetElementColor?: (id: string, color: string) => void;
   elements: Element[];
   selectedElementIds: string[];
   zoom: number;
@@ -123,6 +126,7 @@ interface CanvasElementProps {
 
 const CanvasElementBase: React.FC<CanvasElementProps> = ({
   element,
+  onSetElementColor,
   elements,
   selectedElementIds,
   zoom,
@@ -140,11 +144,15 @@ const CanvasElementBase: React.FC<CanvasElementProps> = ({
 
   const renderContent = () => {
     switch (element.type) {
+      case 'group':
+        // Groups own hierarchy only; children and selection handles render separately.
+        return null;
       case 'path': {
-        const pathData = element.points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x} ${p.y}`).join(' ');
+        const pathData = drawingPathData(element);
         return (
           <path
             d={pathData}
+            strokeDasharray={drawingDash(element)}
             stroke={element.strokeColor}
             strokeWidth={element.strokeWidth}
             fill="none"
@@ -342,6 +350,13 @@ const CanvasElementBase: React.FC<CanvasElementProps> = ({
         style={{ willChange: isSelected && selectedElementIds.length === 1 ? 'transform' : 'auto' }}
       >
         {renderContent()}
+        {isSelected && onSetElementColor && 'width' in element && element.type !== 'frame' && element.type !== 'group' && (
+          <foreignObject x={bounds.x + Math.max(0, bounds.width - 28)} y={bounds.y - 32} width={28} height={28} style={{ overflow: 'visible' }}>
+            <div style={{ width: 28, height: 28 }}>
+              <CardColorMarker colorTag={element.colorTag} onChange={color => onSetElementColor(element.id, color)} />
+            </div>
+          </foreignObject>
+        )}
       </g>
     </Profiler>
   );
@@ -354,6 +369,7 @@ export const CanvasElement = React.memo(CanvasElementBase, (prev, next) => {
     
     // 如果元素本身的对象引用变了，肯定要重绘 (Immutability pattern)
     if (prev.element !== next.element) return false;
+    if (prev.onSetElementColor !== next.onSetElementColor) return false;
 
     // 选中状态改变必须重绘
     const wasSelected = prev.selectedElementIds.includes(prev.element.id);

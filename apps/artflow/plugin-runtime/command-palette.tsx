@@ -7,6 +7,7 @@ import {
   invokeCommandContribution,
   isCommandEnabled,
   listCommandContributions,
+  isReplacedCommandShortcut,
   resolveCommandText,
   searchCommandContributions,
   type CommandContribution,
@@ -142,7 +143,8 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
       if (event.repeat) return;
       // 快捷键裁决链：注册表定序 → 第一个匹配且可用者执行。
       const { winner } = arbitrateShortcut(kernel, event);
-      if (!winner || !isCommandEnabled(kernel, winner.contribution)) return;
+      if (!winner) {if(isReplacedCommandShortcut(kernel,event))stopPaletteEvent(event);return;}
+      if (!isCommandEnabled(kernel, winner.contribution)) return;
       stopPaletteEvent(event);
       void runContribution(winner.contribution);
     };

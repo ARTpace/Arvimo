@@ -17,6 +17,7 @@ import {scanLibraryPackages} from '../server/local-assets.mjs';
 import {recoverDownloads} from '../server/download-recovery.mjs';
 import {DownloadManager} from '../server/downloads.mjs';
 import {createLibraryServer} from '../server/library.mjs';
+import {assetFolder} from '../server/asset-folders.mjs';
 import {fixturePng} from './download-fixture.mjs';
 
 const UID = 'd'.repeat(32);
@@ -30,10 +31,16 @@ const temp = async () => {
   await fsp.mkdir(download, {recursive: true});
   return {dir, download};
 };
+// 分类与真实生产一致（library.mjs 写卡 + 下载任务都走 assetFolder），否则「接管不另建 (1)」无从谈起。
+const CATEGORY = assetFolder({title: '美宣 插画', platform: 'huaban', assetType: 'images'});
 const card = (download, over = {}) => writePictureBoardCard({
-  folder: download, uid: UID, platform: 'huaban', url: BOARD,
+  folder: download, category: CATEGORY, uid: UID, platform: 'huaban', url: BOARD,
   title: '美宣 插画', author: '某人', cover: COVER, imageCount: 1923, ...over,
 });
+const REMOTE_ITEMS = [
+  {url: 'https://img/1.jpg', thumb: 'https://img/1_fw480.jpg', title: '第一张', pageUrl: 'https://huaban.com/pin/1', width: 800, height: 600},
+  {url: 'https://img/2.jpg', title: '第二张'},
+];
 
 test('远程收藏卡是一张真正的资产卡：有远程封面和张数，但磁盘上一张图都没有', async () => {
   const {dir, download} = await temp();
@@ -63,6 +70,36 @@ test('远程收藏卡是一张真正的资产卡：有远程封面和张数，�
   } finally { await fsp.rm(dir, {recursive: true, force: true}); }
 });
 
+test('远程卡存下每张图的地址，扫描器透传给「不下载翻图集」', async () => {
+  const {dir, download} = await temp();
+  try {
+    const written = await card(download, {remoteImages: [
+      ...REMOTE_ITEMS,
+      {url: 'https://img/1.jpg'},                       // 重复地址去重
+      {url: 'ftp://bad/3.jpg'},                          // 非 http(s) 丢掉
+      {url: 'https://img/v.mp4', type: 'video'},         // 视频条目丢掉
+      {url: 'https://img/play', play: 'https://img/v'},  // 播放源条目丢掉
+      {url: 'javascript:alert(1)'},                      // 危险协议丢掉
+    ]});
+    const info = readInfo(written.dir);
+    assert.equal(info.remoteImages.length, 2, '只留有效的 http(s) 图片地址并去重');
+    assert.equal(info.remoteImages[0].url, 'https://img/1.jpg');
+    assert.equal(info.remoteImages[0].thumb, 'https://img/1_fw480.jpg');
+    assert.equal(info.remoteImages[0].title, '第一张');
+    assert.equal(info.remoteImages[1].url, 'https://img/2.jpg');
+    assert.equal('images' in info, false, '远程地址不能塞进 images 清单触发磁盘校验');
+    assert.deepEqual(fs.readdirSync(written.dir), ['info.json'], '仍然一张图都不下');
+
+    const pkg = (await scanLibraryPackages({roots: [download]})).packages.find(item => item.uid === UID);
+    assert.equal(pkg.remoteImages.length, 2, '扫描器要把远程地址透传到卡片');
+    assert.equal(pkg.remoteImages[0].thumb, 'https://img/1_fw480.jpg');
+
+    // 重复点「只入库」这次没解析到地址：沿用上次的，别把能翻的图集翻回去只剩封面。
+    const again = await card(download, {remoteImages: []});
+    assert.equal(readInfo(again.dir).remoteImages.length, 2, '空清单不该抹掉已存的图集');
+  } finally { await fsp.rm(dir, {recursive: true, force: true}); }
+});
+
 test('同一个画板重复入库复用同一张卡，标题改了也不新建目录', async () => {
   const {dir, download} = await temp();
   try {
@@ -71,7 +108,7 @@ test('同一个画板重复入库复用同一张卡，标题改了也不新建�
     assert.equal(again.dir, first.dir);
     assert.equal(again.imageCount, 2000, '重记一次应该刷新张数');
     assert.equal(readInfo(first.dir).title, '改过的标题');
-    const dirs = fs.readdirSync(path.join(download, '图片'));
+    const dirs = fs.readdirSync(path.join(download, CATEGORY));
     assert.equal(dirs.length, 1, '一张资产一张卡，不能长成两份目录');
   } finally { await fsp.rm(dir, {recursive: true, force: true}); }
 });
@@ -91,7 +128,7 @@ test('已经下载过图的包不会被远程卡覆盖', async () => {
     const info = readInfo(first.dir);
     assert.equal(info.status, undefined, '真包的清单不该被塞回 remote');
     assert.equal(info.images.length, 1);
-    assert.equal(await findRemoteBoardDir(path.join(download, '图片'), UID), null, '已下载的包不是可接管目标');
+    assert.equal(await findRemoteBoardDir(path.join(download, CATEGORY), UID), null, '已下载的包不是可接管目标');
   } finally { await fsp.rm(dir, {recursive: true, force: true}); }
 });
 
@@ -103,7 +140,7 @@ test('只认 32 位十六进制 uid，同一个 uid 才能查到目录', async (
     await assert.rejects(card(download, {uid: '../../evil'}), /资产标识无效/);
 
     const written = await card(download);
-    const parent = path.join(download, '图片');
+    const parent = path.join(download, CATEGORY);
     assert.equal(await findBoardDir(parent, UID), written.dir);
     assert.equal(await findRemoteBoardDir(parent, UID), written.dir);
     assert.equal(await findBoardDir(parent, OTHER), null);
@@ -156,7 +193,7 @@ test('点「下载原图」接管远程卡目录，不新建 (1)，卡片也不�
     }
     assert.equal(job?.state, 'saved', job?.message);
     assert.equal(path.resolve(job.filePath), path.resolve(written.dir), '必须原地接管，不能另建 (1)');
-    assert.equal(fs.readdirSync(path.join(download, '图片')).length, 1);
+    assert.equal(fs.readdirSync(path.join(download, CATEGORY)).length, 1);
     const info = readInfo(written.dir);
     assert.equal(info.status, undefined, '下完就该是真包，不再是远程收藏');
     assert.equal(info.images.length, 1);
@@ -195,16 +232,19 @@ test('只入库接口：要本地标识、只写下载根、张数按全量清�
     assert.equal(res.status, 200);
     const data = await res.json();
     assert.equal(data.imageCount, 3, '可下载的 2 张 + 不可下载的 1 项，才是这块画板的真实规模');
-    assert.equal(path.dirname(data.dir), path.join(download, '图片'));
+    assert.equal(path.dirname(data.dir), path.join(download, CATEGORY));
     const info = readInfo(data.dir);
     assert.equal(info.title, '美宣 插画');
     assert.equal(info.thumbnail, COVER);
+    assert.equal(info.remoteImages.length, 2, '全量解析的每张图地址都写进远程卡');
+    assert.equal(info.remoteImages[0].url, 'https://x/1.jpg');
+    assert.equal('images' in info, false);
     assert.equal(fs.existsSync(path.join(dir, 'elsewhere')), false, '不接受前端指定路径');
 
     // 第二次点：解析走缓存，写卡走幂等 —— 目录还是一张卡。
     const again = await (await post({uid: UID, platform: 'huaban', url: BOARD})).json();
     assert.equal(again.dir, data.dir);
-    assert.equal(fs.readdirSync(path.join(download, '图片')).length, 1);
+    assert.equal(fs.readdirSync(path.join(download, CATEGORY)).length, 1);
   } finally {
     server.closeAllConnections();
     await new Promise(resolve => server.close(resolve));

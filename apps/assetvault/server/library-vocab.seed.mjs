@@ -12,6 +12,8 @@
 // 刻意不收录的维度：类型（model/texture/HDRI）、格式（fbx/glb）、尺寸、颜色、评分。
 // 那些已经是 assets / asset_formats 的结构化列，再让标签承担一遍会让两套体系打架。
 
+import {FOUNDATION_TERMS} from './taxonomy-foundation.mjs';
+import {addPlatformCategoryTerms} from './platform-categories.mjs';
 export const FACETS = Object.freeze({
   style: '风格',
   subject: '题材',
@@ -19,12 +21,39 @@ export const FACETS = Object.freeze({
   usage: '用途',
   mood: '氛围',
   tech: '技术',
+  software: '适用软件',
+  license: '授权',
+  platform: '来源平台',
 });
 
 /** 语义化版本：种子内容有实质变化时 +1，启动时自动把库里词表同步到这个版本。 */
-export const VOCAB_REV = 1;
+export const VOCAB_REV = 5;
 
-export const TERMS = Object.freeze([
+/**
+ * 标记前缀规则：来源标记不是独立词条，是「前缀 + 平台 id」派生出来的
+ *（前缀见 src/library/auto-tags.js 的 AUTO_TAG_CONFIG.platformPrefix）。
+ *
+ * 为什么需要它：这些标记是库里出现最多的标签，不认这条规则就全落进「未归类」；
+ * 而它们又不是词条（改名会跟 auto-tags 的派生逻辑脱节），所以只能按前缀认。
+ * 写成数据而不是散在逻辑里 —— 改前缀只改这一行。
+ */
+export const MARKER_PREFIXES = Object.freeze({'来源:': 'platform'});
+
+export const TERMS = Object.freeze(addPlatformCategoryTerms([
+  // 只认明确标签，不从格式推断软件兼容性，也不从来源推断授权。
+  {value:'Blender',facets:['software'],aliases:['blender3d']},
+  {value:'Unity',facets:['software'],aliases:['unity3d']},
+  {value:'Unreal Engine',facets:['software'],aliases:['ue4','ue5','unreal']},
+  {value:'Maya',facets:['software'],aliases:['autodesk maya']},
+  {value:'3ds Max',facets:['software'],aliases:['3dsmax']},
+  {value:'Cinema 4D',facets:['software'],aliases:['c4d']},
+  {value:'CC0',facets:['license'],aliases:['cc-0','creative commons zero']},
+  {value:'CC BY',facets:['license'],aliases:['cc-by']},
+  {value:'CC BY-SA',facets:['license'],aliases:['cc-by-sa']},
+  {value:'CC BY-NC',facets:['license'],aliases:['cc-by-nc']},
+  {value:'Sketchfab',facets:['platform'],aliases:[]},
+  {value:'Poly Haven',facets:['platform'],aliases:['polyhaven']},
+  {value:'ambientCG',facets:['platform'],aliases:['ambient cg']},
   // ── 风格 style ──────────────────────────────────────────────
   {value: '写实', facets: ['style'], aliases: ['realistic', 'photorealistic', 'photo real']},
   {value: '卡通', facets: ['style'], aliases: ['cartoon', 'toon']},
@@ -37,7 +66,7 @@ export const TERMS = Object.freeze([
   {value: '和风', facets: ['style'], aliases: ['japanese style', 'wafu']},
   {value: '赛博朋克', facets: ['style'], aliases: ['cyberpunk']},
   {value: '科幻', facets: ['style'], aliases: ['sci-fi', 'scifi', 'science fiction']},
-  {value: '奇幻', facets: ['style'], aliases: ['fantasy']},
+  {value: '奇幻', facets: ['style'], aliases: ['fantasy', '奇幻风格']},
   {value: '蒸汽朋克', facets: ['style'], aliases: ['steampunk']},
   {value: '复古', facets: ['style'], aliases: ['retro', 'vintage']},
   {value: '极简', facets: ['style'], aliases: ['minimalist', 'minimal', 'minimalism']},
@@ -202,4 +231,5 @@ export const TERMS = Object.freeze([
   {value: '循环', facets: ['tech'], aliases: ['loop', 'looping']},
   {value: '噪声', facets: ['tech'], aliases: ['noise']},
   {value: '渐变', facets: ['tech'], aliases: ['gradient']},
-]);
+  ...FOUNDATION_TERMS,
+]));

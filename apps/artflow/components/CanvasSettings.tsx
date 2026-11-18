@@ -4,6 +4,7 @@ import type { Kernel } from '../plugin-runtime/kernel';
 import { listSettingsSectionContributions } from '../plugin-runtime/settings-contributions';
 import { PluginErrorBoundary, reportPluginFailure } from '../plugin-runtime/plugin-error-boundary';
 import { SETTINGS_UI_BRIDGE_SERVICE, createSettingsUiBridge, type SettingsUiBridge } from '../plugin-runtime/settings-bridge';
+import { FlatSettingsContext } from '../plugin-runtime/settings-ui';
 import { useWorkspaceState } from '../hooks/useWorkspaceLayout';
 import {
     WORKSPACE_KEYS,
@@ -304,11 +305,13 @@ export const CanvasSettings: React.FC<CanvasSettingsProps> = ({
     const resetWindow = () => commitGeometry(resolveGeometry({ x: null, y: null, w: DEFAULT_WINDOW.w, h: DEFAULT_WINDOW.h }));
 
     if (unifiedHost) return hostTarget && ActiveSettingsSection ? createPortal(
-        <div data-bp-ui-settings="" data-arvimo-settings="" className="space-y-2.5 text-sm">
-            <PluginErrorBoundary key={activeTab} slot="settings_sections" pluginId={activeSettingsSection?.pluginId} language={language} minHeight={120}>
-                <ActiveSettingsSection kernel={kernel} language={language} />
-            </PluginErrorBoundary>
-        </div>, hostTarget,
+        <FlatSettingsContext.Provider value={true}>
+            <div data-bp-ui-settings="" data-arvimo-settings="" className="space-y-2.5 text-sm">
+                <PluginErrorBoundary key={activeTab} slot="settings_sections" pluginId={activeSettingsSection?.pluginId} language={language} minHeight={120}>
+                    <ActiveSettingsSection kernel={kernel} language={language} />
+                </PluginErrorBoundary>
+            </div>
+        </FlatSettingsContext.Provider>, hostTarget,
     ) : null;
     if (!isOpen) return null;
 

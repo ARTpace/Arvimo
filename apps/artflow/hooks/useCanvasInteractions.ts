@@ -1,3 +1,5 @@
+import { eraseDrawingPoints, drawingArrowHead, stabilizeDrawingPoint } from '../utils/drawingGeometry';
+import type { DrawingOptions } from '../types';
 
 import React, { useRef, useCallback, useState, useEffect, useMemo } from 'react';
 import type { 
@@ -39,6 +41,7 @@ const MIN_CANVAS_ZOOM = 0.02;
 const MAX_CANVAS_ZOOM = 10;
 
 interface PointerMoveSnapshot {
+    samples?: PointerMoveSnapshot[];
     clientX: number;
     clientY: number;
     shiftKey: boolean;
@@ -53,7 +56,7 @@ interface CanvasInteractionsProps {
     zoom: number;
     panOffset: Point;
     activeTool: Tool;
-    drawingOptions: { strokeColor: string; strokeWidth: number; opacity: number };
+    drawingOptions: DrawingOptions;
     selectedElementIds: string[];
     setSelectedElementIds: (ids: string[] | ((prev: string[]) => string[])) => void;
     setElements: (updater: (prev: Element[]) => Element[], commit?: boolean) => void;
@@ -161,11 +164,20 @@ export const useCanvasInteractions = ({
         (mode as string).startsWith('resize-')
         || mode === 'rotate'
         || mode === 'draw'
+        || mode === 'erase'
         || mode === 'drawShape'
         || mode === 'drawFrame'
         || mode === 'drawArrow'
         || mode === 'drawLine'
     );
+    const drawingGestureBeforeRef = useRef<Element[] | null>(null);
+    const drawingStrokeRef = useRef<PathElement | null>(null);
+    const drawingGroupId = useRef<string | null>(null);
+    useEffect(() => {
+        if (!['draw','highlighter','erase'].includes(activeTool)) drawingGroupId.current=null;
+    }, [activeTool]);
+    const drawingSamplesRef = useRef<PointerMoveSnapshot[]>([]);
+    const eraserPointRef = useRef<Point | null>(null);
     const currentDrawingElementId = useRef<string | null>(null);
     const resizeStartInfo = useRef<{ originalElement: Element; startCanvasPoint: Point; handle: string; } | null>(null);
     const rotateStartInfo = useRef<{ originalElement: Element; center: Point; startCanvasPoint: Point; } | null>(null);
@@ -252,6 +264,65 @@ export const useCanvasInteractions = ({
      * P1-1：读取某个元素"当前可见的几何"。会话内优先取变换通道里的预览，
      * 否则回落文档 —— 绘制类手势要在自己上一帧的预览上继续累积（画Path 追加点、拉箭头换端点）。
      */
+    useEffect(()=>{
+        const owner=svgRef.current?.ownerDocument.defaultView??window;
+        const cancelDrawing=(event:KeyboardEvent)=>{
+            if(event.key!=='Escape'||!['draw','erase'].includes(interactionMode.current??'')||!drawingGestureBeforeRef.current)return;
+            event.preventDefault();
+            windowDragCleanupRef.current?.();
+            if(pointerMoveFrameRef.current!==null)cancelAnimationFrame(pointerMoveFrameRef.current);
+            pointerMoveFrameRef.current=null;pendingPointerMoveRef.current=null;drawingSamplesRef.current=[];
+            transformSessionStore?.cancel();
+            setElements(drawingGestureBeforeRef.current,false);
+            drawingGestureBeforeRef.current=null;drawingStrokeRef.current=null;eraserPointRef.current=null;currentDrawingElementId.current=null;
+            interactionMode.current=null;setIsInteracting(false);resetContentInteraction();
+        };
+        owner.addEventListener('keydown',cancelDrawing,true);
+        return ()=>owner.removeEventListener('keydown',cancelDrawing,true);
+    },[setElements,transformSessionStore]);
+
+    const eraseSamples = (samples:Point[]) => {
+        const sweeps = samples.map(point=>{const from=eraserPointRef.current??point;eraserPointRef.current=point;return {from,to:point};});
+        const radius = drawingOptions.strokeWidth/(2*zoom);
+        setElements(previous => {
+            let changed=false;
+            const byId=new Map(previous.map(element=>[element.id,element]));
+            const blocked=(element:Element)=>{
+                const visited=new Set<string>();let current:Element|undefined=element;
+                while(current&&!visited.has(current.id)){if(current.isLocked||current.isVisible===false)return true;visited.add(current.id);current=current.parentId?byId.get(current.parentId):undefined;}
+                return false;
+            };
+            const result=previous.flatMap(element=>{
+                if(element.type!=='path'||blocked(element))return [element];
+                const bounds=getElementBounds(element,previous);
+                const center={x:bounds.x+bounds.width/2,y:bounds.y+bounds.height/2};
+                const points=element.rotation?element.points.map(point=>rotatePoint(point,center,element.rotation!)):element.points;
+                let parts=[points];let hit=false,headRemoved=false;
+                const head=drawingArrowHead(element).map(point=>element.rotation?rotatePoint(point,center,element.rotation):point);
+                for(const {from,to} of sweeps){
+                    const next:Point[][]=[];
+                    for(const part of parts){
+                        const clipped=eraseDrawingPoints(part,from,to,radius+element.strokeWidth/2);
+                        if(clipped.length!==1||clipped[0]!==part)hit=true;
+                        next.push(...clipped);
+                    }
+                    if(head.length){const clipped=eraseDrawingPoints(head,from,to,radius+element.strokeWidth/2);if(clipped.length!==1||clipped[0]!==head)headRemoved=true;}
+                    parts=next;
+                }
+                if(!hit&&!headRemoved)return [element];
+                changed=true;
+                if(drawingOptions.eraseMode==='stroke')return [];
+                const originalEnd=points[points.length-1];
+                return parts.map((points,index)=>{
+                    const end=points[points.length-1];
+                    return {...element,id:index===0?element.id:generateId(),points,rotation:0,
+                        penStyle:element.penStyle==='arrow'&&(headRemoved||Math.hypot(end.x-originalEnd.x,end.y-originalEnd.y)>0.01)?'solid' as const:element.penStyle};
+                });
+            });
+            return changed?result:previous;
+        },false);
+    };
+
     const readLiveElement = (id: string): Element | null => {
         const active = transformSessionStore?.getSnapshot().element;
         if (active && active.id === id) return active;
@@ -576,7 +647,10 @@ export const useCanvasInteractions = ({
             return;
         }
 
+        if (['draw','highlighter','erase'].includes(activeTool)) drawingGestureBeforeRef.current=elements;
         if (activeTool === 'draw' || activeTool === 'highlighter') {
+            // Repeated strokes must not turn into native selection/drag gestures.
+            e.preventDefault();
             interactionMode.current = 'draw';
             const newPath: PathElement = {
                 id: generateId(),
@@ -585,11 +659,17 @@ export const useCanvasInteractions = ({
                 strokeColor: drawingOptions.strokeColor,
                 strokeWidth: drawingOptions.strokeWidth,
                 opacity: drawingOptions.opacity,
+                penStyle:drawingOptions.penStyle??'solid',smooth:true,
                 rotation: 0,
                 x: 0, y: 0 
             };
+            const groupId=drawingGroupId.current ?? generateId();
+            drawingGroupId.current=groupId;
+            newPath.parentId=groupId;
+            drawingStrokeRef.current=newPath;
+            drawingSamplesRef.current=[];
             currentDrawingElementId.current = newPath.id;
-            setElements(prev => [...prev, newPath], false);
+            setElements(prev => [...prev, ...(prev.some(el=>el.id===groupId) ? [] : [{id:groupId,type:'group' as const,name:'绘制',x:0,y:0,width:0,height:0,rotation:0}]), newPath], false);
         } else if (activeTool === 'rectangle' || activeTool === 'circle' || activeTool === 'triangle') {
             interactionMode.current = 'drawShape';
             const newShape: ShapeElement = {
@@ -648,6 +728,9 @@ export const useCanvasInteractions = ({
             setElements(prev => [...prev, newLine], false);
         } else if (activeTool === 'erase') {
             interactionMode.current = 'erase';
+            drawingSamplesRef.current=[];
+            eraserPointRef.current=canvasStartPoint;
+            eraseSamples([canvasStartPoint]);
         } else if (activeTool === 'lasso') {
             interactionMode.current = 'lasso';
             latestLassoPathRef.current = [canvasStartPoint];
@@ -817,24 +900,7 @@ export const useCanvasInteractions = ({
         }
 
         if (interactionMode.current === 'erase') {
-            const eraseRadius = drawingOptions.strokeWidth / zoom;
-            const idsToDelete = new Set<string>();
-
-            elements.forEach(el => {
-                if (el.type === 'path') {
-                    for (let i = 0; i < el.points.length - 1; i++) {
-                        const distance = Math.hypot(point.x - el.points[i].x, point.y - el.points[i].y);
-                        if (distance < eraseRadius) {
-                            idsToDelete.add(el.id);
-                            return;
-                        }
-                    }
-                }
-            });
-
-            if (idsToDelete.size > 0) {
-                setElements(prev => prev.filter(el => !idsToDelete.has(el.id)), false);
-            }
+            eraseSamples((e.samples??[e]).map(sample=>getCanvasPoint(sample.clientX,sample.clientY)));
             return;
         }
 
@@ -999,11 +1065,19 @@ export const useCanvasInteractions = ({
                 break;
             }
             case 'draw': {
-                // P1-1：手绘路径是**累积**的 —— 在通道里的上一帧预览上追加一个点，
-                // 只发预览（可见集/空间索引不再每帧重算）。文档在 mouseup 一次性落盘。
-                const livePath = currentDrawingElementId.current ? readLiveElement(currentDrawingElementId.current) : null;
-                if (livePath && livePath.type === 'path') {
-                    publishGesturePreview({ ...livePath, points: [...livePath.points, point] });
+                const livePath=drawingStrokeRef.current ?? (currentDrawingElementId.current ? readLiveElement(currentDrawingElementId.current) : null);
+                if(livePath?.type==='path'){
+                    let points=livePath.points;
+                    for(const sample of e.samples??[e]){
+                        const point=getCanvasPoint(sample.clientX,sample.clientY);
+                        if(sample.shiftKey){points=[points[0],point];continue;}
+                        const last=points[points.length-1];
+                        const stabilized=stabilizeDrawingPoint(last,point,zoom);
+                        if(stabilized)points=[...points,stabilized];
+                    }
+                    const next={...livePath,points,smooth:!e.shiftKey};
+                    drawingStrokeRef.current=next;
+                    publishGesturePreview(next);
                 }
                 break;
             }
@@ -1248,11 +1322,16 @@ export const useCanvasInteractions = ({
         pointerMoveFrameRef.current = null;
         const pending = pendingPointerMoveRef.current;
         pendingPointerMoveRef.current = null;
-        if (pending) processMouseMove(pending);
+        const samples=drawingSamplesRef.current.splice(0);
+        if (pending) processMouseMove(samples.length?{...pending,samples}:pending);
     };
 
     const handleMouseMove = (e: React.MouseEvent<SVGSVGElement>) => {
         if (!interactionMode.current) return;
+        // Drawing is sampled once in window capture, before cards can swallow
+        // bubbling moves. Ignore the duplicate React delivery of that same move.
+        if (e.nativeEvent?.type === 'mousemove' && windowDragCleanupRef.current
+            && (interactionMode.current === 'draw' || interactionMode.current === 'erase')) return;
         pendingPointerMoveRef.current = {
             clientX: e.clientX,
             clientY: e.clientY,
@@ -1260,12 +1339,14 @@ export const useCanvasInteractions = ({
             ctrlKey: e.ctrlKey,
             altKey: e.altKey,
         };
+        if(interactionMode.current==='draw'||interactionMode.current==='erase')drawingSamplesRef.current.push(pendingPointerMoveRef.current);
         if (pointerMoveFrameRef.current !== null) return;
         pointerMoveFrameRef.current = requestAnimationFrame(() => {
             pointerMoveFrameRef.current = null;
             const pending = pendingPointerMoveRef.current;
             pendingPointerMoveRef.current = null;
-            if (pending) processMouseMove(pending);
+            const samples=drawingSamplesRef.current.splice(0);
+            if (pending) processMouseMove(samples.length?{...pending,samples}:pending);
         });
     };
 
@@ -1354,6 +1435,7 @@ export const useCanvasInteractions = ({
         publishAlignmentGuides([]);
         setRotateDialPoint(null);
         currentDrawingElementId.current = null;
+        drawingStrokeRef.current=null;drawingSamplesRef.current=[];eraserPointRef.current=null;drawingGestureBeforeRef.current=null;
         dragSnapGuideSnapshotRef.current?.invalidate();
         dragSnapGuideSnapshotRef.current = null;
         dragMovingElementsRef.current = [];
@@ -1536,6 +1618,7 @@ export const useCanvasInteractions = ({
         const fromCanvas = (event: MouseEvent): boolean =>
             Boolean(svg && event.target instanceof Node && svg.contains(event.target));
         const isAlive = () => isTransformGesture(interactionMode.current);
+        const isDrawing = () => interactionMode.current === 'draw' || interactionMode.current === 'erase';
         const onMove = (event: MouseEvent) => {
             if (!isAlive()) {
                 cleanup();
@@ -1548,7 +1631,7 @@ export const useCanvasInteractions = ({
                 liveWindowDragHandlersRef.current?.finish();
                 return;
             }
-            if (!fromCanvas(event)) liveWindowDragHandlersRef.current?.move(event);
+            if (isDrawing() || !fromCanvas(event)) liveWindowDragHandlersRef.current?.move(event);
         };
         const onUp = (event: MouseEvent) => {
             if (event.button !== 0) return;
@@ -1557,7 +1640,7 @@ export const useCanvasInteractions = ({
                 return;
             }
             // 松手点可能在侧栏/工具面板上：先补最后一个样本，再收尾。
-            if (!fromCanvas(event)) liveWindowDragHandlersRef.current?.move(event);
+            if (isDrawing() || !fromCanvas(event)) liveWindowDragHandlersRef.current?.move(event);
             liveWindowDragHandlersRef.current?.finish();
         };
         // 失焦不是取消：几何已经画到哪就是哪，按最后一个已知点提交，避免"改完的样子凭空回退"。

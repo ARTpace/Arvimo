@@ -50,8 +50,8 @@ Artflow.definePlugin({
       { id: 'ungroup', priority: 20, group: 'group', label: lang => (lang === 'zho' ? '取消编组' : 'Ungroup'), visible: c => !c.isMultiSelection && c.element?.type === 'group', run: c => c.actions.ungroup() },
       { id: 'merge-group', priority: 10, group: 'group', label: lang => (lang === 'zho' ? '合并编组' : 'Merge Group'), visible: c => !c.isMultiSelection && c.element?.type === 'group', run: c => c.actions.mergeGroup() },
       { id: 'rasterize-selection', priority: 20, group: 'group', label: lang => (lang === 'zho' ? '栅格化所选' : 'Rasterize Selection'), visible: c => c.isMultiSelection && isRasterizable(c.selectedElements.map(el => el.type)), run: c => c.actions.rasterizeSelection() },
-      { id: 'copy', priority: 10, group: 'clipboard', label: lang => (lang === 'zho' ? '复制' : 'Copy'), visible: () => true, run: c => { if (c.isMultiSelection) c.actions.copySelection(); else if (c.element) c.actions.copyElement(c.element); } },
-      { id: 'delete', priority: 10, group: 'destructive', danger: true, label: lang => (lang === 'zho' ? '删除' : 'Delete'), visible: () => true, run: c => { if (c.isMultiSelection) c.actions.deleteSelection(); else if (c.element) c.actions.deleteElement(c.element.id); } },
+      { id: 'copy', priority: 10, group: 'clipboard', label: lang => (lang === 'zho' ? '创建副本' : 'Duplicate'), visible: c => c.element !== null || c.selectedElements.length > 0, run: c => { if (c.selectedElements.length) c.actions.copySelection(); else if (c.element) c.actions.copyElement(c.element); } },
+      { id: 'delete', priority: 10, group: 'destructive', danger: true, label: lang => (lang === 'zho' ? '删除' : 'Delete'), visible: c => c.element !== null || c.selectedElements.length > 0, run: c => { if (c.selectedElements.length) c.actions.deleteSelection(); else if (c.element) c.actions.deleteElement(c.element.id); } },
     ];
 
     const disposers = [

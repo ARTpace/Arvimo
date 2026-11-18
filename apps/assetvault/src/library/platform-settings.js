@@ -87,7 +87,8 @@ export function createPlatformSettingsCard({settings,toast}){
  const batchProgressHtml='<div class="platform-batch-progress" data-batch-progress hidden><span class="pbp-text" data-batch-text></span><span class="pbp-track"><span class="pbp-fill" data-batch-fill></span></span></div>';
  const card=document.createElement('div');card.className='settings-card platform-settings';
  // 不设「保存并应用」—— 开关即改即存（防抖），自动保存后提示一句即可。
- card.innerHTML='<h3 class="settings-section-title">在线平台</h3>'+topbar+batchProgressHtml+panels;
+ // 标题带一句右侧说明：这一页独立成「平台模块」后，分组行要与 AI 页、软件连接页一样有主标题 + 副说明。
+ card.innerHTML='<h3 class="settings-section-title"><span>在线平台</span><small>开关即时生效，改动自动保存</small></h3>'+topbar+batchProgressHtml+panels;
 
  const tabButtons=[...card.querySelectorAll('.platform-tab')];
  const indicator=card.querySelector('.platform-tab-indicator');

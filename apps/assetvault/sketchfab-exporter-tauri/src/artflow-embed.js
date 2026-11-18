@@ -18,6 +18,46 @@
 // iframe 同源直接加载即可。
 
 const LOCAL_HEADERS={'X-SFX-Local':'1'};
+
+/** 桌面宿主统一接管右键拖窗，避免 SVG 内部把同一手势解释为相机或节点操作。 */
+export function bindCanvasWindowDrag(doc,dragWindow){
+  let down=null,suppressUntil=0;
+  const editable=target=>target?.closest?.('input,textarea,select,[contenteditable]:not([contenteditable="false"])');
+  const start=event=>{
+    if(event.button!==2||event.buttons&1||editable(event.target))return;
+    suppressUntil=0;down={x:event.screenX,y:event.screenY};
+    // 单击仍由原来的 contextmenu 处理，只阻止画布内部启动另一套拖动。
+    event.stopImmediatePropagation();
+  };
+  const move=event=>{
+    if(!down)return;
+    if(!(event.buttons&2)){down=null;return;}
+    if(Math.hypot(event.screenX-down.x,event.screenY-down.y)<6)return;
+    down=null;suppressUntil=Infinity;
+    event.preventDefault();event.stopImmediatePropagation();
+    // ponytail: 复用桌面窗口接口，不建立第二套坐标或窗口尺寸状态。
+    Promise.resolve().then(dragWindow).catch(error=>console.warn('[canvas] 拖动窗口失败',error));
+  };
+  const up=()=>{down=null;if(suppressUntil)suppressUntil=Date.now()+350;};
+  const context=event=>{
+    if(Date.now()>=suppressUntil)return;
+    suppressUntil=Date.now()+350;
+    event.preventDefault();event.stopImmediatePropagation();
+  };
+  const win=doc.defaultView;
+  doc.addEventListener('mousedown',start,true);
+  win.addEventListener('mousemove',move,true);
+  win.addEventListener('mouseup',up,true);
+  win.addEventListener('blur',up);
+  win.addEventListener('contextmenu',context,true);
+  return ()=>{
+    doc.removeEventListener('mousedown',start,{capture:true});
+    win.removeEventListener('mousemove',move,{capture:true});
+    win.removeEventListener('mouseup',up,{capture:true});
+    win.removeEventListener('blur',up);
+    win.removeEventListener('contextmenu',context,{capture:true});
+  };
+}
 const MAX_IMPORT=200;
 // 仅用于读取旧版浏览器回落存档；新存档由资产库 SQLite 统一管理。
 const BOARD_STORE_KEY='sfx-artflow-board-v1';
@@ -30,6 +70,7 @@ export function mountArtflow(host,{resolve,onCount,onStatus,onSynced,onOpenLibra
   host.innerHTML='';
 
   const frame=document.createElement('iframe');
+  let disposeWindowDrag=()=>{};
   // 类名必须是 cv-artflow-frame，不能用旧的 .cv-frame：
   // app.css 里 .cv-frame 是 tldraw 时代的类，带 pointer-events:none，
   // 同名会命中这个 iframe，鼠标事件全被吞掉 —— 画布完全点不动。
@@ -97,11 +138,11 @@ export function mountArtflow(host,{resolve,onCount,onStatus,onSynced,onOpenLibra
           const extension=asset.locator.extension||asset.locator.format||blob.type.split('/')[1]?.replace('jpeg','jpg')||'bin';
           const rawName=node?.properties?.name||`画布素材.${extension}`;
           const name=/\.[a-z0-9]+$/i.test(rawName)?rawName:`${rawName}.${extension}`;
-          const res=await fetch('/api/library/drop-import',{method:'POST',headers:{...LOCAL_HEADERS,'X-AV-Drop-Name':encodeURIComponent(name)},body:blob});
+          const res=await fetch('/api/library/drop-import',{method:'POST',headers:{...LOCAL_HEADERS,'X-AV-Drop-Name':encodeURIComponent(name),'X-AV-Canvas-Board':encodeURIComponent(node?.boardId||'')},body:blob});
           const result=await res.json();if(!res.ok||!result.asset)throw Error(result.error||'画布素材入库失败');
-          uploaded=result.asset;importedSources.set(source,uploaded);
+          uploaded={...result.asset,canvasImportBoard:node?.boardId};importedSources.set(source,uploaded);
         }
-        asset.metadata={...asset.metadata,libraryUid:uploaded.uid};
+        asset.metadata={...asset.metadata,libraryUid:uploaded.uid,canvasImportBoard:uploaded.canvasImportBoard};
         asset.sourceKind='external-reference';
         asset.locator=asset.kind==='image'
           ? {previewRef:uploaded.url,originalRef:uploaded.url,thumbnailRef:uploaded.thumbnail,mimeType:asset.locator.mimeType||'image/png',byteSize:uploaded.bytes}
@@ -117,7 +158,7 @@ export function mountArtflow(host,{resolve,onCount,onStatus,onSynced,onOpenLibra
         dirty=false;
         if(documentKey(document)!==documentKey(baseDocument)){canvasBaseline=baseDocument;post({type:'assetvault:command',command:'restore-document',document:baseDocument});}
       }
-      onSynced?.();
+      onSynced?.(result);
       if(unavailable)status(`${unavailable} 个旧临时素材已失效，请重新导入；其他画布与画板已同步`,'error');
     }catch(error){dirty=true;while(savedWaiters.length)savedWaiters.shift()(false);status(`画板同步未完成：${error.message}`,'error');}
     finally{busy=false;if(!dirty){while(savedWaiters.length)savedWaiters.shift()(true);}if(dirty&&version!==generation)scheduleSave();else if(!dirty&&pendingBoard)pull();}
@@ -192,6 +233,7 @@ export function mountArtflow(host,{resolve,onCount,onStatus,onSynced,onOpenLibra
     const data=event.data;
     if(!data||typeof data.type!=='string')return;
     if(data.type==='assetvault:ready'){
+      syncAppearance();
       status(null);
       // 首次就绪：把上次的画板恢复回来（服务端存档优先，本地回落）。
       readSaved().then(saved=>{
@@ -241,15 +283,54 @@ export function mountArtflow(host,{resolve,onCount,onStatus,onSynced,onOpenLibra
   window.addEventListener('assetvault:board-changed',onBoardChange);
 
   // 产物没构建时，服务端会回 404 JSON 而不是应用。同源可读文档正文，据此给出可操作的提示。
+  function syncAppearance(){
+    try{
+      const doc=frame.contentDocument;if(!doc?.head)return;
+      const palette=getComputedStyle(document.documentElement);
+      let style=doc.getElementById('assetvault-theme');
+      if(!style){style=doc.createElement('style');style.id='assetvault-theme';doc.head.append(style);}
+      // Only the workspace default follows the host; personal board backgrounds win.
+      const color=palette.getPropertyValue('--av-bg-color').trim()||'#0d1117';
+      style.textContent=`[data-bp-board-background="theme"]{--bp-canvas-bg:${color}!important;--bp-canvas-bg-image:${palette.getPropertyValue('--av-bg-image')||'none'}!important;background-color:${color}!important}`;
+    }catch{/* The frame may still be navigating. */}
+  }
+  window.addEventListener('assetvault:appearance-changed',syncAppearance);
   frame.addEventListener('load',()=>{
+    syncAppearance();
     let text='';
     try{text=frame.contentDocument?.body?.textContent||'';}catch{text='';}
     if(!text.includes('artflow')&&!frame.contentDocument?.querySelector('#root')){
       notice.hidden=false;
       notice.innerHTML='<b>画布产物未构建</b><span>请在 apps/artflow 执行 <code>npm run build</code>，再在 apps/assetvault 执行 <code>npm run build:library</code>。</span>';
       status('画布产物未构建','error');
+      return;
     }
+    shieldContextMenu();
   });
+
+  /** 画布是独立应用，宿主那条右键拦截管不到它 —— iframe 里的文档空白处右键仍会漏出
+   *  WebView2 原生菜单（返回 / 刷新 / 另存为 / 打印 / 检查）。同源就直接挂到子文档上：
+   *  不用改画布源码，也不影响它单独运行时的手感（只在这个嵌入场景生效）。
+   *  画布自己的节点菜单先 preventDefault 再弹，不受影响；输入框与选中文字仍放行，
+   *  复制粘贴不破。 */
+  const shieldContextMenu=()=>{
+    try{
+      const doc=frame.contentDocument;
+      if(!doc||doc.__avContextShield)return;
+      doc.__avContextShield=true;
+      const invoke=window.__TAURI__?.core?.invoke;
+      if(typeof invoke==='function'){
+        disposeWindowDrag();
+        disposeWindowDrag=bindCanvasWindowDrag(doc,()=>invoke('desktop_window_action',{action:'drag-right'}));
+      }
+      doc.addEventListener('contextmenu',event=>{
+        const target=event.target;
+        if(target?.closest?.('input,textarea,select,[contenteditable="true"],[contenteditable=""]'))return;
+        if(String(doc.getSelection?.()||'').trim())return;
+        event.preventDefault();
+      });
+    }catch{/* 跨域或还没就绪：跳过，不影响画布本身 */}
+  };
 
   const post=(message)=>{
     try{frame.contentWindow?.postMessage(message,'*');}catch{/* iframe 还没起来或已被销毁 */}
@@ -280,6 +361,8 @@ export function mountArtflow(host,{resolve,onCount,onStatus,onSynced,onOpenLibra
     /** 读回画布元素快照（调试与外部脚本用）。 */
     snapshot(){post({type:'assetvault:command',command:'snapshot'});},
     destroy(){
+      disposeWindowDrag();
+      window.removeEventListener('assetvault:appearance-changed',syncAppearance);
       window.removeEventListener('message',onMessage);
       window.removeEventListener('focus',pull);
       window.removeEventListener('assetvault:board-changed',onBoardChange);

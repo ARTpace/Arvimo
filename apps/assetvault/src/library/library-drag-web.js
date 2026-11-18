@@ -119,6 +119,9 @@ export function setupLibraryDragWeb() {
     const uid = card.dataset.uid;
     const transfer = event.dataTransfer;
     if (!uid || !transfer) return;
+    // 标上「这次拖拽来自窗口内部」：卡片被拖回窗口里时 drop 同样带着 Files，
+    // drop-import 靠这个标记跳过，不然松手就弹「导入到资产库」。
+    document.documentElement.classList.add('self-drag');
     try { transfer.effectAllowed = 'copy'; } catch { /* 个别壳不让写 */ }
     const entry = cache.get(uid);
     if (!entry) { prefetch(uid); return; }   // 还没预热：这次来不及塞字节，先抓下一次
@@ -135,14 +138,21 @@ export function setupLibraryDragWeb() {
     }
   }
 
+  // 只在 dragend 摘标记：它一定晚于 drop 到达，摘早了 drop-import 就看不到这次是站内拖拽。
+  // 拖到窗口外松手同样会触发 dragend，所以标记不会残留。
+  const endSelfDrag = () => document.documentElement.classList.remove('self-drag');
+
   document.addEventListener('pointerover', onPointerOver, true);
   document.addEventListener('pointerdown', onPointerDown, true);
   document.addEventListener('dragstart', onDragStart, true);
+  document.addEventListener('dragend', endSelfDrag, true);
 
   return () => {
     document.removeEventListener('pointerover', onPointerOver, true);
     document.removeEventListener('pointerdown', onPointerDown, true);
     document.removeEventListener('dragstart', onDragStart, true);
+    document.removeEventListener('dragend', endSelfDrag, true);
+    document.documentElement.classList.remove('self-drag');
     observer.disconnect();
   };
 }

@@ -23,7 +23,11 @@ test('deduplication ignores option ordering and finds saved files behind failed 
  }finally{await m?.close();await fs.rm(d,{recursive:true,force:true});}
 });
 async function manager(base,runner){return new DownloadManager({dataDir:path.join(base,'state'),defaultFolder:path.join(base,'downloads'),runner:runner||(async(job,{signal})=>{signal.throwIfAborted();return writeFixture(job);}),browser:()=>'/fixture/browser',fbxConverter:fakeFbxConverter}).init();}
-test('snapshot reports an undetectable configured folder until it is set again',async()=>{const d=await temp();let m;try{m=await manager(d);const missing=m.snapshot().folderStatus;assert.equal(missing.ok,false);assert.equal(missing.code,'missing');assert.match(missing.message,/保存目录|下载路径/);await m.configure({folder:path.join(d,'chosen-downloads')});const ok=m.snapshot().folderStatus;assert.equal(ok.ok,true);assert.equal(ok.code,'ok');}finally{await m?.close();await fs.rm(d,{recursive:true,force:true});}});
+test('snapshot reports an undetectable configured folder until it is set again',async()=>{const d=await temp();let m;try{
+  // 资产根第一次启动时会被自动建出来（见下面「资产根还不存在」那条），所以「目录不存在」不再等于
+  // 「不可用」。这里用普通文件当父级，mkdir 必然 ENOTDIR —— 等价于移动硬盘拔掉、盘符不存在的情形。
+  await fs.writeFile(path.join(d,'blocked'),'x');
+  m=await new DownloadManager({dataDir:path.join(d,'state'),defaultFolder:path.join(d,'blocked','downloads'),browser:()=>'/fixture/browser'}).init();const missing=m.snapshot().folderStatus;assert.equal(missing.ok,false);assert.equal(missing.code,'missing');assert.match(missing.message,/保存目录|下载路径/);await m.configure({folder:path.join(d,'chosen-downloads')});const ok=m.snapshot().folderStatus;assert.equal(ok.ok,true);assert.equal(ok.code,'ok');}finally{await m?.close();await fs.rm(d,{recursive:true,force:true});}});
 test('native folder picker result is validated and can create the selected directory',async()=>{const d=await temp();let m;try{const picked=path.join(d,'picked-downloads');m=await new DownloadManager({dataDir:path.join(d,'state'),defaultFolder:path.join(d,'downloads'),folderPicker:async initial=>{assert.equal(path.resolve(initial),path.resolve(m.settings.folder));return picked;},browser:()=>'/fixture/browser'}).init();const result=await m.pickFolder({});assert.equal(result.cancelled,false);assert.equal(result.folder,path.resolve(picked));assert.equal((await fs.stat(picked)).isDirectory(),true);}finally{await m?.close();await fs.rm(d,{recursive:true,force:true});}});
 test('download-to-blender forces a loose GLB export and launches the importer after saving',async()=>{const d=await temp();let m;const launched=[];try{m=await new DownloadManager({dataDir:path.join(d,'state'),defaultFolder:path.join(d,'downloads'),browser:()=>'/fixture/browser',blender:()=>'/fixture/blender',fbxConverter:async({glb,outDir})=>{await fs.writeFile(path.join(outDir,'model.fbx'),'FBX');return {file:path.join(outDir,'model.fbx'),name:'model.fbx',bytes:3};},blenderImporter:(file,{blender})=>{launched.push({file,blender:blender()});return {ok:true,pid:123,file:path.join(file,'model.glb'),blender:blender(),launchedAt:1};},runner:async(job)=>{assert.equal(job.options.output,'folder');assert.equal(job.options.format,'fbx');await writeFixtureFolder(job.output,{uid:job.uid});return {zipName:'fixture.zip'};}}).init();m.start('http://127.0.0.1:1');await m.enqueue({authorized:true,openInBlender:true,options:{output:'zip',format:'fbx'},models:[model]});await wait(()=>m.jobs[0].state==='saved');assert.equal(m.jobs[0].openInBlender,true);assert.equal(m.jobs[0].options.output,'folder');assert.equal(m.jobs[0].options.format,'fbx');assert.equal(launched.length,1);assert.equal(await fs.readFile(path.join(m.jobs[0].filePath,'model.fbx'),'utf8'),'FBX');assert.match(m.jobs[0].message,/Blender/);assert.equal(m.jobs[0].blender.ok,true);}finally{await m?.close();await fs.rm(d,{recursive:true,force:true});}});
 test('ZIP CRC, GLB structure, provenance and SHA256 are verified',async()=>{const d=await temp();try{const p=path.join(d,'ok.zip');await fs.writeFile(p,fixtureZip());const r=await verifyArchive(p,{uid});assert.equal(r.entries,3);assert.equal(r.glbs[0].meshes,1);assert.match(r.sha256,/^[a-f0-9]{64}$/);await assert.rejects(verifyArchive(p,{uid:'a'.repeat(32)}),/不匹配/);const corrupt=fixtureZip();corrupt[55]^=1;await fs.writeFile(p,corrupt);await assert.rejects(verifyArchive(p),/校验失败/);}finally{await fs.rm(d,{recursive:true,force:true});}});
@@ -39,3 +43,31 @@ test('deflated ZIPs verify, malformed local headers and counts do not',async()=>
 test('active duplicate takes priority over old history, retries cannot bypass it',async()=>{const d=await temp();let m;try{m=await manager(d);m.start('http://127.0.0.1:1');await m.enqueue({authorized:true,models:[model]});await wait(()=>m.jobs[0].state==='saved');await m.configure({paused:true});const id=(await m.enqueue({authorized:true,models:[model],force:true})).added[0];m.action(id,'cancel');await m.enqueue({authorized:true,models:[model],force:true});assert.equal((await m.enqueue({authorized:true,models:[model],force:true})).duplicates.length,1);assert.throws(()=>m.action(id,'retry'),/相同模型/);}finally{await m?.close();await fs.rm(d,{recursive:true,force:true});}});
 test('corrupt main database preserves damaged data and restores the backup',async()=>{const d=await temp();let m;try{m=await manager(d);await m.enqueue({authorized:true,models:[model]});await m.close();await fs.writeFile(m.store,'{broken');m=await manager(d);assert.equal(m.jobs.length,1);assert.match(m.warning,/恢复/);assert.ok((await fs.readdir(m.dataDir)).some(x=>x.includes('.damaged-')));assert.equal(JSON.parse(await fs.readFile(m.store+'.bak')).version,1);}finally{await m?.close();await fs.rm(d,{recursive:true,force:true});}});
 test('snapshot polling can be conditional and detects removed files',async()=>{const d=await temp();let m,server;try{m=await manager(d);server=createLibraryServer({downloads:m});await new Promise(r=>server.listen(0,'127.0.0.1',r));const base=`http://127.0.0.1:${server.address().port}`;m.start(base);await m.enqueue({authorized:true,models:[model],options:{output:'zip',format:'glb'}});await wait(()=>m.jobs[0].state==='saved'&&m.workers.size===0);const r=await fetch(base+'/api/downloads',{headers:{'X-SFX-Local':'1'}}),etag=r.headers.get('etag');assert.ok(etag);const headers={'X-SFX-Local':'1','If-None-Match':etag};assert.equal((await fetch(base+'/api/downloads',{headers})).status,304);await fs.unlink(m.jobs[0].filePath);const changed=await fetch(base+'/api/downloads',{headers});assert.equal(changed.status,200);assert.equal((await changed.json()).jobs[0].fileExists,false);}finally{await m?.close();server?.closeAllConnections();await new Promise(r=>server?server.close(r):r());await fs.rm(d,{recursive:true,force:true});}});
+test('资产根还不存在时自动建出来，不弹「重新设置下载路径」',async()=>{const d=await temp();let m;try{m=await new DownloadManager({dataDir:path.join(d,'state'),defaultFolder:path.join(d,'资产库'),browser:()=>'/fixture/browser'}).init();assert.equal(m.folderStatus().ok,true);assert.equal((await fs.stat(path.join(d,'资产库'))).isDirectory(),true);}finally{await m?.close();await fs.rm(d,{recursive:true,force:true});}});
+
+
+test('pause all stops active work and resume completes preserved jobs',async()=>{
+ const d=await temp();let m,starts=0,stopped=0;
+ try{
+  m=await manager(d,async(job,{signal})=>{
+   starts++;
+   if(starts===1)await new Promise((resolve,reject)=>signal.addEventListener('abort',()=>{stopped++;reject(signal.reason);},{once:true}));
+   signal.throwIfAborted();return writeFixture(job);
+  });
+  m.start('http://127.0.0.1:1');
+  await m.enqueue({authorized:true,models:[model,{...model,uid:'c'.repeat(32)}]});
+  await wait(()=>starts===1);
+  const options=JSON.stringify(m.jobs[0].options);
+  await m.configure({paused:true});
+  assert.equal(stopped,1);assert.equal(m.workers.size,0);
+  assert.equal(m.jobs[0].state,'held');assert.equal(m.jobs[1].state,'queued');
+  assert.equal(starts,1);assert.equal(m.jobs[0].finishedAt,null);
+  // The paused state and resume ownership survive a service restart.
+  await m.close();m=await manager(d);m.start('http://127.0.0.1:1');
+  assert.equal(m.jobs[0].state,'held');assert.equal(m.settings.paused,true);
+  await m.configure({paused:false});
+  await wait(()=>m.jobs.every(j=>j.state==='saved')&&m.workers.size===0);
+  assert.equal(JSON.stringify(m.jobs[0].options),options);
+  assert.ok(m.snapshot().jobs.every(j=>j.fileExists));
+ }finally{await m?.close();await fs.rm(d,{recursive:true,force:true});}
+});

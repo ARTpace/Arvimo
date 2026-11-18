@@ -98,6 +98,11 @@ export function createMascotAssistant({panel,canManageUpdates=false,idleAnimatio
    }
    case 'category':
     messages.publish({id:'category',text:`已筛选${event.label}${categoryExplained?'':'，可继续输入名称缩小范围'}`,scene:'category',priority:25,duration:3200});categoryExplained=true;break;
+   /* 顶部模式轨（搜索栏上方那排图标）切换同样要给回执：同一件事「换个分类看」，
+      侧边栏筛选有小猫气泡、图标轨上却毫无反应，用户会以为没点中（2026-11-14 用户反馈）。
+      text 可由调用方覆盖，退出模式那种「已回到全部」不适合套「已切换到…」句式。 */
+   case 'mode':
+    messages.publish({id:'mode',text:event.text||`已切换到${event.label}${event.route==='library'?'分类':'模式'}`,scene:'category',priority:25,duration:3200});break;
    case 'download':{
     const failed=event.phase==='failed',done=event.phase==='completed';
     messages.publish({id:failed?'download:error':'download:activity',text:failed?`${event.count} 项下载失败`:done?`${event.count} 项资产已下载完成`:`正在下载 ${event.count} 项资产，你可以继续浏览`,scene:`download:${event.phase}`,priority:failed?40:done?30:20,duration:failed?8000:4500,actions:[{label:failed?'查看原因':'查看下载',run:onViewDownloads}]});break;

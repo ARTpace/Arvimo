@@ -83,6 +83,8 @@ export function setupPictureDrag() {
     const transfer = event.dataTransfer;
     if (!transfer) return;
 
+    // 站内发起的拖拽：落回窗口时 drop 里也是 Files，drop-import 靠这个标记跳过。
+    document.documentElement.classList.add('self-drag');
     const name = nameOf(original, image.dataset.title || '');
     const source = proxyUrl(original);
     try {
@@ -99,4 +101,6 @@ export function setupPictureDrag() {
       catch { /* items 只读时靠 DownloadURL 兜底 */ }
     }
   }, true);
+  // 只摘标记、不碰 dataTransfer：dragend 一定晚于 drop，摘早了 drop-import 就认不出站内拖拽。
+  document.addEventListener('dragend', () => document.documentElement.classList.remove('self-drag'), true);
 }

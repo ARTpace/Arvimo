@@ -69,7 +69,7 @@ export function createTaskCard({esc,icon,visitor=false}){
   return `<p class="verified">${icon('shield')}${what} · ${t.verification?.entries||0} 个文件 · SHA-256 <span title="${esc(t.verification?.sha256)}">${esc((t.verification?.sha256||'').slice(0,16))}…</span></p>`;
  };
  const detailBody=(t,view,n)=>{
-  const parts=[];
+  const parts=[`<p class="task-format-detail">${esc(formatBadge(t))}</p>`];
   // A finished task keeps its final bar here, so "100%" is still one click away instead of always on screen.
   if(TERMINAL.has(t.state))parts.push(`<section class="job-progress" aria-label="下载进度">${heading(view)}${bar(view)}</section>`);
   parts.push(`<div class="progress-steps">${STEPS.map((name,i)=>`<span class="${i===view.step?'current':''}">${i+1} ${name}</span>`).join('')}</div>`);
@@ -82,7 +82,7 @@ export function createTaskCard({esc,icon,visitor=false}){
  const actions=(t,{busy,done,canCancel})=>[
   // 图片包是边下边写的：第一张图落地后文件夹就已经存在，不必等任务结束才给入口。
   !visitor&&t.fileExists?`<button data-dm-action="reveal" data-id="${t.id}">${icon('folder')}文件夹</button>`:'',
-  done&&t.fileExists?`<button data-dm-action="download-local" data-id="${t.id}" title="保存到当前浏览器所在电脑；文件夹会打包为 ZIP（最大 2GB）">下载到我的电脑</button>`:'',
+  done&&t.fileExists?`<button data-dm-action="download-local" data-id="${t.id}" title="保存到当前浏览器所在电脑；文件夹会打包为 ZIP（最大 2GB）">下载到本机</button>`:'',
   canCancel?`<button data-dm-action="cancel" data-id="${t.id}">取消</button>`:'',
   ['queued','retry_wait'].includes(t.state)?`<button data-dm-action="hold" data-id="${t.id}">暂停</button>`:'',
   t.state==='held'?`<button data-dm-action="resume" data-id="${t.id}">继续</button>`:'',

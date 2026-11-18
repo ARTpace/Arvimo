@@ -9,6 +9,8 @@ import {createLocalFileImporter} from '../server/local-file-import.mjs';
 import {createDropImporter} from '../server/drop-import.mjs';
 import {createCanvasBoards} from '../server/canvas-boards.mjs';
 import {listCollections,saveCollection,setCollectionItems,collectionUids,deleteCollection} from '../server/library-collections.mjs';
+import {MAIN_STATE_KEY} from '../server/library-schema.mjs';
+import {locationModel} from '../server/file-locations.mjs';
 
 const pixel='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=';
 const board=(id,name)=>({id,name,panOffset:{x:0,y:0},zoom:1,canvasBackgroundColor:'#18181b',operationHistory:[],operationHistoryIndex:-1});
@@ -21,8 +23,44 @@ async function fixture(t,legacy){
  if(legacy)await fs.writeFile(path.join(dataDir,'artflow-board.json'),JSON.stringify(legacy));
  const service=createCanvasBoards({storage,dataDir,dropImporter,localImporter});
  t.after(async()=>{await storage.close();await fs.rm(dataDir,{recursive:true,force:true,maxRetries:5,retryDelay:100});});
- return {service,storage,dataDir,localImporter};
+ return {service,storage,dataDir,localImporter,dropImporter};
 }
+
+test('画布导入按画板集中收纳，重复保存不回收已拆分成员，整理后引用跟随 UID',async t=>{
+ const f=await fixture(t),base=await f.service.read();
+ const doc=project();doc.boards.push(board('other-board','参考图'));
+ let saved=(await f.service.save({document:doc,base})).document;
+ const uid=saved.nodes[0].assetId;
+ const model=await f.storage.withDb(conn=>JSON.parse(conn.all('SELECT payload FROM assets WHERE uid=?',[uid])[0].payload));
+ assert.match(model.localRel,/^画布导入\/[a-f0-9]{24}\/参考.png$/);
+ const groups=JSON.parse((await f.storage.load()).values[MAIN_STATE_KEY]).options.cardGroups;
+ assert.equal(groups.length,1);assert.equal(groups[0].children[0].key,uid);
+ // 同画板追加文件落入同一路径；同名画板不共用目录，名称无法逃逸路径。
+ const a=await f.dropImporter.save({name:'two.png',stream:[Buffer.from('different image')],canvasBoard:'canvas-one'});
+ const b=await f.dropImporter.save({name:'three.png',stream:[Buffer.from('other image')],canvasBoard:'../../other-board'});
+ assert.equal(path.posix.dirname(a.name),path.posix.dirname(model.localRel));
+ assert.notEqual(path.posix.dirname(a.name),path.posix.dirname(b.name));
+ const next=structuredClone(saved);
+ next.assets.push({id:a.uid,kind:'image',locator:{originalRef:a.asset.url},metadata:{libraryUid:a.uid,canvasImportBoard:'canvas-one'}});
+ next.nodes.push({id:'second',boardId:'canvas-one',assetId:a.uid,nodeType:'image',x:400,y:20,width:200,height:200,properties:{name:'two.png'}});
+ saved=(await f.service.save({document:next,base:saved})).document;
+ const packed=JSON.parse((await f.storage.load()).values[MAIN_STATE_KEY]).options.cardGroups;
+ assert.equal(packed.length,1);assert.deepEqual(packed[0].children.map(ref=>ref.key),[uid,a.uid]);
+ await f.storage.mutate(values=>{
+  const state=JSON.parse(values[MAIN_STATE_KEY]);state.options.cardGroups[0].children=[];
+  return {...values,[MAIN_STATE_KEY]:JSON.stringify(state)};
+ });
+ await f.service.save({document:saved,base:saved});
+ assert.equal(JSON.parse((await f.storage.load()).values[MAIN_STATE_KEY]).options.cardGroups[0].children.length,0);
+ // 模拟整理器完成移动后更新的资产定位；画布几何与成员关系不变。
+ const moved=locationModel(model,{path:model.localRoot,rel:'整理/参考.png',availability:'online'});
+ await fs.mkdir(path.dirname(moved.filePath),{recursive:true});await fs.rename(model.filePath,moved.filePath);
+ await f.storage.withDbWrite(conn=>conn.run('UPDATE assets SET payload=? WHERE uid=?',[JSON.stringify(moved),uid]));
+ const reopened=await f.service.read(),asset=reopened.assets.find(asset=>asset.id===uid);
+ assert.equal(asset.locator.originalRef,moved.url);
+ assert.equal(reopened.nodes.find(node=>node.assetId===uid).x,10);
+ assert.ok((await fs.stat(moved.filePath)).size>0);
+});
 test('旧存档迁移：同ID画板、图片真实入库、原档保留，重启不重复导入',async t=>{
  const original=project(),f=await fixture(t,original);
  const doc=await f.service.read(),uid=doc.nodes[0].assetId;
@@ -77,6 +115,21 @@ test('资产库改名、增删成员同步画布，过期画布保存不覆盖�
  await f.storage.withDbWrite(conn=>deleteCollection(conn,'library-two'));
  const after=await f.service.read();assert.ok(!after.boards.some(row=>row.id==='library-two'));
 });
+
+test('删除最后画板后读取、过期保存与重开均不重建默认画板，资产保留',async t=>{
+ const f=await fixture(t,project()),base=await f.service.read(),uid=base.nodes[0].assetId;
+ await f.storage.withDbWrite(conn=>deleteCollection(conn,'canvas-one'));
+ const after=await f.service.read();
+ assert.deepEqual(after.boards,[]);assert.deepEqual(after.nodes,[]);
+ const stale=structuredClone(base);stale.nodes[0].x=900;
+ assert.deepEqual((await f.service.save({document:stale,base})).document.boards,[]);
+ const reopened=createCanvasBoards({storage:f.storage,dataDir:f.dataDir});
+ assert.deepEqual((await reopened.read()).boards,[]);
+ assert.deepEqual(await f.storage.withDb(conn=>listCollections(conn)),[]);
+ assert.equal(await f.storage.withDb(conn=>conn.all('SELECT count(*) AS n FROM assets WHERE uid=?',[uid])[0].n),1);
+ const next=structuredClone(after);next.boards=[board('new-board','手动新建')];
+ assert.equal((await f.service.save({document:next,base:after})).document.boards[0].id,'new-board');
+});
 test('空画布与远程引用也会入库；旧数组存档可迁移且不额外生成画板',async t=>{
  const f=await fixture(t,[{id:'old',name:'旧版',elements:[]}]);
  assert.ok(Array.isArray(await f.service.read()));
@@ -106,4 +159,25 @@ test('真实HTTP：画布入库、资产库移除与改名、原文件可读、�
  const after=await (await call('/api/library/artflow-board')).json();
  assert.equal(after.boards[0].name,'库侧重命名');assert.equal(after.nodes.length,0);
  assert.equal((await call('/api/library/artflow-board','PUT',{document:project(),base},{Origin:'http://other.invalid'})).status,403);
+});
+
+test('图集在画布展开为命名图组，保存布局不打散画板成员，重开不重复生成',async t=>{
+ const f=await fixture(t,project());await f.service.read();
+ const root=path.join(f.dataDir,'album-source');await fs.mkdir(root);
+ for(const name of ['a.png','b.png','c.png'])await fs.writeFile(path.join(root,name),Buffer.from(pixel.split(',')[1],'base64'));
+ const uid='a'.repeat(32),model={uid,name:'符文图集',platform:'local',assetType:'images',source:'album-reference',albumRoot:f.dataDir,albumRel:'album-source',albumPackage:{root:f.dataDir,rel:'album-source',title:'符文图集',category:'images'}};
+ await f.storage.withDbWrite(conn=>{conn.applyAssetOps([{op:'asset:add',uid,model}]);setCollectionItems(conn,'canvas-one',[uid],'set');});
+ const doc=await f.service.read(),group=doc.nodes.find(node=>node.nodeType==='group');
+ assert.equal(group.properties.name,'符文图集');assert.equal(group.properties.albumUid,uid);
+ const children=doc.nodes.filter(node=>node.parentId===group.id);assert.equal(children.length,3);assert.equal(new Set(children.map(node=>`${node.x},${node.y}`)).size,3);
+ assert.equal((await f.storage.withDb(conn=>listCollections(conn)))[0].assetCount,1);
+ const moved=structuredClone(doc);moved.assets.forEach(asset=>{asset.metadata={};});moved.nodes.find(node=>node.id===children[0].id).x+=77;
+ const saved=(await f.service.save({document:moved,base:doc})).document;
+ assert.equal(saved.nodes.find(node=>node.id===children[0].id).x,children[0].x+77);
+ assert.equal(saved.nodes.filter(node=>node.nodeType==='group').length,1);
+ assert.deepEqual([...await f.storage.withDb(conn=>collectionUids(conn,'canvas-one'))],[uid]);
+ const reopened=await f.service.read();assert.equal(reopened.nodes.length,4);
+ const removed=structuredClone(reopened);removed.nodes=[];
+ await f.service.save({document:removed,base:reopened});assert.equal((await f.service.read()).nodes.length,0);
+ assert.equal(await f.storage.withDb(conn=>conn.all('SELECT count(*) AS n FROM assets')[0].n),2,'图组图片不各自入库，原先资产保留');
 });

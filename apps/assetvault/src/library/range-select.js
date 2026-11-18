@@ -18,7 +18,15 @@ const CARD = '.model-card,.local-file-card,.bd-card,.local-gallery-photo,.local-
 /** 真控件：按下去要留给它自己（点按钮 / 拖滑块 / 选文本）。 */
 const CONTROL = 'button,a,input,select,textarea,label,[contenteditable="true"],[contenteditable=""],[role="button"],[role="slider"],[data-action]';
 /** 资产区里不属于「资产展示」的区块：检索面板、命令条、画板区、面包屑、页脚、空状态、筛选抽屉。 */
-const BLOCKED = '.search-panel,#local-toolbar,.library-heading,.discovery-controls,.bd-deck,.bd-crumb,.gallery-footer,#empty,#selection-bar,.filter-drawer,.filter-rows,#sidebar,.sidebar,dialog,#downloads-view,#canvas-view';
+const BLOCKED = '.search-sticky,#content-kind-tabs,.search-panel,#local-toolbar,.library-heading,.discovery-controls,.bd-deck,.bd-crumb,.gallery-footer,#empty,#selection-bar,.filter-drawer,.filter-rows,#sidebar,.sidebar,dialog,#downloads-view,#canvas-view';
+
+/** 仅允许在网格及其下方空白开始框选；顶部留白也不属于资产操作区。 */
+export function rangeSelectionArea(target,grid,y){
+  if(!target?.closest||target.closest(CARD)||target.closest(CONTROL)||target.closest(BLOCKED))return false;
+  const sticky=grid.ownerDocument?.querySelector('.search-sticky');
+  const top=Math.max(grid.getBoundingClientRect().top,sticky&&!sticky.hidden?sticky.getBoundingClientRect().bottom:0);
+  return y>=top;
+}
 
 /** 从 grid 往上找真正在滚的那个容器；找不到就退回文档滚动元素。 */
 function scrollParent(node) {
@@ -31,8 +39,8 @@ function scrollParent(node) {
   return doc.scrollingElement || doc.documentElement;
 }
 
-export function createRangeSelect({grid, state, renderGrid = () => {}}) {
-  if (!grid || !state?.selected) return {setup() {}, onCheckboxChange() {}, syncSelection() {}};
+export function createRangeSelect({grid, state, renderGrid = () => {}, onSelectionChange = () => {}, keyboardManaged = false}) {
+  if (!grid || !state?.selected) return {setup() {}, onCheckboxChange() {}, syncSelection() {},exitSelectionMode() {}};
   const doc = grid.ownerDocument || document;
   const win = doc.defaultView || window;
   /**
@@ -65,6 +73,10 @@ export function createRangeSelect({grid, state, renderGrid = () => {}}) {
   let dragging = false;
   let raf = 0;
   let suppressClick = false;
+  let selectionMode = false;
+  let hold = null;
+  let heldCard = null;
+  let holdClickTimer = 0;
   // 卡片位置快照：拖动中卡片不会动，只有滚动会整体位移。几百上千张卡每帧都调
   // getBoundingClientRect 会明显掉帧，所以开始时量一次，之后按滚动差量平移。
   let snapshot = null;
@@ -73,6 +85,40 @@ export function createRangeSelect({grid, state, renderGrid = () => {}}) {
 
   const cards = () => [...grid.querySelectorAll('.model-card[data-uid]')];
   const uids = () => cards().map(card => card.dataset.uid).filter(Boolean);
+
+  const selectableCard = target => {
+    const card=target?.closest?.('.model-card[data-uid]');
+    if(state.route!=='library'||!card||!grid.contains(card)||onCanvas())return null;
+    const control=target.closest('button,a,input,select,textarea,label,[contenteditable]');
+    return control&&!control.matches('.preview-hit,.card-title')?null:card;
+  };
+  function cancelHold(){
+    if(!hold)return;
+    clearTimeout(hold.timer);hold.card.removeAttribute('data-long-press');hold=null;
+  }
+  function releaseHeldClick(){
+    clearTimeout(holdClickTimer);heldCard=null;
+  }
+  function exitSelectionMode(){
+    cancelHold();releaseHeldClick();selectionMode=false;applySelectionUI();
+  }
+  function commitSelection(){applySelectionUI();onSelectionChange();}
+  function startHold(event){
+    cancelHold();releaseHeldClick();
+    if(event.button!==0||event.isPrimary===false||event.ctrlKey||event.metaKey||event.shiftKey||event.altKey)return;
+    const card=selectableCard(event.target);
+    if(!card||selectionMode)return;
+    hold={card,id:event.pointerId,x:event.clientX,y:event.clientY,timer:0};
+    card.setAttribute('data-long-press','');
+    hold.timer=setTimeout(()=>{
+      if(!hold||!card.isConnected||!selectableCard(card)){cancelHold();return;}
+      cancelHold();selectionMode=true;heldCard=card;
+      state.selected.add(card.dataset.uid);anchor=card.dataset.uid;
+      // 结束桌面拖出的等待状态；长按成立后继续移动也不会误起原生拖放。
+      doc.dispatchEvent(new win.CustomEvent('assetvault:selection-start'));
+      commitSelection();
+    },500);
+  }
 
   function cleanup() {
     if (raf) { cancelAnimationFrame(raf); raf = 0; }
@@ -132,6 +178,7 @@ export function createRangeSelect({grid, state, renderGrid = () => {}}) {
    *  renderGrid 会按新的 selected 重新生成卡片 HTML 并 outerHTML 整张替换 —— 图片要重新解码，
    * 瀑布流下一量高度就变，卡片就会「闪一下 / 位移」。框选是纯视觉动作，就地改 class 就够。 */
   function applySelectionUI() {
+    doc.body.toggleAttribute('data-selection-mode',selectionMode);
     const selected = state.selected;
     for (const card of cards()) {
       const on = selected.has(card.dataset.uid);
@@ -142,7 +189,7 @@ export function createRangeSelect({grid, state, renderGrid = () => {}}) {
     const count = doc.querySelector('#selected-count');
     if (count) count.textContent = selected.size;
     const bar = doc.querySelector('#selection-bar');
-    if (bar) bar.hidden = !selected.size || state.route === 'downloads';
+    if (bar) bar.hidden = (!selected.size&&!selectionMode) || state.route === 'downloads';
   }
 
   /** 指针停在上下边缘时让资产区自己滚，滚完重算命中（否则长列表框选永远只能框到一屏）。 */
@@ -167,6 +214,19 @@ export function createRangeSelect({grid, state, renderGrid = () => {}}) {
 
   /** 接管 click：吞掉框选结束那一下点击，同时记录 Shift（change 事件本身不带 shiftKey）。 */
   function onClick(event) {
+    const card=selectableCard(event.target);
+    if(heldCard&&card===heldCard){
+      releaseHeldClick();event.stopImmediatePropagation();event.preventDefault();return;
+    }
+    if(selectionMode&&card){
+      event.stopImmediatePropagation();event.preventDefault();
+      const uid=card.dataset.uid;
+      if(event.shiftKey&&anchor){
+        const list=uids(),from=list.indexOf(anchor),to=list.indexOf(uid);
+        if(from>=0&&to>=0)for(const value of list.slice(Math.min(from,to),Math.max(from,to)+1))state.selected.add(value);
+      }else if(state.selected.has(uid))state.selected.delete(uid);else state.selected.add(uid);
+      anchor=uid;commitSelection();return;
+    }
     if (suppressClick) {
       suppressClick = false;
       event.stopPropagation();
@@ -189,13 +249,13 @@ export function createRangeSelect({grid, state, renderGrid = () => {}}) {
       const from = list.indexOf(anchor), to = list.indexOf(uid);
       if (from >= 0 && to >= 0) {
         for (const value of list.slice(Math.min(from, to), Math.max(from, to) + 1)) state.selected.add(value);
-        applySelectionUI();
+        commitSelection();
         return;
       }
     }
     anchor = uid;
     if (target.checked) state.selected.add(uid); else state.selected.delete(uid);
-    applySelectionUI();
+    commitSelection();
   }
 
   /** 松手：提交命中集合。win / doc 两处都会调到，靠 session 判空做到幂等。 */
@@ -211,17 +271,19 @@ export function createRangeSelect({grid, state, renderGrid = () => {}}) {
       setTimeout(() => { suppressClick = false; }, 0);
     }
     cleanup();
-    if (wasDragging) applySelectionUI();
+    if (wasDragging) commitSelection();
   }
 
   function setup() {
     doc.addEventListener('click', onClick, true);
 
     doc.addEventListener('pointerdown', event => {
+      startHold(event);
       suppressClick = false;
       if (session || event.button !== 0) return;
       const target = event.target;
       if (!target?.closest) return;
+      if(!rangeSelectionArea(target,grid,event.clientY))return;
       // 卡片上按住 = 拖卡片（拖出到软件 / 打开画板），不抢。
       if (target.closest(CARD)) return;
       // 真控件、命令条、画板区、页脚、抽屉：都不是框选的地盘。
@@ -246,6 +308,28 @@ export function createRangeSelect({grid, state, renderGrid = () => {}}) {
       pointer = {x: event.clientX, y: event.clientY};
     }, true);
 
+    doc.addEventListener('pointermove',event=>{
+      if(hold&&(event.pointerId!==undefined&&hold.id!==event.pointerId||Math.hypot(event.clientX-hold.x,event.clientY-hold.y)>8))cancelHold();
+    },true);
+    doc.addEventListener('pointerup',()=>{
+      cancelHold();
+      if(heldCard)holdClickTimer=setTimeout(releaseHeldClick,400);
+    },true);
+    doc.addEventListener('pointercancel',()=>{cancelHold();releaseHeldClick();},true);
+    doc.addEventListener('scroll',cancelHold,true);
+    doc.addEventListener('contextmenu',cancelHold,true);
+    doc.addEventListener('dragstart',event=>{
+      cancelHold();
+      if(heldCard){event.preventDefault();event.stopImmediatePropagation();}
+    },true);
+    win.addEventListener('keydown',event=>{
+      if(event.key!=='Escape')return;
+      cancelHold();
+      if(!keyboardManaged&&selectionMode){state.selected.clear();exitSelectionMode();onSelectionChange();}
+    });
+    win.addEventListener('blur',()=>{cancelHold();releaseHeldClick();});
+    doc.addEventListener('visibilitychange',()=>{if(doc.hidden){cancelHold();releaseHeldClick();}});
+
     win.addEventListener('pointermove', event => {
       if (!session) return;
       pointer = {x: event.clientX, y: event.clientY};
@@ -263,7 +347,10 @@ export function createRangeSelect({grid, state, renderGrid = () => {}}) {
     // 文档级 pointerup 捕获兜住被 stopPropagation 吞掉的情况，pointerout 的
     // relatedTarget 为空说明指针已经离开本文档，直接收掉。
     doc.addEventListener('pointerup', finish, true);
-    doc.addEventListener('pointerout', event => { if (session && !event.relatedTarget) cleanup(); }, true);
+    doc.addEventListener('pointerout', event => {
+      if(!event.relatedTarget)cancelHold();
+      if (session && !event.relatedTarget) cleanup();
+    }, true);
 
     win.addEventListener('pointercancel', () => { if (session) cleanup(); });
     // Esc 放弃这次框选，已入库的选择不动。
@@ -273,9 +360,13 @@ export function createRangeSelect({grid, state, renderGrid = () => {}}) {
     doc.addEventListener('visibilitychange', () => { if (doc.hidden && session) cleanup(); });
     win.addEventListener('pagehide', () => { if (session) cleanup(); });
     // 路由切到画布/下载页：网格虽然还在 DOM 里但已隐藏，框必须立刻消失。
-    new MutationObserver(() => { if (session && onCanvas()) cleanup(); })
+    new MutationObserver(() => {
+      cancelHold();
+      if (session && onCanvas()) cleanup();
+      if(selectionMode&&state.route!=='library')exitSelectionMode();
+    })
       .observe(doc.body, {attributes: true, attributeFilter: ['data-route']});
   }
 
-  return {setup, onCheckboxChange, syncSelection: applySelectionUI};
+  return {setup, onCheckboxChange, syncSelection: applySelectionUI,exitSelectionMode};
 }

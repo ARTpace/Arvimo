@@ -1,3 +1,4 @@
+import { drawingPathData, drawingDash } from '../../utils/drawingGeometry';
 /**
  * compose.ts —— 画布快照合成器：把元素烘焙进离屏 canvas（PNG）。
  * v1 覆盖：image（旋转/透明度）、shape、line/arrow、path、text、frame；其余卡类型画占位块。
@@ -160,15 +161,14 @@ const drawElement = (ctx: CanvasRenderingContext2D, element: Element, images: Ma
     }
     case 'path': {
       const path = element as PathElement;
-      if (path.points.length > 1) {
+      if (path.points.length > 0) {
         ctx.strokeStyle = path.strokeColor;
         ctx.lineWidth = path.strokeWidth;
         ctx.lineCap = 'round';
         ctx.lineJoin = 'round';
-        ctx.beginPath();
-        ctx.moveTo(path.points[0].x, path.points[0].y);
-        for (const point of path.points.slice(1)) ctx.lineTo(point.x, point.y);
-        ctx.stroke();
+        ctx.setLineDash(drawingDash(path)?.split(' ').map(Number) ?? []);
+        ctx.stroke(new Path2D(drawingPathData(path)));
+        ctx.setLineDash([]);
       }
       break;
     }

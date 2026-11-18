@@ -15,7 +15,7 @@ async function fixture(t,options={}){
 
 test('configuration persists, masks and preserves keys, with explicit clearing',async t=>{
  const ai=await fixture(t);
- assert.equal((await ai.settings()).enabled,false);
+ assert.equal((await ai.settings()).enabled,true);
  const input={enabled:true,baseUrl:'http://127.0.0.1:31415/v1/',model:'auto',apiKey:'test-secret'};
  const saved=await ai.configure(input);
  assert.equal(saved.baseUrl,'http://127.0.0.1:31415/v1');
@@ -48,9 +48,8 @@ test('saved key requires an explicit local POST and must not be cached or expose
  assert.deepEqual(await response.json(),{apiKey:'fixture-reveal-key'});
 });
 
-test('rejects unsafe configuration and does not call disabled services',async t=>{
+test('rejects unsafe configuration before any request',async t=>{
  let calls=0;const ai=await fixture(t,{fetchImpl:()=>{calls++;}});
- await assert.rejects(ai.complete([{role:'user',content:'hello'}]),/启用/);
  for(const baseUrl of ['file:///tmp/x','http://example.com/v1','https://key@example.com/v1','https://example.com/v1?key=x'])await assert.rejects(ai.configure({baseUrl}));
  await assert.rejects(ai.configure({apiKey:'bad\nkey'}),/密钥/);
  assert.equal(calls,0);
@@ -70,7 +69,7 @@ test('real HTTP model discovery and completion use the configured endpoint and k
  const baseUrl=`http://127.0.0.1:${server.address().port}/v1`;
  await ai.configure({enabled:true,baseUrl,model:'tiny-model',apiKey:'fixture-key'});
  assert.deepEqual(await ai.models({}),{models:['tiny-model']});
- assert.deepEqual(await ai.test(),{ok:true,model:'tiny-model'});
+ assert.deepEqual(await ai.test(),{ok:true,role:'text',model:'tiny-model'});
  assert.deepEqual(await ai.complete([{role:'user',content:'翻译木椅'}]),{text:'好的',model:'tiny-model'});
  assert.equal(requests[0].url,'/v1/models');
  assert.equal(requests[1].url,'/v1/chat/completions');

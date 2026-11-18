@@ -1,3 +1,4 @@
+import { drawingPathData, drawingDash } from '../utils/drawingGeometry';
 import React, {useMemo} from 'react';
 import type {Board} from '../types';
 import {getElementBounds} from '../utils/canvasUtils';
@@ -33,8 +34,8 @@ export const BoardThumbnail = React.memo(({board, label}: {board: Board; label: 
                 opacity={element.opacity ?? 1} preserveAspectRatio="xMidYMid meet"
                 transform={element.rotation ? `rotate(${element.rotation} ${element.x + element.width / 2} ${element.y + element.height / 2})` : undefined}/>;
             if (element.type === 'path') return <path key={element.id}
-                d={element.points.map((point, index) => `${index ? 'L' : 'M'} ${point.x} ${point.y}`).join(' ')}
-                stroke={element.strokeColor} strokeWidth={element.strokeWidth} opacity={element.opacity ?? 1}
+                d={drawingPathData(element)}
+                stroke={element.strokeColor} strokeWidth={element.strokeWidth} strokeDasharray={drawingDash(element)} opacity={element.opacity ?? 1}
                 fill="none" strokeLinecap="round" strokeLinejoin="round"/>;
             return null;
         })}

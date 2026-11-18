@@ -18,7 +18,7 @@ function setStatus(node, message, bad = false) {
  * ask() 是确认弹窗缝（默认 window.confirm），测试可注入以免阻塞。
  */
 export function createTeamSettings({toast = () => {}, ask, fetchFn} = {}) {
-  const confirmWith = message => ask ? ask(message) === true
+  const confirmWith = async message => ask ? await ask(message) === true
     : typeof globalThis.confirm === 'function' && globalThis.confirm(message) === true;
   const call = (url, options) => teamRequest(url, {...options, fetchFn});
 
@@ -165,7 +165,17 @@ export function createTeamSettings({toast = () => {}, ask, fetchFn} = {}) {
   async function saveSession(session, memberId) {
     if (!local || sessionBusy || session.expires <= Date.now()) return;
     if (memberId && !members.some(row => row.member_id === memberId && !row.disabled)) return;
-    if (memberId && !confirmWith(`已通过可信渠道核实「${session.username}」的会话 ${session.id}？批准后将获得所选成员权限。`)) return;
+    // 批准要二次确认：弹窗是异步的，先把 sessionBusy 立起来 —— 否则弹窗开着的时候
+    // 还能再点一次「批准 / 撤销」，同一会话会被提交两遍。
+    if (memberId) {
+      sessionBusy = true;
+      renderSessions({sessions});
+      if (!await confirmWith(`已通过可信渠道核实「${session.username}」的会话 ${session.id}？批准后将获得所选成员权限。`)) {
+        sessionBusy = false;
+        renderSessions({sessions});
+        return;
+      }
+    }
     sessionBusy = true;
     renderSessions({sessions});
     setStatus(sessionStatus, '保存审批中…');
@@ -269,7 +279,7 @@ export function createTeamSettings({toast = () => {}, ask, fetchFn} = {}) {
       remove.innerHTML = icon('trash');
       remove.disabled = !permissions.manage;
       remove.onclick = async () => {
-        if (!confirmWith(`删除成员「${row.name}」？该访客下次访问会退回只读。`)) return;
+        if (!await confirmWith(`删除成员「${row.name}」？该访客下次访问会退回只读。`)) return;
         setStatus(memberStatus, '删除中…');
         try {
           await call('/api/library/members', {method: 'DELETE', search: `?id=${encodeURIComponent(row.member_id)}`});
@@ -315,7 +325,7 @@ export function createTeamSettings({toast = () => {}, ask, fetchFn} = {}) {
       restore.textContent = '恢复';
       restore.disabled = !permissions.restore;
       restore.onclick = async () => {
-        if (!confirmWith(`把资产库恢复到 ${row.name} 这份快照？\n当前库会被覆盖，系统会先自动留一份「恢复前」的备份。所有设备需要刷新页面。`)) return;
+        if (!await confirmWith(`把资产库恢复到 ${row.name} 这份快照？\n当前库会被覆盖，系统会先自动留一份「恢复前」的备份。所有设备需要刷新页面。`)) return;
         setStatus(backupStatus, '恢复中…');
         restore.disabled = true;
         try {

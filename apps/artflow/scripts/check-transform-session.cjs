@@ -329,6 +329,10 @@ const runSourceGuards = () => {
   );
   assert.match(interactionSource, /if \(isTransformGesture\(mode\)\) return;/, '滑出画布不得结束变换手势');
   const trackRegion = interactionSource.slice(interactionSource.indexOf('const beginGlobalTransformGesture'));
+  assert.equal((trackRegion.match(/if \(isDrawing\(\) \|\| !fromCanvas\(event\)\) liveWindowDragHandlersRef\.current\?\.move\(event\);/g) || []).length, 2,
+    'drawing moves and release coordinates must be captured even inside canvas');
+  assert.match(interactionSource, /e\.nativeEvent\?\.type === 'mousemove' && windowDragCleanupRef\.current[\s\S]*?interactionMode\.current === 'erase'\)\) return;/,
+    'React bubbling must not duplicate captured drawing samples');
   assert.match(trackRegion, /owner\.addEventListener\('mousemove', onMove, true\)/);
   assert.match(trackRegion, /owner\.addEventListener\('mouseup', onUp, true\)/);
   assert.match(trackRegion, /owner\.addEventListener\('blur', onBlur\)/);
@@ -337,15 +341,16 @@ const runSourceGuards = () => {
   // 逐行白名单：文件里剩下的 setElements 只允许这几种身份，变换热路径一帧都不许有。
   const allowedSetElements = [
     /setElements\(prev => prev\.map\(element => \(element\.id === preview\.id \? preview : element\)\), false\)/, // 无通道回落
-    /setElements\(prev => \[\.\.\.prev, new(Path|Shape|Arrow|Line)\], false\)/, // 绘制起手创建（每手势一次）
+    /setElements\(prev => \[\.\.\.prev, .*new(Path|Shape|Arrow|Line)\], false\)/, // 绘制起手创建（每手势一次，含会话组）
     /setElements\(prev => \[newFrame, \.\.\.prev\], false\)/, // Frame 起手创建（每手势一次）
-    /setElements\(prev => prev\.filter\(el => !idsToDelete\.has\(el\.id\)\), false\)/, // 橡皮擦（非变换手势，本批不在范围内）
+    /setElements\(previous => \{/, // 局部橡皮擦：每帧合并全部扫掠样本，一次写入
+    /setElements\(drawingGestureBeforeRef\.current,false\)/, // Escape 回滚本次绘制或擦除
     /setElements\(prev => \{/, // 无拖动通道的旧拖动路径（非变换手势）
   ];
   const setElementsLines = interactionSource
     .split('\n')
     .filter(line => line.includes('setElements('));
-  assert.equal(setElementsLines.length, 8, 'setElements 的落点数量变了：逐帧写文档可能被重新引入');
+  assert.equal(setElementsLines.length, 9, 'setElements 的落点数量变了：逐帧写文档可能被重新引入');
   for (const line of setElementsLines) {
     assert.ok(
       allowedSetElements.some(pattern => pattern.test(line.trim())),
@@ -357,7 +362,7 @@ const runSourceGuards = () => {
     '绘制起手创建必须仍是"每手势一次"');
   assert.equal(setElementsLines.filter(line => /element\.id === preview\.id \? preview : element/.test(line)).length, 1,
     '无通道回落的逐帧写入只允许出现在 publishGesturePreview 里');
-  assert.equal(setElementsLines.filter(line => /idsToDelete/.test(line)).length, 1, '橡皮擦路径（本批不在范围）');
+  assert.equal(setElementsLines.filter(line => /setElements\(previous =>/.test(line)).length, 1, '橡皮擦每帧只允许一个批量写入点');
   assert.equal(setElementsLines.filter(line => /prev => \{/.test(line)).length, 1, '无拖动通道的旧拖动路径（非变换手势）');
   // 各变换分支体内一个字节的文档写入都不能有（分支边界用真实源码标记切）。
   const sliceBetween = (from, to) => {

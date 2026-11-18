@@ -1,4 +1,5 @@
 import type { Board } from '../types';
+import { createNewBoard } from './canvasUtils';
 
 type Update<T> = T | ((previous: T) => T);
 export interface CanvasDocumentState {
@@ -32,6 +33,13 @@ export function createCanvasDocumentState(initial: Board[]) {
   };
   return {
     getSnapshot: () => current,
+    // An empty saved project is valid; create a destination only when adding content.
+    ensureActiveBoard: () => {
+      if (current.boards.some(board => board.id === current.activeBoardId)) return;
+      const board = current.boards[0] ?? createNewBoard('Board 1');
+      if (!current.boards.length) setBoards([board]);
+      publish({ ...current, activeBoardId: board.id });
+    },
     subscribe: (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
     revision: (boardId: string) => revisions.get(boardId) ?? -1,
     setBoards,

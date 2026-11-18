@@ -24,7 +24,7 @@ export function createBrowserDelivery({storage,download,defaultEnabled=false,for
 }
 
 export async function fetchBrowserAsset(id,{fetch:request=globalThis.fetch}={}){
- const response=await request(`/api/downloads/tasks/${id}/file`,{credentials:'same-origin',cache:'no-store'});
+ const response=await request(`/api/downloads/tasks/${id}/file`,{credentials:'same-origin',cache:'no-store',headers:{'X-SFX-Local':'1'}});
  if(!response.ok||!response.headers.get('content-type')?.includes('application/zip')){
   const data=await response.json().catch(()=>({}));throw Error(data.error||`资产下载失败（HTTP ${response.status}），请检查登录状态`);
  }

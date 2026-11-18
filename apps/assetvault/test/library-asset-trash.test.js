@@ -42,6 +42,14 @@ test('trash / restore 的 model 可选，uid 以 op 为准；patch 仍禁止改 
   assert.throws(() => normalizeAssetOps({op: 'asset:unknown', uid: a}), AssetOpRejected);
 });
 
+// ------------------------------------------------------------------ 单卡删除路径守卫
+test('单卡右键「移入回收站」必须同步到服务端，否则刷新后服务端目录会把记录合并回来', () => {
+  const src = fs.readFileSync(new URL('../src/library/app.js', import.meta.url), 'utf8');
+  const fn = src.match(/async function removeAssetCard\(uid\)\{([\s\S]*?)\n\}/);
+  assert.ok(fn, '能定位到 removeAssetCard 单卡删除函数');
+  assert.match(fn[1], /trashOnServer\(\[uid\]\)/, '单卡路径必须像批量路径一样写 asset:trash 到 DB');
+});
+
 // ------------------------------------------------------------------ 翻译层
 test('作废 / 恢复是纯移动 → 拆成定点 op，不回传整块目录', () => {
   const trash = translateStateChange(state([A, B]), state([B], [trashedA]));

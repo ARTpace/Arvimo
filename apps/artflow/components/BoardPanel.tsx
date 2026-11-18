@@ -29,6 +29,7 @@ const BoardItem: React.FC<{
     const [isEditing, setIsEditing] = useState(false);
     const [name, setName] = useState(board.name);
     const [menuOpen, setMenuOpen] = useState(false);
+    const [confirmDelete, setConfirmDelete] = useState(false);
     const inputRef = useRef<HTMLInputElement>(null);
     const menuRef = useRef<HTMLDivElement>(null);
 
@@ -47,6 +48,7 @@ const BoardItem: React.FC<{
         const handleClickOutside = (event: MouseEvent) => {
             if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
                 setMenuOpen(false);
+                setConfirmDelete(false);
             }
         };
         document.addEventListener('mousedown', handleClickOutside);
@@ -63,6 +65,10 @@ const BoardItem: React.FC<{
     };
     
     const handleMenuAction = (action: 'rename' | 'duplicate' | 'delete') => {
+        if (action === 'delete') {
+            setConfirmDelete(true);
+            return;
+        }
         setMenuOpen(false);
         switch (action) {
             case 'rename':
@@ -70,11 +76,6 @@ const BoardItem: React.FC<{
                 break;
             case 'duplicate':
                 onDuplicate();
-                break;
-            case 'delete':
-                if (window.confirm(t('board.deleteConfirm', board.name))) {
-                    onDelete();
-                }
                 break;
         }
     };
@@ -105,17 +106,25 @@ const BoardItem: React.FC<{
                
                 <div className="relative" ref={menuRef}>
                     <button 
-                        onClick={(e) => { e.stopPropagation(); setMenuOpen(p => !p); }} 
+                        onClick={(e) => { e.stopPropagation(); setConfirmDelete(false); setMenuOpen(p => !p); }}
                         className="p-1 rounded-full opacity-0 group-hover:opacity-100 hover:bg-white/20 transition-opacity"
                     >
                         <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="2"/><circle cx="12" cy="5" r="2"/><circle cx="12" cy="19" r="2"/></svg>
                     </button>
                     {menuOpen && (
-                        <div className="absolute right-0 bottom-full mb-1 z-10 w-32 bg-[var(--bp-ui-surface-strong)] text-[var(--bp-ui-text)] rounded-md shadow-lg border border-[var(--bp-ui-border)] py-1 text-sm">
+                        <div onClick={event => event.stopPropagation()} onKeyDown={event => { if (event.key === 'Escape') { event.stopPropagation(); setMenuOpen(false); setConfirmDelete(false); } }} className={`absolute right-0 bottom-full mb-1 z-10 ${confirmDelete ? 'w-56' : 'w-32'} bg-[var(--bp-ui-surface-strong)] text-[var(--bp-ui-text)] rounded-md shadow-lg border border-[var(--bp-ui-border)] py-1 text-sm`}>
+                            {confirmDelete ? <>
+                                <p className="px-3 py-2 text-xs leading-relaxed">{t('board.deleteConfirm', board.name)}</p>
+                                <div className="flex gap-2 px-3 pb-2">
+                                    <button onClick={() => setConfirmDelete(false)} className="flex-1 rounded px-2 py-1.5 hover:bg-white/10">{t('common.cancel')}</button>
+                                    <button onClick={() => { setMenuOpen(false); setConfirmDelete(false); onDelete(); }} className="flex-1 rounded bg-red-500/15 px-2 py-1.5 text-red-400 hover:bg-red-500/25">{t('common.delete')}</button>
+                                </div>
+                            </> : <>
                             <button onClick={() => handleMenuAction('rename')} className="block w-full text-left px-3 py-1.5 hover:bg-white/10">{t('common.rename')}</button>
                             <button onClick={() => handleMenuAction('duplicate')} className="block w-full text-left px-3 py-1.5 hover:bg-white/10">{t('common.duplicate')}</button>
                             <div className="my-1 border-t border-white/10"></div>
                             <button onClick={() => handleMenuAction('delete')} className="block w-full text-left px-3 py-1.5 hover:bg-red-500/20 text-red-400">{t('common.delete')}</button>
+                            </>}
                         </div>
                     )}
                 </div>

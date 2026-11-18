@@ -14,4 +14,8 @@ test('旧数据路径为目录联接时，真实目录加锁且阻止第二个�
  assert.equal(manager.dataDir,await fs.realpath(real));
  const owner=JSON.parse(await fs.readFile(path.join(real,'manager.lock'),'utf8'));assert.equal(owner.pid,process.pid);
  await assert.rejects(new DownloadManager({dataDir:real,defaultFolder:path.join(dir,'downloads'),autoStart:false}).init(),/另一个服务使用/);
+ assert.deepEqual(JSON.parse(await fs.readFile(path.join(real,'manager.lock'),'utf8')),owner,'重新核实期间仍在使用的锁不得被删除或替换');
+ await manager.close();
+ manager=await new DownloadManager({dataDir:real,defaultFolder:path.join(dir,'downloads'),autoStart:false}).init();
+ assert.equal(manager.dataDir,await fs.realpath(real),'原服务退出后允许正常重启');
 });
