@@ -60,8 +60,52 @@ export function setupSidebarCollapse() {
 
   apply(collapsed);
   if (!button) return;
+  setupCanvasSidebarReveal(root);
   button.addEventListener('click', () => {
     apply(!collapsed, true);
     try { localStorage.setItem(KEY, collapsed ? '1' : '0'); } catch { /* 存不了就只在本次生效 */ }
   });
+}
+
+// 画布中的导航是临时展开，不改用户保存的宽栏/图标栏偏好。
+export function setupCanvasSidebarReveal(root=document.documentElement) {
+  const sidebar=document.getElementById('sidebar');
+  if(!sidebar)return;
+  let openTimer=0,closeTimer=0;
+  const move=(x,target,buttons=0)=>{
+    if(document.body.dataset.route!=='canvas')return;
+    // HUD 位于画布左缘时不能被导航抢走指针；任何拖动期间也不能改变 iframe 的视口位置。
+    if(buttons||target?.closest?.('[data-perf-hud]')){
+      clearTimeout(openTimer);openTimer=0;
+      clearTimeout(closeTimer);closeTimer=0;
+      return;
+    }
+    const open=root.classList.contains('canvas-nav-open');
+    const near=x>=0&&(x<=72||(open&&x<=sidebar.getBoundingClientRect().right+32)||sidebar.contains(target));
+    if(near){
+      clearTimeout(closeTimer);closeTimer=0;
+      if(!open&&!openTimer)openTimer=setTimeout(()=>{
+        openTimer=0;
+        if(document.body.dataset.route==='canvas')root.classList.add('canvas-nav-open');
+      },80);
+    }else{
+      clearTimeout(openTimer);openTimer=0;
+      if(open&&!closeTimer)closeTimer=setTimeout(()=>{
+        closeTimer=0;root.classList.remove('canvas-nav-open');
+      },550);
+    }
+  };
+  const onPointer=event=>move(event.clientX,event.target,event.buttons);
+  window.addEventListener('pointermove',onPointer,{passive:true});
+  window.addEventListener('pointerdown',onPointer,{passive:true});
+  // iframe 内的指针事件不会冒泡到宿主；直接监听同源画布，不铺遮挡点击的透明热区。
+  const bindFrame=frame=>{
+    try{
+      const onFramePointer=event=>move(frame.getBoundingClientRect().left+event.clientX,event.target,event.buttons);
+      frame.contentDocument?.addEventListener('pointermove',onFramePointer,{passive:true});
+      frame.contentDocument?.addEventListener('pointerdown',onFramePointer,{passive:true});
+    }catch{}
+  };
+  document.querySelectorAll('iframe').forEach(bindFrame);
+  document.addEventListener('load',event=>{if(event.target instanceof HTMLIFrameElement)bindFrame(event.target);},true);
 }

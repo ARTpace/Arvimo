@@ -59,6 +59,22 @@ test('服务端页只补本地没有的资产，且标为 _remoteOnly 不写回 
   assert.equal(saved.models[0].uid, uids[0]);
 });
 
+test('同查询刷新保留已展示窗口，查询变化重置，删除后正确收缩',async()=>{
+ const state={models:[]},calls=[],updates=[];
+ let rows=['a','b','c','d','e'];
+ const paged=createPagedQuery({state,size:2,onUpdate:info=>updates.push(info),request:async(path,{body})=>{
+  calls.push(body.offset);return {uids:rows.slice(body.offset,body.offset+body.limit),items:[],total:rows.length};
+ }});
+ await paged.first({q:'x'});await paged.more();assert.equal(state.remotePaging.loaded,4);
+ const count=updates.length;calls.length=0;
+ await paged.refresh({q:'x'});
+ assert.deepEqual(calls,[0,2]);assert.equal(updates.length,count+1,'刷新过程中不先缩回首页');
+ assert.deepEqual(state.queryOrder,['a','b','c','d']);
+ rows=['b','c','e'];await paged.refresh({q:'x'});
+ assert.deepEqual(state.queryOrder,rows);assert.equal(state.remotePaging.hasMore,false);
+ await paged.refresh({q:'different'});assert.equal(state.remotePaging.loaded,2);
+});
+
 test('按页取数：first → more → 取完，queryUids / queryOrder / remotePaging 逐步累积', async () => {
   const state = {models: []};
   const updates = [];

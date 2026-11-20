@@ -31,6 +31,20 @@ function remapIds(value, ids) {
 
 export function createCanvasBoards({storage,dataDir,dropImporter,localImporter,onChanged=()=>{}}) {
   let queue=Promise.resolve();
+  let versionsReady=false;
+  const revision=()=>storage.withDbWrite(conn=>{
+    // 备份恢复可以在服务存活时替换为尚无版本表的旧数据库。
+    if(!versionsReady||!conn.all("SELECT name FROM sqlite_master WHERE type='table' AND name='canvas_sync_version'",[]).length){
+      conn.run('CREATE TABLE IF NOT EXISTS canvas_project (id INTEGER PRIMARY KEY CHECK(id=1), payload TEXT NOT NULL)',[]);
+      conn.run('CREATE TABLE IF NOT EXISTS canvas_sync_version (id INTEGER PRIMARY KEY CHECK(id=1), epoch TEXT NOT NULL, revision INTEGER NOT NULL)',[]);
+      conn.run('INSERT OR IGNORE INTO canvas_sync_version VALUES(1,?,0)',[randomUUID()]);
+      for(const table of ['assets','collections','collection_assets','canvas_project']){
+        for(const action of ['INSERT','UPDATE','DELETE'])conn.run(`CREATE TRIGGER IF NOT EXISTS canvas_sync_${table}_${action.toLowerCase()} AFTER ${action} ON ${table} BEGIN UPDATE canvas_sync_version SET revision=revision+1 WHERE id=1; END`,[]);
+      }
+    }
+    const row=conn.all('SELECT epoch,revision FROM canvas_sync_version WHERE id=1',[])[0];
+    return `"${row.epoch}:${row.revision}"`;
+  }).then(token=>{versionsReady=true;return token;});
   const albumEntries=new Map();
   async function refreshAlbums(){
     albumEntries.clear();
@@ -198,11 +212,21 @@ export function createCanvasBoards({storage,dataDir,dropImporter,localImporter,o
     });
     return {document:doc,links};
   }
-  return {
-    read: () => serial(async()=>{
+  const readCurrent=async()=>{
       await refreshAlbums();
       const saved=await load();if (saved.legacy) return saved.legacy;
       return storage.withDbWrite(conn=>{const before=JSON.stringify(saved.document),doc=reconcile(conn,saved.document);if(JSON.stringify(doc)!==before)persist(conn,doc,saved.links);return doc;});
+  };
+  return {
+    read: () => serial(readCurrent),
+    readVersioned: validator=>serial(async()=>{
+      const token=await revision();
+      // 本地图集会随磁盘变化，继续走扫描/合并；无图集时不反复解析整个文档。
+      if(validator===token&&!albumEntries.size)return {etag:token,unchanged:true};
+      const document=await readCurrent();
+      const after=await revision();
+      // 库侧写入可在两个事务之间发生；不能给旧读视图盖上新版本，下一轮强制重读。
+      return {etag:after===token?token:`"pending-${randomUUID()}"`,document};
     }),
     save: input => serial(async()=>{
       await refreshAlbums();

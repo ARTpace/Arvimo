@@ -4,7 +4,7 @@ AssetVault 接入的平台分三类：**3D 资产平台**（能搜索、下载�
 
 数据源：`src/library/platforms.js`（3D 平台读 `PLATFORMS` + `PLATFORM_HOME` + `PLATFORM_KINDS`，图站读 `PICTURE_SITES`，分组读 `PICTURE_GROUP_ORDER`，UI 元素读 `UI_SITES`）。图站的官网地址由注册表里 `hosts` 的首项派生，简介取自各站 `hint`，改平台请改那里，本文档随之更新。
 
-## 一、3D 资产平台（8 个）
+## 一、3D 资产平台（9 个）
 
 | 名称 | 简介 | 官网 | 分类 | 提供内容 |
 | --- | --- | --- | --- | --- |
@@ -16,8 +16,9 @@ AssetVault 接入的平台分三类：**3D 资产平台**（能搜索、下载�
 | **Kenney** | CC0 游戏资源包，按主题与系列收集模型，适合快速搭建游戏原型。 | https://kenney.nl | 3D + 2D 素材 | 模型、图片 |
 | **FreeStylized** | 风格化模型、材质、天空盒与资源包，适合卡通场景及游戏制作。 | https://freestylized.com | 风格化资源 | 模型 |
 | **Polyfork** | 程序化低模库：每个资产由参数生成，可调配色与比例；低模全站免费，商用免署名。 | https://polyfork.dev | 程序化低模 | 模型 |
+| **Civitai 模型** | AI 绘图社区的模型库：Checkpoint / LoRA / Embedding 按版本下载原文件，保留触发词与来源信息。 | https://civitai.com | AI 模型 | 模型（需 API key） |
 
-八个平台都支持关键词搜索。链接解析方面，Sketchfab 与 ArtStation 有专门的解析器（模型页 / 作者页 / 作品页），其余平台粘贴链接会落到通用网页解析，不保证能对得上 —— 想拿资源优先用关键词。
+九个平台都支持关键词搜索。链接解析方面，Sketchfab、ArtStation 与 Civitai 模型页有专门的解析器，其余平台粘贴链接会落到通用网页解析，不保证能对得上 —— 想拿资源优先用关键词。Civitai 的原文件下载需要在「设置 → 平台模块」填写 API key；关键词检索走公开接口，不需要 key。
 
 ArtStation / Poly Haven / ambientCG / Kenney 这四家在「图片」模式下会以镜像卡再出现一次（视角换成参考图 / 材质 / 精灵图），同一个平台开关两边同步。
 

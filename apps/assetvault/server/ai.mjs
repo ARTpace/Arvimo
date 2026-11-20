@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import {createSearchTranslator} from './ai-search.mjs';
+import {createAiHunt} from './ai-hunt.mjs';
 
 const defaults={enabled:true,baseUrl:'http://127.0.0.1:31415/v1',model:'auto',embedModel:'',visionModel:'',apiKey:'',models:[],roles:{text:'',translate:'',vision:'',embed:''}};
 /* 功能 → 模型 的四条固定泳道。translate / vision 留空时沿用对话模型，
@@ -116,7 +117,7 @@ export function createAIService({file,fetchImpl=fetch,timeoutMs=30000}){
    const temp=file+'.tmp';
    try{await fs.mkdir(path.dirname(file),{recursive:true});await fs.writeFile(temp,JSON.stringify(config,null,2),{mode:0o600});await fs.rename(temp,file);}
    catch{throw Error('AI 设置保存失败，请检查本地目录权限');}
-   translator.clear();return publicConfig(config);
+   translator.clear();hunt.clear();return publicConfig(config);
   });
   pending=operation.catch(()=>{});return operation;
  }
@@ -150,7 +151,9 @@ export function createAIService({file,fetchImpl=fetch,timeoutMs=30000}){
   return {text,model:typeof data.model==='string'?data.model:target.model};
  }
  // 翻译、扩写走「搜索翻译」这条泳道；没单独指派时 resolveModel 会落回对话模型。
- const translator=createSearchTranslator({settings:async()=>publicConfig(await read()),complete:(messages,options)=>complete(messages,{...options,role:'translate'})});
+ const sharedPending=new Map();
+ const translator=createSearchTranslator({settings:async()=>publicConfig(await read()),complete:(messages,options)=>complete(messages,{...options,role:'translate'}),pending:sharedPending});
+ const hunt=createAiHunt({settings:async()=>publicConfig(await read()),complete,pending:sharedPending});
  /**
   * 向量化（OpenAI 兼容 /embeddings）。
   *
@@ -188,6 +191,8 @@ export function createAIService({file,fetchImpl=fetch,timeoutMs=30000}){
   translateSearch:query=>translator.translateSearch(query),
   expand:query=>translator.expand(query),
   parseLocal:query=>translator.parseLocal(query),
+  huntPlan:(input,available)=>hunt.plan(input,available),
+  rankSheet:input=>hunt.rank(input),
   visionSearch:input=>translator.visionSearch(input),
   brainstorm:theme=>translator.brainstorm(theme),
   tagAssets:arg=>translator.tagAssets(arg),

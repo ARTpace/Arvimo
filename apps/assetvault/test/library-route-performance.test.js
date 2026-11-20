@@ -6,6 +6,9 @@ import {parseHTML} from 'linkedom';
 import {esc} from '../src/library/html-esc.js';
 import {localAssetCategories} from '../src/library/local-filters.js';
 import {filterTagEntries,tagHitLabel} from '../src/library/tag-search.js';
+import {orderedCategories} from '../src/library/category-order.js';
+import {syncLocalFilterMarkup} from '../src/library/local-filter-dom.js';
+import {customCategoryFacets} from '../src/library/custom-categories.js';
 
 test('entering the library paints once with restored search; downloads do not paint hidden cards',()=>{
  const source=readFileSync(new URL('../src/library/app.js',import.meta.url),'utf8');
@@ -17,6 +20,7 @@ test('entering the library paints once with restored search; downloads do not pa
   state:{route:'discover',selected:new Set(),platform:'all'},searchMotionToken:0,routeQueries:new Map([['library','stone']]),routeScroll:new Map(),
   imageSearch:null,semanticSearch:null,searchHistory:null,downloads:null,
   galleryAvailable:()=>true,displayFor:()=> 'grid',platformById:()=>({placeholder:''}),icon:()=>'',refreshTopicStrip(){},renderStatus(){},counts(){},restoreRouteScroll(){},enterCanvas(){},
+  cancelPictureRequests(){},pageScroller:()=>({scrollTop:0}),
   renderGrid(){paints++;},localSearch:{reset(){},search(){searches++;assert.equal($('#asset-query').value,'stone');paints++;}}};
  vm.createContext(context);
  vm.runInContext(source.slice(source.indexOf('function route(name){'),source.indexOf('/** 平台决定')),context);
@@ -34,6 +38,7 @@ test('only the selected filter pane computes its contents; unchanged refresh pre
  const context={$,document,esc,icon:()=>'',TYPE_GROUPS:[],state:{route:'library',models:[{uid:'a',platform:'local',assetType:'image'}],selected:new Set()},
   ctx:{localPackages:()=>[],localEntries:()=>[],localTags:()=>{tags++;return ['wood'];}},
   ensureFacetVocab:()=>Promise.resolve(null),activeLocalTypeId:()=>'',
+  orderedCategories,syncLocalFilterMarkup,customCategoryFacets,
   localTypeFacets:()=>{types++;return [];},localAssetCategories,filterTagEntries,tagHitLabel,groupTagEntries:()=>[],renderGrid(){}};
  vm.createContext(context);
  vm.runInContext(source.slice(source.indexOf('const openTypeGroups='),source.indexOf('function placeFilters()')),context);
@@ -50,7 +55,7 @@ test('only the selected filter pane computes its contents; unchanged refresh pre
 
  test('forced asset scan refreshes server query scope before painting imported cards',async()=>{
  const source=readFileSync(new URL('../src/library/app.js',import.meta.url),'utf8');
- const calls=[];const context={state:{route:'library',onRemoteRefresh:async()=>calls.push('query')},$:()=>null,localFiles:{scan:async({force})=>{calls.push(force?'forced scan':'scan');return {packages:[],files:[]};}},renderGrid:()=>calls.push('paint')};
+ const calls=[];const context={visitor:false,collectModelFolders:()=>false,state:{route:'library',options:{},models:[],onRemoteRefresh:async()=>calls.push('query')},$:()=>null,localFiles:{scan:async({force})=>{calls.push(force?'forced scan':'scan');return {packages:[],files:[]};}},renderGrid:()=>calls.push('paint')};
  vm.createContext(context);vm.runInContext(source.slice(source.indexOf('async function scanLibraryFiles('),source.indexOf('// 阶段 3：本地库大批量')),context);
  await context.scanLibraryFiles(true);assert.deepEqual(calls,['query','forced scan','paint']);
  calls.length=0;await context.scanLibraryFiles(false);assert.deepEqual(calls,['scan','paint'],'background scans do not reset the current query page');

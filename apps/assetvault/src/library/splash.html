@@ -105,17 +105,20 @@ h1{margin:16px 0 0;font-size:22px;font-weight:700;letter-spacing:-.4px;
 
 .meta{display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin:15px 4px 0;font-size:11px;
   animation:rise-pop .62s cubic-bezier(.34,1.56,.64,1) .56s backwards}
-.msg{color:#627282;transition:opacity .22s ease,transform .22s ease}
-.msg.swap{opacity:0;transform:translateY(6px)}
+/* 文案切换只做淡入淡出 + 轻微缩放：不再用 translateY。整张卡片是垂直居中的，任何一行
+   产生高度或位移变化都会把进度条一起顶上去，所以这里的动画一律不许改布局。 */
+.msg{min-width:0;color:#627282;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  transition:opacity .22s ease}
+.msg.swap{opacity:0}
 .msg.unswap{animation:msg-pop .42s cubic-bezier(.34,1.56,.64,1)}
-@keyframes msg-pop{0%{opacity:0;transform:translateY(9px) scale(.9)}60%{opacity:1;transform:translateY(-2px) scale(1.03)}100%{opacity:1;transform:none}}
+@keyframes msg-pop{0%{opacity:0;transform:scale(.96)}60%{opacity:1;transform:scale(1.02)}100%{opacity:1;transform:none}}
 .pct{color:#c8f353;font-weight:650;font-variant-numeric:tabular-nums;letter-spacing:.4px;display:inline-block}
 .pct.bump{animation:pct-pop .35s cubic-bezier(.34,1.56,.64,1)}
 @keyframes pct-pop{0%{transform:scale(1)}45%{transform:scale(1.18)}100%{transform:scale(1)}}
-.tip{margin:18px 0 0;font-size:10px;line-height:1.85;color:#627282;
+/* 提示行固定占两行高度（37px = 2 × 10px × 1.85）：出错时要写长文案，但空着时也必须占位，
+   否则它一出现/消失，居中布局就会把进度条上下顶一截。 */
+.tip{margin:18px 0 0;height:37px;overflow:hidden;font-size:10px;line-height:1.85;color:#627282;
   animation:rise-pop .62s cubic-bezier(.34,1.56,.64,1) .64s backwards}
-/* 默认不写任何提示文案：只有出错时才由 splash.js 填字，空着就不占位置。 */
-.tip:empty{display:none}
 
 /* 粒子：柔光圆点 + 少量流光拖尾，带轻微重力弧线 */
 .spark{position:absolute;pointer-events:none;border-radius:50%;width:var(--s,5px);height:var(--s,5px);

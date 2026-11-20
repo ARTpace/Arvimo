@@ -84,8 +84,19 @@ const SPECS=[
  ]},
  // Fab 是后加的平台：index.html 的 #filters-fab、platforms.js 的 filters 映射、FILTER_ROWS
  // 都已登记，只有筛选树漏了这一行，导致它的价格/排序控件退回裸下拉框。补齐保持十站一致。
- {row:'#filters-fab',plate:{icon:'cube',label:'Fab',tone:'#e8b48c'},fields:[
-  {key:'free',label:'价格',icon:'check',checks:[{label:'仅免费',selector:'#fab-free'}]},
+ {row:'#filters-fab',fields:[
+  // 类型不再单独占一个分支：它已经是分类树的根行（母类 → 子类 → 子子类），
+  // 再列一遍就是同一批名字出现两次。控件仍留在 DOM 里当值容器，只是不画分支。
+  {key:'type',label:'类型',icon:'cube',hidden:true,control:'#fab-type'},
+  // 分类是四级树（类型/母类/子类/子子类），自绘下拉塞不下，走 content 挂自带面板；
+  // 隐藏 input 只用来让树的选中名显示在这个分支的角标上。
+  {key:'category',label:'分类',icon:'folder',open:true,content:['#fab-cat-value','#fab-cat-tree']},
+  // 卖家是卡片作者的落点：点作者跳过来时这里显示「谁 + ✕」，没有卖家筛选时按钮自己藏起来，
+  // 分支只剩一个「不限」角标（Fab 的 seller 参数是硬过滤，不给出口用户就卡在单人作品列表里）。
+  {key:'seller',label:'卖家',icon:'search',content:['#fab-seller-value','#fab-seller-clear']},
+  // 批量入库按钮挂在这一分支的末尾：跟「仅免费」同一件事（免费才能一键入库），
+  // 单独开一个分支反而多一次点击。
+  {key:'free',label:'价格',icon:'check',checks:[{label:'仅免费',selector:'#fab-free'}],actions:['#fab-claim']},
   {key:'sort',label:'排序',icon:'list',control:'#fab-sort'},
  ]},
 ];
@@ -129,13 +140,14 @@ function buildPanel({$,icon,host,spec}){
   label:field.label,
   icon:field.icon,
   open:!!field.open,
+  hidden:!!field.hidden,
   groups:field.groups||null,
   fold:!!field.fold,
   control:field.control?$(field.control):null,
   checks:(field.checks||[]).map(item=>({label:item.label,node:$(item.selector)})).filter(item=>item.node),
   content:(field.content||[]).map(selector=>$(selector)).filter(Boolean),
   actions:(field.actions||[]).map(selector=>$(selector)).filter(Boolean),
- })).filter(field=>field.control||field.checks.length||field.content.length);
+ })).filter(field=>field.control||field.checks.length||field.content.length||field.actions.length);
  if(!fields.length)return {refresh(){},setNarrow(){}};
 
  const reset=spec.reset?$(spec.reset):null;
@@ -150,7 +162,8 @@ function buildPanel({$,icon,host,spec}){
   tree.append(plate);
  }
  const views=fields.map(field=>buildField({field,icon,keep}));
- for(const view of views)tree.append(view.section);
+ // hidden 的字段只为把原生控件接进值容器（类型已经并进分类树，不再单独画分支）。
+ for(const view of views)if(!view.field.hidden)tree.append(view.section);
  if(reset){
   reset.className='filter-reset-icon';reset.innerHTML=icon('rotate');
   reset.title='重置筛选';reset.setAttribute('aria-label','重置筛选');
@@ -323,6 +336,12 @@ function buildField({field,icon,keep}){
    const box=el('span','ftree-box');box.innerHTML=icon('check');
    row.append(item.node,box,el('span','ftree-leaf-label',item.label));
    kids.append(row);
+  }
+  // 同一分支上的动作按钮（如 Fab 的「入库本页免费」）排在勾选项下面一行。
+  if(field.actions.length){
+   const actions=el('div','ftree-actions');
+   for(const node of field.actions){node.classList.add('ftree-native');actions.append(node);}
+   kids.append(actions);
   }
   sync=()=>{
    const picked=field.checks.filter(item=>item.node.checked).length;

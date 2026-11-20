@@ -543,7 +543,7 @@ export function createLibraryDb({Database, file, now = Date.now, onWarn = WARN} 
      * position ASC 还原顺序 —— 5.1 起新增资产的 position 由服务端分配，blob 的数组下标
      * 已经不代表真实顺序。坏 payload 只跳过这一行，绝不让一条脏数据拖垮整库启动。
      */
-    readCatalog() {
+    readCatalog({active = true} = {}) {
       const pick = state => {
         const rows = db.prepare('SELECT payload FROM assets WHERE state = ? ORDER BY position ASC, rowid ASC').all(state);
         const out = [];
@@ -554,7 +554,7 @@ export function createLibraryDb({Database, file, now = Date.now, onWarn = WARN} 
         }
         return out;
       };
-      return {models: pick('active'), trashed: pick('trashed')};
+      return {models: active ? pick('active') : [], trashed: pick('trashed')};
     },
     /**
      * ADR-09：启动按页取目录。readCatalog() 会把整表读进内存，只能用于合成读视图；

@@ -17,6 +17,9 @@ export function boardCollectHtml({icon, esc}) {
         <button type="button" class="primary" data-act="create-board">创建</button></div>
       <label class="bd-field"><span>收集关键词</span>
         <input type="text" class="bd-query" maxlength="300" placeholder="stone texture / 角色原画" aria-label="收集关键词"></label>
+      <div class="bd-row-line"><label class="bd-field bd-grow"><span>来源</span><select class="bd-scope" aria-label="查找来源"><option value="platform">平台</option><option value="local">资产库</option><option value="both">资产库 + 平台</option></select></label>
+        <label class="bd-field"><span>调用上限</span><input type="number" class="bd-budget" min="1" max="12" value="12" aria-label="平台调用上限"></label></div>
+      <label class="bd-field"><span>扩展词</span><input class="bd-queries" maxlength="602" placeholder="最多两项，用分号分隔" aria-label="扩展关键词"></label>
       <div class="bd-field"><span>平台 <small class="bd-platform-note"></small></span>
         <div class="bd-platforms" role="group" aria-label="采集平台"></div></div>
       <div class="bd-row-line">
@@ -59,7 +62,7 @@ export function ruleCardHtml({rule, icon, esc}) {
   return `<article class="bd-rule" data-id="${esc(rule.id)}" data-status="${esc(status)}">
     <div class="bd-rule-top"><i class="bd-status-dot"></i>
       <strong title="${esc(rule.name)}">${esc(rule.name)}</strong>
-      <small class="bd-rule-meta" title="${esc((rule.platforms || []).join(' / '))}">${esc(rule.boardName || '画板')} · ${esc(freq)} · ${rule.platforms?.length || 0} 站 · ${rule.totalAdded || 0} 条</small>
+      <small class="bd-rule-meta" title="${esc((rule.platforms || []).join(' / '))}">${esc(rule.boardName || '画板')} · ${esc(freq)} · ${rule.scope==='local'?'资产库':`${rule.scope==='both'?'资产库 + ':''}${rule.platforms?.length || 0} 站`} · ${rule.totalAdded || 0} 条</small>
       <span class="bd-rule-actions">
         <button type="button" class="icon-button" data-act="dry" data-id="${esc(rule.id)}" title="试运行预览（不写入）" aria-label="试运行">${icon('eye')}</button>
         <button type="button" class="icon-button" data-act="run" data-id="${esc(rule.id)}" title="立即收集一次" aria-label="立即收集">${icon('zap')}</button>

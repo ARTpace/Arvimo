@@ -78,7 +78,9 @@ export function initSearchMotion(panel,{notify}={}){
  input.addEventListener('keydown',event=>{if(event.key==='Enter'&&!event.isComposing)animate(kbd,'pressed');});
  kbd.addEventListener('animationend',()=>kbd.classList.remove('pressed'));
  clear.addEventListener('click',()=>{input.value='';input.dispatchEvent(new Event('input',{bubbles:true}));input.focus();sound(false,320);greet('已重置输入框');});
- mascot.addEventListener('click',()=>{blink();input.focus();notify?.({type:'greeting'});});
+ // 点小猫只是打个招呼：不再把焦点抢到搜索框（2026-11-20 用户反馈，点猫不该等于点搜索栏）。
+ // 想输入的话本来就会自己去点输入框，抢焦点还会顺带触发 focus 气泡与思考态，像被动弹窗。
+ mascot.addEventListener('click',()=>{blink();notify?.({type:'greeting'});});
  panel.addEventListener('change',event=>{
   if(event.target.id!=='search-platform')return;
   sync();sound(false,750);greet('已切换至 '+event.target.selectedOptions[0].textContent);

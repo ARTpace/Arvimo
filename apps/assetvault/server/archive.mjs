@@ -157,6 +157,10 @@ export async function verifyArchive(file,{uid,signal}={}){
    const declared=Array.isArray(info.files)?info.files:[];
    if(!declared.length)throw Error('ZIP 内没有登记的文件');
    for(const item of declared)if(!names.has(item.file))throw Error(`ZIP 内缺少已登记的文件：${item.file}`);
+  }else if(info.platform==='civitai'){
+   const declared=Array.isArray(info.files)?info.files:[];
+   if(!declared.length||![...names].some(name=>/\.(safetensors|ckpt|gguf|pt|pth|bin|onnx|zip)$/i.test(name)))throw Error('ZIP 内没有 Civitai 模型文件');
+   for(const item of declared)if(!names.has(item.file))throw Error(`ZIP 内缺少已登记的 Civitai 模型文件：${item.file}`);
   }else if(info.platform==='polyhaven'){
    if(![...names].some(name=>/\.(?:fbx|gltf|glb|blend|usdc|usd)$/i.test(name)))throw Error('ZIP 内没有 Poly Haven 的模型文件');
    for(const item of info.files||[])if(!names.has(item.file))throw Error(`ZIP 内缺少 Poly Haven 文件：${item.file}`);

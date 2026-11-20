@@ -59,16 +59,26 @@ export function createPagedQuery({request, state, onUpdate, onError, size = PAGE
       ...(smartCollectionId ? {id:smartCollectionId} : {}), uidScope:'page', limit:size, offset}});
   };
 
-  async function first(input) {
+  async function first(input, {preserveWindow = false} = {}) {
+    const target = preserveWindow && JSON.stringify(query) === JSON.stringify(input) ? Math.max(size,uids.length) : size;
     busy = true;
     const token = ++generation;
     try {
-      const data = await fetchPage(input, 0);
-      if (token !== generation) return; // 输入已经变了，丢弃过期响应
+      let data, offset = 0;
+      const next = [], items = [], seen = new Set();
+      do {
+        data = await fetchPage(input, offset);
+        if (token !== generation) return; // 输入已经变了，丢弃过期响应
+        const page = data.uids || [];
+        for(const uid of page)if(!seen.has(uid)){seen.add(uid);next.push(uid);}
+        items.push(...(data.items || []));
+        offset += page.length;
+        if(!page.length || offset >= (Number(data.total) || page.length))break;
+      } while(offset < target);
       query = input;
-      uids = [...(data.uids || [])];
+      uids = next;
       total = Number(data.total) || uids.length;
-      mergeRemoteModels(state, data.items);
+      mergeRemoteModels(state, items);
       publish(data, true);
     } catch (error) {
       if (token === generation) onError?.(error);
@@ -96,7 +106,7 @@ export function createPagedQuery({request, state, onUpdate, onError, size = PAGE
   }
 
   return {
-    first, more,
+    first, more, refresh: input => first(input, {preserveWindow:true}),
     /** 清除筛选或换查询时调用；onRemoteMore 是常驻回调，不在这里注销。 */
     reset() { ++generation; busy = false; query = null; uids = []; total = 0; state.remotePaging = null; },
     get busy() { return busy; },

@@ -37,8 +37,8 @@ function parseTranslation(text){
 function validEnglish(value){
  return !!value&&value.length<=200&&!chinese.test(value)&&!/[\r\n{}<>]/.test(value)&&/[a-z]/i.test(value);
 }
-export function createSearchTranslator({settings,complete}){
- const cache=new Map(),pending=new Map();let revision=0;
+export function createSearchTranslator({settings,complete,pending:sharedPending}){
+ const cache=new Map(),pending=sharedPending||new Map();let revision=0;
  return {
   clear(){revision++;cache.clear();pending.clear();},
   async translate(input){

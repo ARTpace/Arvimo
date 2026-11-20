@@ -149,7 +149,11 @@ export function normalizeArtstationProject(project){
     name:decodeEntities(String(project.title||'').trim()).slice(0,240)||`ArtStation 作品 ${hash}`,
     author:decodeEntities(String(project.user?.full_name||project.user?.username||'未知作者')).slice(0,100),
     username:String(project.user?.username||''),
-    thumbnail:coverUrl(project.smaller_square_cover_url),
+    // 两个入口的封面字段不同名：搜索接口给 `smaller_square_cover_url`，
+    // 而 `/users/<name>/projects.json` 完全不返回这个字段，封面只挂在 `cover` 对象上
+    // （`thumb_url` / `small_square_url` 都是方形版本）。只读前者的话，
+    // 按作者浏览出来整页缩略图都是空的，所以两种形状都要认。
+    thumbnail:coverUrl(project.smaller_square_cover_url||project.cover?.thumb_url||project.cover?.small_square_url),
     url:artworkUrl,artworkUrl,
     vertices:null,faces:null,likes:0,views:0,animations:0,
     // 只有内嵌 Marmoset Viewer 的作品能转成 GLB；搜索放开到全站之后，卡片必须能分辨

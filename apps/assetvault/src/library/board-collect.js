@@ -1,7 +1,7 @@
 import {showActionCard} from './action-card.js';
 // 智能收集面板：规则 CRUD / 试运行 / 立即收集 / 运行记录 / 待合并队列合并。
-// 所有写操作经 board-api，资产只在 syncPending() 里经 mergeModels → persistNow → ack 落地，
-// 保证「服务端采集结果」不会被前端整块保存覆盖，也不会因 ack 提前而丢数据。
+// 所有写操作经 board-api；合并必须经 mergeModels → persistNow → confirmSave → ack。
+// 保存失败保留服务端 pending，不提前确认。
 import {boardCollectHtml, hourOptions, ruleCardHtml, ruleDetailHtml, previewHtml} from './board-collect-template.js';
 
 const text = value => typeof value === 'string' ? value : (value === undefined || value === null ? '' : String(value));
@@ -9,7 +9,7 @@ const tokens = value => text(value).split(/[,，;；\s]+/).map(item => item.trim
 
 export function createBoardCollect({
   esc, icon, toast, api, store, state,
-  mergeModels, persistNow, renderGrid = () => {},
+  mergeModels, persistNow, confirmSave = async()=>{}, renderGrid = () => {},
   document: doc = globalThis.document,
 } = {}) {
   if (!api || !store || !state || !mergeModels || !persistNow) throw Error('智能收集面板缺少依赖');
@@ -28,7 +28,7 @@ export function createBoardCollect({
   let runs = [];
   let editingId = '';
   let ready = false;
-  let merging = false;
+  let merging = null;
   let pendingDelete = '';
 
   $('.bd-hour').innerHTML = hourOptions();
@@ -42,12 +42,16 @@ export function createBoardCollect({
   function formRule() {
     const chosen = [...$('.bd-platforms').querySelectorAll('.on')].map(node => node.dataset.id);
     return {
+      ...(rules.find(rule=>rule.id===editingId)||{}),
       ...(editingId ? {id: editingId} : {}),
       boardId: $('.bd-board').value,
       boardName: $('.bd-board').selectedOptions?.[0]?.textContent || '',
       name: $('.bd-query').value.trim().slice(0, 60) || '未命名收集规则',
       platforms: chosen,
       query: $('.bd-query').value.trim(),
+      scope: $('.bd-scope').value,
+      queries: $('.bd-queries').value.split(/[;；\n]/).map(q=>q.trim()).filter(Boolean),
+      maxCalls: Number($('.bd-budget').value),
       limit: Number($('.bd-limit').value) || 20,
       frequency: $('.bd-seg .on')?.dataset.value || 'manual',
       hour: Number($('.bd-hour').value) || 9,
@@ -56,7 +60,7 @@ export function createBoardCollect({
         formats: tokens($('.bd-formats').value),
         tags: tokens($('.bd-tags').value),
         excludeTags: tokens($('.bd-exclude').value),
-        kinds: [],
+        kinds: rules.find(rule=>rule.id===editingId)?.filters?.kinds||[],
       },
     };
   }
@@ -65,6 +69,10 @@ export function createBoardCollect({
     editingId = rule?.id || '';
     $('.bd-board').value = rule?.boardId || store.activeId || '';
     $('.bd-query').value = rule?.query || '';
+    $('.bd-scope').value=rule?.scope||'platform';
+    $('.bd-queries').value=(rule?.queries||[]).join('; ');
+    $('.bd-budget').value=String(rule?.maxCalls||12);
+    $('.bd-scope').onchange();
     $('.bd-limit').value = rule?.limit || 20;
     $('.bd-limit-value').textContent = $('.bd-limit').value;
     $('.bd-hour').value = String(rule?.hour ?? 9);
@@ -140,33 +148,36 @@ export function createBoardCollect({
   }
 
   /** 幂等：mergeModels 按 uid 覆盖，ack 失败可重放；必须保存成功后再 ack。 */
-  async function syncPending({quiet = false} = {}) {
-    if (merging) return 0;
-    merging = true;
-    try {
+  async function syncPending({quiet = false,strict = false} = {}) {
+    if(!merging)merging=(async()=>{
       const data = await api.pending();
       const models = Array.isArray(data.models) ? data.models : [];
       updatePending(models.length);
       if (!models.length) return 0;
       state.models = mergeModels(state.models, models);
-      persistNow();
+      if(persistNow()===false)throw Error('资产记录未保存，已保留待合并结果');
+      await confirmSave();
       await api.ack(models.map(model => model.uid));
       renderGrid();
       updatePending(0);
       if (!quiet) toast(`已合并 ${models.length} 个采集资产`);
       doc.dispatchEvent?.(new CustomEvent('assetvault:collect-changed', {detail: {merged: models.length}}));
       return models.length;
+    })().finally(()=>{merging=null;});
+    try {return await merging;
     } catch (error) {
       if (!quiet) toast(error?.message || '合并采集结果失败');
+      if(strict)throw error;
       return 0;
-    } finally { merging = false; }
+    }
   }
 
   async function saveRule() {
     const rule = formRule();
     if (!rule.boardId) { toast('先选择或新建一个目标画板'); return; }
-    if (!rule.platforms.length) { toast('至少选一个平台'); return; }
+    if (rule.scope!=='local'&&!rule.platforms.length) { toast('至少选一个平台'); return; }
     if (!rule.query) { toast('填一个收集关键词'); return; }
+    if(rule.queries.length>2||rule.queries.some(q=>q.length>300)||!Number.isInteger(rule.maxCalls)||rule.maxCalls<1||rule.maxCalls>12){toast('扩展词最多两项，平台调用上限为 1–12');return;}
     try {
       await api.saveRule(rule);
       toast(editingId ? '规则已更新' : '规则已保存');
@@ -261,6 +272,7 @@ export function createBoardCollect({
     if (card && !event.target.closest?.('[data-act]')) renderDetail(card.closest('.bd-rule').dataset.id);
   });
 
+  $('.bd-scope').onchange=()=>{const local=$('.bd-scope').value==='local';$('.bd-platforms').parentElement.hidden=local;$('.bd-budget').disabled=local;};
   dialog.addEventListener('input', event => {
     if (event.target.classList.contains('bd-limit')) $('.bd-limit-value').textContent = event.target.value;
   });

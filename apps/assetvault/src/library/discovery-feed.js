@@ -1,3 +1,4 @@
+import {PICTURE_FIRST_PAGE} from './picture-page.js';
 // Starting a discovery request: one feed page, one keyword across every feed, one pasted link.
 //
 // The three entry points differ only in where the request comes from — a "load more" click, the
@@ -36,18 +37,47 @@ const pictureKey=(platform,url)=>`${platform}|${url}`;
 let pictureStoreTimer=0;
 function savePictureCache(platform,url,data){
  const key=pictureKey(platform,url);
+ data={...data,fetchedAt:data.fetchedAt||pictureCache.get(key)?.data.fetchedAt||pictureCache.get(key)?.usedAt||Date.now()};
  pictureCache.delete(key);
  pictureCache.set(key,{platform,url,data,usedAt:Date.now()});
  while(pictureCache.size>PICTURE_CACHE_MAX)pictureCache.delete(pictureCache.keys().next().value);
  clearTimeout(pictureStoreTimer);
  // 写盘压一下：连续切平台时不必每次都序列化几万个字符。
- pictureStoreTimer=setTimeout(()=>{
-  try{localStorage.setItem(PICTURE_STORE,JSON.stringify([...pictureCache.entries()].map(([key,entry])=>({key,...entry}))));}
+ pictureStoreTimer=setTimeout(flushPictureCache,500);
+}
+function flushPictureCache(){
+ clearTimeout(pictureStoreTimer);pictureStoreTimer=0;
+  try{localStorage.setItem(PICTURE_STORE,JSON.stringify([...pictureCache.entries()].slice(-4).map(([key,entry])=>{
+    const items=(entry.data.items||[]).slice(0,240),clipped=items.length<(entry.data.items||[]).length;
+    return {key,...entry,data:{...entry.data,items,limit:Math.min(Number(entry.data.limit)||items.length,240),truncated:entry.data.truncated||clipped,scrollTop:clipped?0:entry.data.scrollTop}};
+   })));}
   catch{/* 超配额就当没有持久化，内存缓存仍然生效 */}
- },500);
+}
+/** Keep continuation and scroll in the existing bounded cache, never serialize live controllers. */
+export function rememberPictureSnapshot(ps){
+ if(!ps||(!(ps.items||[]).length&&!(ps.boards||[]).length))return;
+ const {controller,moreController,busy,loadingMore,error,status,lastError,retryAt,...data}=ps;
+ savePictureCache(ps.platform,ps.url,{...data,busy:false,error:false,status:''});
+}
+export function cancelPictureRequests(state){
+ pictureToken++;
+ const ps=state.pictureSite;
+ if(!ps)return;
+ ps.controller?.abort();ps.moreController?.abort();
+ ps.controller=null;ps.moreController=null;ps.loadingMore=false;ps.busy=false;
+ if(typeof document!=='undefined')ps.scrollTop=document.getElementById('app-scroll')?.scrollTop||0;
+ rememberPictureSnapshot(ps);
+}
+function restorePictureScroll(ps,state){
+ if(!ps?.scrollTop||typeof requestAnimationFrame==='undefined')return;
+ requestAnimationFrame(()=>requestAnimationFrame(()=>{
+  if(state.pictureSite!==ps||state.route!=='discover')return;
+  document.getElementById('app-scroll')?.scrollTo({top:ps.scrollTop,behavior:'instant'});
+ }));
 }
 /** 这一屏到底变了没有：只比对会影响画面的字段，避免后台重抓回来把同一批图重绘一遍。 */
-const pictureSignature=data=>`${data?.mode||''}|${(data?.items||[]).map(it=>it.url).join('|')}|${(data?.boards||[]).map(b=>b.id).join('|')}`;
+const pictureSignature=data=>JSON.stringify([data?.mode,data?.items||[],data?.boards||[],data?.title,data?.author,data?.cover,data?.albums||[],data?.user||null]);
+const pictureCacheAge=entry=>Date.now()-(entry?.data.fetchedAt||entry?.usedAt||0);
 /** 首帧用：把上次那一屏直接从缓存取出来铺进去，不发任何请求。
  *  刷新页面时结果本来就在 localStorage 里，没道理先空一屏、再等异步把图补回来 ——
  *  那样虽然数据是缓存命中，用户看到的仍然是「图片又加载了一次」。 */
@@ -60,12 +90,13 @@ export function restorePictureSnapshot(platform){
 /** 上次看过的那个图站页面：刷新页面 / 切回该站时优先恢复它，而不是重新拉首页推荐。 */
 function lastPictureEntry(platform){
  let best=null;
- for(const entry of pictureCache.values())if(entry.platform===platform&&(!best||entry.usedAt>best.usedAt))best=entry;
+ for(const entry of pictureCache.values())if(entry.platform===platform&&(!best||entry.usedAt>=best.usedAt))best=entry;
  return best;
 }
 
 // 搜索条件属于整个发现页；清除时也必须让隐藏平台及在途响应失效。
 export function resetDiscoveryFeeds(state){
+ cancelPictureRequests(state);
  boardTrail=[];
  for(const f of Object.values(state.feeds)){
   f.controller?.abort();f.token++;f.controller=null;f.busy=false;
@@ -174,7 +205,7 @@ function startSearch({record=false}={}){
  ctx.markQueryActive();        // 记住「框里现在是有内容的」，删字时才认得出这是一次清空
  const raw=$('#asset-query').value.trim();
  resetDiscoveryFeeds(state);
- if(/^https?:\/\//i.test(raw))return submitLink(raw);
+ if(/^https?:\/\//i.test(routeLink(raw).url))return submitLink(raw);
  // 图站里能搜的那几家（Pinterest / 花瓣…）：非 URL 输入直接当关键词解析，不进 3D 平台检索。
  if(isPictureSite(state.platform)&&pictureSiteSearchable(state.platform)&&!/^https?:\/\//i.test(raw)){
   // 搜索框是空的：展示站点首页，不要拿空地址去解析（否则就是「需要 platform 与 url」）。
@@ -182,7 +213,9 @@ function startSearch({record=false}={}){
    const home=pictureSiteHome(state.platform);
    if(home)return showPictureSite(home,state.platform,{refresh:true,keepQuery:true,home:true});
   }
-  return showPictureSite(raw,state.platform,{refresh:true});
+  const terms=splitSearchTerms(state.expandedQuery||raw).slice(0,4);
+  if(terms.length<=1)return showPictureSite(raw,state.platform,{refresh:true});
+  return showPictureQueries(terms,state.platform);
  }
  state.source='search';
  if(!activeModes().length){
@@ -192,7 +225,7 @@ function startSearch({record=false}={}){
    renderGrid();return;
   }
   // 图站没有关键词检索流，框里打词是搜不出东西的；这里直接告诉用户该怎么用，而不是报「所有平台已关闭」。
-  toast(isPictureSite(state.platform)?`${platformById(state.platform).label} 按链接解析：把作品页 / 标签页地址粘到搜索框回车即可`:'所有平台已关闭，请在设置 → 平台模块中开启');
+  toast(isPictureSite(state.platform)?(platformById(state.platform).keywordNotice||`${platformById(state.platform).label} 按链接解析：把作品页 / 标签页地址粘到搜索框回车即可`):'所有平台已关闭，请在设置 → 平台模块中开启');
   renderGrid();return;
  }
  return Promise.all(activeModes().map(mode=>requestFeed(mode,readRequest(mode),{record})));
@@ -223,13 +256,47 @@ async function showResolvedModel(url){
   if(token===f.token){f.busy=false;f.controller=null;renderGrid();}
  }
 }
+/** Civitai 模型页：粘链接直接解析成一张可下载的模型卡，不下载原文件。 */
+async function showCivitaiModel(url){
+ const f=state.feeds.web;
+ f.controller?.abort();
+ const controller=new AbortController(),token=++f.token;f.controller=controller;f.busy=true;f.error=false;f.aborted=false;
+ f.rows=[];f.pages=0;f.warnings=[];f.next=null;f.pending=[];f.visited.clear();
+ f.request={url};state.selected.clear();
+ f.status='正在解析 Civitai 模型…';renderGrid();
+ try{
+  const response=await fetchSearchPage('/api/civitai/resolve',{url},{signal:controller.signal});
+  controller.signal.throwIfAborted();
+  if(token!==f.token)return;
+  if(!response.ok)throw Error(response.data?.error||'模型链接解析失败');
+  const card=response.data.card;
+  f.rows=mergeModels([],card?[card]:[]);f.pages=1;
+  f.status=`已解析 ${f.rows.length} 个模型版本 · 未自动下载，点卡片上的「下载」开始`;
+  rememberLink(url,f.rows[0]?.name);
+ }catch(e){
+  if(token!==f.token)return;
+  f.error=!controller.signal.aborted;f.aborted=controller.signal.aborted;
+  f.status=controller.signal.aborted?'已停止解析。':`${e.message}`;
+ }finally{
+  if(token===f.token){f.busy=false;f.controller=null;renderGrid();}
+ }
+}
 function submitLink(raw=$('#asset-query').value){
  const target=routeLink(raw);
+ cancelPictureRequests(state);
  state.pictureSite=null;
  boardTrail=[];                                  // 新的顶层链接：丢弃上一轮的画板导航栈
+ // Civitai 模型链接走模型下载管线；图片 / 视频站链接仍走下面的图站解析。
+ if(/^https?:\/\/(?:www\.)?civitai\.com\/models\//i.test(String(raw))){
+  $('#asset-query').value=String(raw).trim();
+  if(state.route!=='discover')routeTo('discover');
+  adoptPlatform?.('civitai');
+  state.source='link';
+  return showCivitaiModel(String(raw).trim());
+ }
  // 图站（素材下载器整合）：粘贴 Pixiv 等图站链接 → 解析整站图片 → 画廊瀑布流 → 下载进图片库。
  // 粘链接是明确动作，绕过缓存重新抓一次（切平台 / 回页面才吃缓存）。
- if(isPictureSite(target.platform))return showPictureSite(raw,target.platform,{refresh:true});
+ if(isPictureSite(target.platform))return showPictureSite(target.url,target.platform,{refresh:true});
  if(ctx.feedEnabled&&!ctx.feedEnabled(target.platform==='artstation'?'art':'web')){toast('该平台已关闭，请在设置 → 平台模块中开启');return;}
  if(target.error){toast(target.error);return;}
  $('#asset-query').value=target.url;
@@ -259,47 +326,95 @@ async function showPictureSite(raw,platform,opts={}){
  //（「最近检索」重放链接时不会触发输入事件，这里兜住）。
  adoptPlatform?.(platform);
  state.source='link';
+ cancelPictureRequests(state);
  const token=++pictureToken;
  const base={platform,url:targetUrl,source:targetUrl,fromBoards:!!opts.fromBoards};
  // 缓存优先：切页面 / 切平台 / 刷新浏览器回来时先把上次那屏直接铺上，一帧都不等。
  // 只有「用户主动重搜粘链接」（opts.refresh）或缓存过期（10 分钟）才回源；过期也是先铺再静默更新。
  const cached=pictureCache.get(pictureKey(platform,targetUrl));
  if(cached){
-  const age=Date.now()-cached.usedAt;
+  const age=pictureCacheAge(cached);
   cached.usedAt=Date.now();
+  pictureCache.delete(pictureKey(platform,targetUrl));pictureCache.set(pictureKey(platform,targetUrl),cached);
   state.pictureSite={...base,...cached.data,busy:false,error:false,status:''};
   renderGrid();
-  if(!opts.refresh&&age<PICTURE_CACHE_MS)return;
+  restorePictureScroll(state.pictureSite,state);
+  const personal=platform==='xiaohongshu'&&/\/user\/(?:likes|following)(?:[/?#]|$)/.test(targetUrl);
+  if(!opts.refresh&&age<PICTURE_CACHE_MS&&(!personal||cached.data.personalPaging===1))return;
  }else{
   state.pictureSite={...base,items:[],boards:[],mode:'images',title:'',author:'',cover:null,busy:true,error:false,status:opts.home?`正在加载 ${platformById(platform).label} 的推荐图…`:(isUrl?'正在解析图站链接…':`正在搜索 ${platformById(platform).label}…`)};
   renderGrid();
  }
+ const controller=new AbortController();
+ state.pictureSite.controller=controller;
+ const resolveLimit=Math.min(5000,Math.max(PICTURE_FIRST_PAGE,Number(cached?.data.limit)||0,cached?.data.items?.length||0,cached?.data.boards?.length||0));
  try{
   // limit：只取前若干张做预览（图站整站动辄上千张，全量解析会让一次点击等很久）；下载仍是整站全量。
-  // 一屏 60 张，与模型平台一屏的张数对齐；滑到底由 library-view.js 递增再要下一屏。
+  // 刷新已有结果时覆盖已浏览窗口，避免把续页内容缩回首批 24 张。
   // 画板列表这一层不受 limit 影响（画板数量本来就少），服务端按 mode:'boards' 返回。
-  const res=await fetch(`/api/picture-site/resolve?platform=${encodeURIComponent(platform)}&limit=60&url=${encodeURIComponent(targetUrl)}`,{headers:{'x-sfx-local':'1'}});
+  const personal=platform==='xiaohongshu'&&/\/user\/(?:likes|following)(?:[/?#]|$)/.test(targetUrl);
+  const resolveUrl=`/api/picture-site/resolve?platform=${encodeURIComponent(platform)}&limit=${resolveLimit}&url=${encodeURIComponent(targetUrl)}${personal?'&refresh=1':''}`;
+  const resolveOpts={headers:{'x-sfx-local':'1'},signal:controller.signal};
+  let res;
+  try{res=await fetch(resolveUrl,resolveOpts);}
+  catch(netErr){
+   if(controller.signal.aborted)throw netErr;
+   // dev 模式后端热重载会短暂断开监听，fetch 在这个窗口抛 Failed to fetch（toast 会显示
+   // 「网络请求失败，请检查网络、代理及后台服务」）。等一下重试一次，撞上重启窗口也能自愈；
+   // HTTP 4xx/5xx 不走这里（fetch 不抛），仍由下面的 res.ok 判断，避免把真实错误重复请求两遍。
+   await new Promise(r=>setTimeout(r,700));
+   controller.signal.throwIfAborted();
+   res=await fetch(resolveUrl,resolveOpts);
+  }
   const data=await res.json();
   if(!res.ok)throw new Error(data.error||'解析失败');
-  const payload={mode:data.mode==='boards'?'boards':'images',items:data.items||[],boards:data.boards||[],albums:data.albums||[],user:data.user||null,title:data.title||'',author:data.author||'',cover:data.cover||null,truncated:!!data.truncated,total:Number(data.total)||0};
+  const payload={mode:data.mode==='boards'?'boards':'images',items:data.items||[],boards:data.boards||[],albums:data.albums||[],user:data.user||null,title:data.title||'',author:data.author||'',cover:data.cover||null,truncated:!!data.truncated,total:Number(data.total)||0,warning:data.warning||'',personalPaging:data.personalPaging||0,order:data.order||'',collectionCollectDetect:data.collectionCollectDetect||'',collectionHomeUrl:data.collectionHomeUrl||'',collectionCollectUrl:data.collectionCollectUrl||'',collectionLabel:data.collectionLabel||'',limit:resolveLimit,scrollTop:cached?.data.scrollTop||0,fetchedAt:Date.now()};
   // fromBoards 一起存：刷新后从这块画板恢复时，「← 返回画板」不能丢。
+  if(controller.signal.aborted)return;
   savePictureCache(platform,targetUrl,{...payload,fromBoards:!!opts.fromBoards});
   // 这一轮已经过期（用户切了平台 / 换了页面）：结果只进缓存，画面交给后来那轮。
-  if(token!==pictureToken)return;
+  if(token!==pictureToken||state.route!=='discover'||state.pictureSite?.controller!==controller)return;
   // 后台重抓回来的还是同一批图：画面别动，整屏重绘会让图片闪一下。
-  if(cached&&pictureSignature(cached.data)===pictureSignature(payload))return;
+  if(cached&&pictureSignature(cached.data)===pictureSignature(payload)){Object.assign(state.pictureSite,payload);ctx.refreshPictureStatus?.();return;}
   state.pictureSite={...base,...payload,busy:false,error:false,status:''};
   // 作者主页不是「一次检索」，别把作者页塞进最近检索；纯关键词搜索也不记 ——
   // 最近检索的条目重放时当链接走 routeLink，塞个关键词进去只会被判成「无效网址」。
   if(data.mode!=='boards'&&isUrl&&!opts.home)rememberLink(targetUrl,data.title||data.author);
   renderGrid();
+  restorePictureScroll(state.pictureSite,state);
  }catch(e){
-  if(token!==pictureToken)return;
+  if(token!==pictureToken||controller.signal.aborted||state.route!=='discover'||state.pictureSite?.controller!==controller)return;
   // 手上已有缓存就别让一次失败把画面清空（站方临时拦截 / 网络抽风），继续显示上次结果。
-  if(cached){toast?.(`重新抓取失败，继续显示上次结果：${e.message}`);return;}
+  if(cached&&(cached.data.items?.length||cached.data.boards?.length)){toast?.(`重新抓取失败，继续显示上次结果：${e.message}`);return;}
   state.pictureSite={...base,items:[],boards:[],mode:'images',title:'',author:'',cover:null,busy:false,error:true,status:e.message};
   renderGrid();
+ }finally{
+  if(token===pictureToken&&state.pictureSite?.controller===controller){state.pictureSite.controller=null;ctx.refreshPictureStatus?.();}
  }
+}
+/** 原句和拆出来的词各搜一次，结果合到同一屏。原句永远是第一项。 */
+async function showPictureQueries(terms,platform){
+ const stamp=pictureToken;
+ await showPictureSite(terms[0],platform,{refresh:true,keepQuery:true});
+ if(stamp!==pictureToken||state.pictureSite?.error||state.pictureSite?.mode==='boards')return;
+ const seen=new Set((state.pictureSite.items||[]).map(item=>item.url||item.id||item.src));
+ for(const term of terms.slice(1)){
+  if(stamp!==pictureToken)return;
+  try{
+   const res=await fetch(`/api/picture-site/resolve?platform=${encodeURIComponent(platform)}&limit=${PICTURE_FIRST_PAGE}&url=${encodeURIComponent(term)}`,{headers:{'x-sfx-local':'1'}});
+   const data=await res.json();
+   if(!res.ok||stamp!==pictureToken||data.mode==='boards')continue;
+   for(const item of data.items||[]){
+    const key=item.url||item.id||item.src;
+    if(!key||seen.has(key))continue;
+    seen.add(key);
+    state.pictureSite.items.push(item);
+   }
+  }catch{if(stamp!==pictureToken)return;}
+ }
+ if(stamp!==pictureToken)return;
+ state.pictureSite.title=terms.join(' · ');
+ renderGrid();
 }
 /** 切到图站平台时预载首页推荐：结果区直接出图，而不是一大块「请粘贴链接」的说明。
  *  取不到（站点拦截 / 需要登录）就退回收拾好的说明卡，不把「解析失败」留在那儿吓人。
@@ -309,7 +424,7 @@ async function openPictureHome(platform){
  // 启动时已经把这一屏从缓存铺好了（restorePictureSnapshot），而且它还新鲜：
  // 再走一遍解析流程只会让 renderGrid 重画一次 —— 数据没变，用户看到的却是「图又加载了一遍」。
  const current=state.pictureSite;
- if(current&&current.platform===platform&&!current.error&&(current.items||[]).length&&last&&Date.now()-last.usedAt<PICTURE_CACHE_MS)return true;
+ if(current&&current.platform===platform&&!current.error&&(current.items||[]).length&&last&&pictureCacheAge(last)<PICTURE_CACHE_MS)return true;
  // 上次看过的那一屏优先：刷新页面 / 切回这个站时直接回到原处，而不是从首页推荐重新抓一遍。
  const home=last?.url||pictureSiteHome(platform);
  if(!home)return false;
@@ -344,6 +459,7 @@ async function openPictureAuthor(url,platform){
 function backToPictureBoards(){
  const prev=boardTrail.pop();
  if(!prev)return false;
+ cancelPictureRequests(state);
  state.pictureSite={...prev,fromBoards:false};
  renderGrid();
  return true;
@@ -362,9 +478,11 @@ async function reloadPictureSite(){
  await showPictureSite(raw,platform,{refresh:true,keepQuery:true,fromBoards:!!ps?.fromBoards});
  return true;
 }
- async function openPictureUrl(url){
+ async function openPictureUrl(url,platform=state.platform){
   if(state.route!=='discover')routeTo('discover');
-  return showPictureSite(url,state.platform,{keepQuery:true,refresh:true});
+  return showPictureSite(url,platform,{keepQuery:true,refresh:true});
  }
- return {requestFeed,startSearch,submitLink,openPictureBoard,openPictureAuthor,backToPictureBoards,openPictureHome,reloadPictureSite,openPictureUrl};
+ return {requestFeed,startSearch,submitLink,openPictureBoard,openPictureAuthor,backToPictureBoards,openPictureHome,reloadPictureSite,openPictureUrl,
+  restorePictureScroll:()=>restorePictureScroll(state.pictureSite,state),
+  savePictureSession:()=>{if(state.route==='discover')cancelPictureRequests(state);flushPictureCache();}};
 }

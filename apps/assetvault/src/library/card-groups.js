@@ -1,7 +1,7 @@
 // ponytail: 集合只保存引用，复用资产的原始预览、文件位置与下载记录。
 import {hasModelThumbnail} from './format-registry.js';
 export const groupRefKey=ref=>`${ref.kind}:${ref.key}`;
-/** 同目录模型包自动收纳；记录已处理成员，尊重后续手动拆分、解散和移动归属。 */
+/** 同目录模型包自动收纳；解散后下次扫描重建，保留单个成员拆分和移动归属。 */
 export function collectModelFolders(options,files,models=[],{id=()=>crypto.randomUUID(),now=()=>Date.now()}={}){
  const folders=new Map(),paths=new Set();
  const add=(root,rel,ref)=>{
@@ -22,12 +22,14 @@ export function collectModelFolders(options,files,models=[],{id=()=>crypto.rando
  for(const [key,folder] of folders){
   if(folder.refs.length<2&&!history[key])continue;
   const previous=history[key],seen=new Set(previous?.seen||[]);
-  const fresh=folder.refs.filter(ref=>!seen.has(groupRefKey(ref)));
-  if(!fresh.length)continue;
   let row=previous&&groups.find(group=>group.id===previous.id);
+  // A history entry is not the collection itself: recover missing collection records.
+  const recover=previous&&!row;
+  const fresh=folder.refs.filter(ref=>recover||!seen.has(groupRefKey(ref)));
+  if(!fresh.length)continue;
   const available=fresh.filter(ref=>!occupied.has(groupRefKey(ref)));
   if(!previous&&available.length<2)continue;
-  if(!previous){row={id:id(),type:'album',name:folder.label,addedAt:now(),children:[]};groups.push(row);}
+  if(!previous||recover){row={id:previous?.id||id(),type:'album',name:folder.label,addedAt:now(),children:[]};groups.push(row);}
   if(row){row.children.push(...available);row.addedAt=now();available.forEach(ref=>occupied.add(groupRefKey(ref)));}
   history[key]={id:row?.id||previous.id,seen:[...seen,...fresh.map(groupRefKey)]};changed=true;
  }

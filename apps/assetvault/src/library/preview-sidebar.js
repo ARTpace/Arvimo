@@ -7,11 +7,12 @@ export function previewHeader(model, {width=model.width,height=model.height,inde
  const name=model.name||model.title||'未命名资产';
  const ext=String(model.ext||name.match(/\.([a-z0-9]+)$/i)?.[1]||'').replace(/^\./,'').toUpperCase();
  const kind=model.assetType||model.kind||'images';
+ const typeLabel=/model|3d/.test(kind)?'3D':/video/.test(kind)?'视频':'图片';
  const glyph=/model|3d/.test(kind)?'cube':/video/.test(kind)?'play':'image';
  const fact=(glyph,text,label)=>text?`<span title="${esc(label)}" aria-label="${esc(label+': '+text)}">${icon(glyph)}${esc(text)}</span>`:'';
  const local=model.platform==='local'||!!model.localRoot;
  const source=local?'本地':model.platform?platformLabel(model.platform):'';
- return `<header class="pv-heading"><h2 title="${esc(name)}">${esc(name)}</h2></header><div class="pv-facts">${fact(glyph,ext||(/model|3d/.test(kind)?'3D':'图片'),'类型')}${fact('scan',width&&height?`${width} × ${height}`:'','尺寸')}${fact('file',model.bytes?sizeText(model.bytes):'','大小')}${count>1?fact('image',`${index+1} / ${count}`,'当前图片'):''}</div><div class="pv-origin">${icon(local?'folder':'globe')}<span>${esc([source,model.author].filter(Boolean).join(' · '))}</span></div>`;
+ return `<header class="pv-heading"><h2 title="${esc(name)}">${esc(name)}</h2></header><div class="pv-facts">${fact(glyph,ext||typeLabel,'类型')}${fact('scan',width&&height?`${width} × ${height}`:'','尺寸')}${fact('file',model.bytes?sizeText(model.bytes):'','大小')}${count>1?fact('image',`${index+1} / ${count}`,'当前内容'):''}</div><div class="pv-origin">${icon(local?'folder':'globe')}<span>${esc([source,model.author].filter(Boolean).join(' · '))}</span></div>`;
 }
 
 /** 保留平台渲染器及参数事件，只将低频介绍和参数归入同一结构。 */

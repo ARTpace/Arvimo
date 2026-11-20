@@ -1,3 +1,5 @@
+import {SHORT_VIDEO_SITES} from '../src/library/short-video-platforms.js';
+import {MUSIC_SITES} from '../src/library/music-platforms.js';
 // Low-level image plumbing shared by every image pipeline.
 //
 // Fetching a picture is two things: streaming it to a staging file under a size ceiling, and naming
@@ -22,7 +24,7 @@ export const IMAGE_TOTAL_BYTES=512*1024*1024;
 export const IMAGE_RETRIES=1;
 /** Which outbound allowlist one request must carry: derived from the platform, never guessed. */
 // pixiv 的图床 i.pximg.net 按 Referer 放行：缺 Referer 直接 403，所以这里把伪装头随请求带出去。
-export const IMAGE_CLIENTS=Object.freeze({sketchfab:{sketchfabOnly:true},artstation:{artstation:true},polyhaven:{},ambientcg:{},pixiv:{headers:{Referer:'https://www.pixiv.net/'}},safebooru:{headers:{Referer:'https://safebooru.org/'}},yandere:{headers:{Referer:'https://yande.re/'}},konachan:{headers:{Referer:'https://konachan.com/'}},wallhaven:{headers:{Referer:'https://wallhaven.cc/'}},civitai:{headers:{Referer:'https://civitai.com/'}},zcool:{headers:{Referer:'https://www.zcool.com.cn/'}},designspiration:{headers:{Referer:'https://www.designspiration.com/'}},huaban:{headers:{Referer:'https://huaban.com/'}},pexels:{headers:{Referer:'https://www.pexels.com/'}},flickr:{headers:{Referer:'https://www.flickr.com/'}},'500px':{headers:{Referer:'https://500px.com/'}},pinterest:{headers:{Referer:'https://www.pinterest.com/'}},xiaohongshu:{headers:{Referer:'https://www.xiaohongshu.com/'}}});
+export const IMAGE_CLIENTS=Object.freeze({...Object.fromEntries(Object.entries({...MUSIC_SITES,...SHORT_VIDEO_SITES}).map(([id,p])=>[id,{headers:{Referer:`https://${p.hosts[0]}/`}}])),sketchfab:{sketchfabOnly:true},artstation:{artstation:true},polyhaven:{},ambientcg:{},pixiv:{headers:{Referer:'https://www.pixiv.net/'}},safebooru:{headers:{Referer:'https://safebooru.org/'}},yandere:{headers:{Referer:'https://yande.re/'}},konachan:{headers:{Referer:'https://konachan.com/'}},wallhaven:{headers:{Referer:'https://wallhaven.cc/'}},civitai:{headers:{Referer:'https://civitai.com/'}},zcool:{headers:{Referer:'https://www.zcool.com.cn/'}},designspiration:{headers:{Referer:'https://www.designspiration.com/'}},huaban:{headers:{Referer:'https://huaban.com/'}},pexels:{headers:{Referer:'https://www.pexels.com/'}},flickr:{headers:{Referer:'https://www.flickr.com/'}},'500px':{headers:{Referer:'https://500px.com/'}},pinterest:{headers:{Referer:'https://www.pinterest.com/'}},xiaohongshu:{headers:{Referer:'https://www.xiaohongshu.com/'}}});
 
 const fmtMB=n=>`${(n/1048576).toFixed(n>=10485760?0:1)} MB`;
 

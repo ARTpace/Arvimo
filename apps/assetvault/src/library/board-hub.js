@@ -24,7 +24,7 @@ export function createBoardHub({
   const picker = createBoardPicker({esc, icon, toast, store, document: doc,
     onRemoved: id => store.activeId === id ? controls?.applyCollection?.(id, {force:true, refresh:true}) : undefined,
   });
-  const collect = createBoardCollect({esc, icon, toast, api, store, state, mergeModels, persistNow, renderGrid, document: doc});
+  const collect = createBoardCollect({esc, icon, toast, api, store, state, mergeModels, persistNow, confirmSave:()=>storage.flush?.({strict:true}), renderGrid, document: doc});
   // 画板就是合集实体：进入画板 = 把主网格限定到该合集的成员（服务端 filters.collection）。
   // 走 controls 的既有缝，不在这里另造一套过滤逻辑 —— 两处各写一套必然走样。
   const gotoLibrary = () => doc.querySelector('[data-route="library"]')?.click();
@@ -51,23 +51,14 @@ export function createBoardHub({
     onAll: openAll,
     onNew: () => actions.createManual(),
     onSmart: () => { gotoLibrary(); rule.openNew(); },
+    onCollect: () => { gotoLibrary(); collect.open(); },
     onRule: id => rule.open(id),
     onRename: id => actions.rename(id),
     onDelete: async id => { const done = await actions.remove(id); if (done?.wasActive) openAll(); },
   });
 
-  // 工具栏常驻入口：与筛选图标条共存，用 bd-* 前缀避免撞图站画板。
-  const toolbar = $?.('#local-toolbar') || doc.querySelector('#local-toolbar');
-  if (toolbar) {
-    const button = doc.createElement('button');
-    button.type = 'button';
-    button.className = 'tb-btn bd-toolbar-btn';
-    button.title = '智能收集画板：按规则自动从平台采集资产';
-    button.setAttribute('aria-label', '智能收集画板');
-    button.innerHTML = `${icon('zap')}<span class="tb-label">画板</span>`;
-    button.addEventListener('click', () => collect.open());
-    toolbar.appendChild(button);
-  }
+  // 工具栏里的 ⚡「智能收集画板」入口已按 2026-11-18 反馈去掉：命令条上已经有一颗「画板」键，
+  // 两颗同名键并排看不出差别，收集规则仍可从画板卡的入口打开（对外仍是 api.openCollect）。
 
   // 批量栏入口：先快照选中集合，避免打开选择器期间网格重绘把 state.selected 清空。
   const selectionBar = doc.querySelector('#selection-bar');

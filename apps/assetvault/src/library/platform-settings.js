@@ -1,6 +1,8 @@
-import {platformModules,PICTURE_SITE_GROUPS,PLATFORM_TAG,PLATFORM_HOME,PLATFORM_IMAGE_CAPS,pictureSiteLoginable} from './platforms.js';
+import {platformModules,UI_SITES,PICTURE_SITE_GROUPS,PLATFORM_TAG,PLATFORM_HOME,PLATFORM_IMAGE_CAPS,pictureSiteLoginable} from './platforms.js';
+import {FREE_SITE_GROUPS} from './free-sites.js';
 import {esc} from './html-esc.js';
 import {icon} from './icon-set.js';
+import {openExternal} from './open-url.js';
 /** 徽标：优先用注册表里给的单字，否则取标签里每个词的首字母（Sketchfab→S、Poly Haven→PH）。 */
 const markOf=(label,mark)=>mark||label.split(' ').map(word=>word[0]).join('').toUpperCase();
 /** 图站的「官网」直接从示例链接推 origin，避免再维护一份容易过期的主页清单。 */
@@ -28,7 +30,10 @@ const actionButton=(kind,{label,title,dataset='',href='',disabled=false})=>{
 };
 export function createPlatformSettingsCard({settings,toast}){
  const modules=platformModules();
- const groups=PICTURE_SITE_GROUPS||[];
+ const allGroups=PICTURE_SITE_GROUPS||[];
+ // 视频 / 音频 / 摄影 / 设计灵感(社区) 及 UI 四个子类都各自独立成 Tab；只在这里拆视图，注册表与搜索池不变。
+ const SPLIT_GROUP_NAMES=['视频素材','音频素材','摄影图库','设计灵感','图标','字体','配色与渐变','样机与模板'];
+ const groups=allGroups.filter(group=>!SPLIT_GROUP_NAMES.includes(group.name));
  const siteCount=groups.reduce((sum,group)=>sum+group.sites.length,0);
  // 3D 平台与图站共用同一套卡片结构（徽标 / 名称 + 官网键 + 开关 + 短标签 + 图标动作），
  // 也共用同一份开关存储 —— 关掉后对应的检索、解析与下载都会被服务端拒绝。
@@ -44,7 +49,61 @@ export function createPlatformSettingsCard({settings,toast}){
   const testBtn=actionButton('test',{label:`测试 ${name} 是否可用`,title:`用官方入口实测 ${name} 的连通性`,dataset:`data-test="${esc(id)}" data-test-url="${esc(example||'')}" data-label="${esc(name)}"`});
   return `<label class="platform-module-card"${tip?` title="${esc(tip)}"`:''}><input type="checkbox" role="switch" aria-label="启用 ${esc(name)}" data-${attr}="${esc(id)}" ${checked?'checked':''}><span class="module-main"><span class="module-mark" aria-hidden="true">${esc(mark)}</span><span class="module-name">${esc(name)}</span>${homeBtn}<span class="platform-module-switch" aria-hidden="true"></span></span><span class="module-main module-foot"><span class="module-tag">${esc(tag)}</span><span class="module-actions">${loginBtn}${copyBtn}${testBtn}</span></span></label>`;
  };
- const platformCards=modules.map(p=>moduleCard({
+ // 免费素材站只读名片：并入现有分组、排在已支持平台之后。没有 input / data-test / data-login，
+ // 所以不进开关存储、不进检索与下载。域名已被支持平台覆盖的站直接跳过，不重复占位。
+ const ATTR_LABEL={required:'需署名','not-required':'免署名',varies:'按素材'};
+ const MONEY_LABEL={allowed:'可商用',conditional:'有条件',varies:'按素材','not-allowed':''};
+ const SIGNUP_LABEL={required:'需注册','not-required':'免注册',varies:'按素材'};
+ const freeCard=site=>{
+  const homeBtn=actionButton('home',{label:`打开 ${site.name} 官网`,title:'在新标签页打开官网查看许可与下载',href:site.url});
+  // 与正式平台卡完全同构：徽标 / 名称 + 官网键 + 底行 tag，只是没有开关、登录、复制、测试这些功能键。
+  // 网站简介落在 tag 位（和正式卡「CC0 材质 / HDRI」同一位置）；许可 / 署名 / 注册收进 title。
+  const tip=[site.desc,site.license,ATTR_LABEL[site.attribution],SIGNUP_LABEL[site.signup]].filter(Boolean).join(' · ');
+  const shortDesc=site.desc||'免费素材站';
+  return `<div class="platform-module-card free-site-card"${tip?` title="${esc(tip)}"`:''}><span class="module-main"><span class="module-mark" aria-hidden="true">${esc(markOf(site.name).slice(0,2))}</span><span class="module-name">${esc(site.name)}</span>${homeBtn}</span><span class="module-main module-foot"><span class="module-tag">${esc(shortDesc)}</span></span></div>`;
+ };
+ // 已有平台的主机名：免费站若同域且已被支持，就不再显示只读名片（避免 Poly Haven 这类重复两张卡）。
+ const knownHosts=new Set();
+ const addKnown=u=>{const h=hostOf(u||'');if(h)knownHosts.add(bareHost(h));};
+ for(const p of modules)addKnown(PLATFORM_HOME[p.id]);
+ for(const site of allGroups.flatMap(g=>g.sites)){addKnown(homeOf(site));addKnown(site.example);}
+ const isKnownSite=site=>knownHosts.has(bareHost(hostOf(site.url)));
+ // 免费站 11 类拆分：UI 按图标 / 字体 / 配色 / 样机四类细分，插画与图片平台单独成组进图站，其余进对应 Tab。
+ // graphics-icons 里混了插画站和图片/矢量聚合站，这些不是 UI，归到图站的「插画与矢量」子分组。
+ const ILLUSTRATION_SITES=new Set(['unDraw','Storyset by Freepik','Humaaans','Open Peeps','Open Doodles','DrawKit','ManyPixels Illustration Gallery','IRA Design','Absurd Design','Blush','illlustrations','SVG Repo','Magnific (formerly Freepik)','Vecteezy']);
+ const FREE_INTO_GROUP={'stock-photos':'摄影图库','graphics-icons':'图标','colors':'配色与渐变','mockups-templates':'样机与模板','fonts':'字体','search-engines':'其他','stock-footage':'视频素材','video-production':'视频素材','music':'音频素材','sound-effects':'音频素材'};
+ const freeByGroup=new Map();
+ for(const g of FREE_SITE_GROUPS){
+  if(g.id==='3d-assets')continue;
+  for(const s of g.sites){
+   if(isKnownSite(s))continue;
+   const name=(g.id==='graphics-icons'&&ILLUSTRATION_SITES.has(s.name))?'插画与矢量':(FREE_INTO_GROUP[g.id]||'其他');
+   if(!freeByGroup.has(name))freeByGroup.set(name,[]);
+   freeByGroup.get(name).push(s);
+  }
+ }
+ const free3d=(FREE_SITE_GROUPS.find(g=>g.id==='3d-assets')?.sites||[]).filter(s=>!isKnownSite(s));
+ // 3D 免费站按用途细分，不再堆成「更多免费素材站」一个大杂烩。按站名精确归类，未命中的落「其他」兜底。
+ const FREE_3D_SUBGROUPS=[
+  {name:'PBR 材质与贴图',names:['FreePBR','Textures.com','3D Textures.me','Share Textures','cgbookcase']},
+  {name:'HDRI 与环境光',names:['Open HDRI','No Emotion HDRs','NebulaKit Deep Field 11']},
+  {name:'3D 模型与资产包',names:['Quixel Megascans','Mixamo','KayKit','NASA 3D Resources','Quaternius','Blendkit (formerly BlenderKit)']},
+  {name:'游戏美术素材',names:['OpenGameArt','itch.io Free Game Assets','CraftPix Freebies']},
+  {name:'模型市场免费区',names:['CGTrader Free Models','TurboSquid Free Models','SketchUp 3D Warehouse','Free3D']},
+ ];
+ const used3d=new Set();
+ const free3dGroups=FREE_3D_SUBGROUPS.map(group=>{
+  const sites=group.names.map(n=>free3d.find(s=>s.name===n)).filter(Boolean);
+  sites.forEach(s=>used3d.add(s));
+  return {name:group.name,sites};
+ }).filter(g=>g.sites.length);
+ const rest3d=free3d.filter(s=>!used3d.has(s));
+ if(rest3d.length)free3dGroups.push({name:'其他 3D 资源',sites:rest3d});
+ const subgroupHtml=group=>`<div class="platform-subgroup"><h5 class="platform-group-title"><span class="platform-group-dot" aria-hidden="true"></span>${esc(group.name)}<span class="platform-group-count">${group.sites.length} 个</span></h5><div class="platform-module-grid">${group.sites.map(freeCard).join('')}</div></div>`;
+ const free3dHtml=free3dGroups.map(subgroupHtml).join('');
+ // Uiverse 归 UI Tab（UI_SITES），不在 3D 里重复出现；主机名仍留在 known 集合里做免费站去重。
+ const d3Modules=modules.filter(p=>p.id!=='uiverse');
+ const platformCards=d3Modules.map(p=>moduleCard({
   id:p.id,name:p.label,mark:markOf(p.label),tag:PLATFORM_TAG[p.id]||p.hint||'3D 资产',
   home:PLATFORM_HOME[p.id],checked:settings[p.id]!==false,attr:'platform',tip:p.description||p.hint,
   login:pictureSiteLoginable(p.id),
@@ -54,12 +113,58 @@ export function createPlatformSettingsCard({settings,toast}){
   home:homeOf(site),example:site.example,checked:settings[site.id]!==false,attr:'picture-platform',tip:site.hint,
   login:pictureSiteLoginable(site.id),
  });
+ // 视频 / 音频 / 摄影 / 灵感社区(设计灵感组，含小红书等 5 个社区平台) 各自独立成 Tab；UI 只留免费素材子分组。
+ const videoGroup=allGroups.find(g=>g.name==='视频素材');
+ const audioGroup=allGroups.find(g=>g.name==='音频素材');
+ const photoGroup=allGroups.find(g=>g.name==='摄影图库');
+ const socialGroup=allGroups.find(g=>g.name==='设计灵感');
+ const videoFree=freeByGroup.get('视频素材')||[];
+ const audioFree=freeByGroup.get('音频素材')||[];
+ const photoFree=freeByGroup.get('摄影图库')||[];
+ const UI_SUBGROUPS=['图标','字体','配色与渐变','样机与模板'];
  // 图站按分组铺开；分组标题只留组名与数量，说明文字不重复铺一遍。
- const pictureGroupTabs='<div class="platform-group-tabs" role="tablist" aria-label="图站分组">'+['全部',...groups.map(group=>group.name)].map((name,index)=>`<button type="button" role="tab" class="platform-group-tab${index===0?' active':''}" data-group-tab="${esc(name)}" aria-selected="${index===0?'true':'false'}">${esc(name)}<span class="platform-tab-count">${index===0?siteCount:(groups[index-1]?.sites.length||0)}</span></button>`).join('')+'</div>';
+ const groupFreeCount=name=>freeByGroup.get(name)?.length||0;
+ // 有免费站但图站注册表里没有对应分组的（如「其他」），补一个只读分组，不改 PICTURE_SITES。
+ // 视频 / 音频已独立成 Tab，不再进图站的子分组。摄影 / UI 同理。
+ const extraFreeNames=[...freeByGroup.keys()].filter(name=>!groups.some(g=>g.name===name)&&!SPLIT_GROUP_NAMES.includes(name));
+ const allGroupNames=[...groups.map(group=>group.name),...extraFreeNames];
+ const groupCount=name=>(groups.find(g=>g.name===name)?.sites.length||0)+groupFreeCount(name);
+ const pictureFreeTotal=[...freeByGroup.entries()].filter(([name])=>!SPLIT_GROUP_NAMES.includes(name)).reduce((n,[,arr])=>n+arr.length,0);
+ const pictureTotal=siteCount+pictureFreeTotal;
+ const pictureGroupTabs='<div class="platform-group-tabs" role="tablist" aria-label="图站分组">'+['全部',...allGroupNames].map((name,index)=>`<button type="button" role="tab" class="platform-group-tab${index===0?' active':''}" data-group-tab="${esc(name)}" aria-selected="${index===0?'true':'false'}">${esc(name)}<span class="platform-tab-count">${index===0?pictureTotal:groupCount(name)}</span></button>`).join('')+'</div>';
  // Pixabay 视频要官方免费 key：在「视频素材」组底部给一行输入。
  // 只提交非空值 —— 空串会把 key 清掉，而用户往往只是没改。
  const pixabayKeyRow=`<div class="platform-key-row"><label><span>Pixabay API key</span><input type="password" data-pixabay-key autocomplete="off" spellcheck="false" placeholder="${settings.pixabayKeySet?'已设置，留空则不改':'免费申请：pixabay.com/api/docs'}"></label><button type="button" class="secondary" data-pixabay-save>保存 key</button><span class="platform-key-hint">只用于 Pixabay 视频检索；没填时该站会提示需要 key，其余视频站不受影响。</span></div>`;
- const picturePanels=pictureGroupTabs+groups.map(group=>`<div class="picture-site-group" data-group="${esc(group.name)}"><h5 class="platform-group-title"><span class="platform-group-dot" aria-hidden="true"></span>${esc(group.name)}<span class="platform-group-count">${group.sites.length} 个</span></h5><div class="platform-module-grid">${group.sites.map(pictureCard).join('')}</div>${group.name==='视频素材'?pixabayKeyRow:''}</div>`).join('');
+ const civitaiKeyRow=`<div class="platform-key-row"><label><span>Civitai API key</span><input type="password" data-civitai-key autocomplete="off" spellcheck="false" placeholder="${settings.civitaiKeySet?'已设置，留空则不改':'civitai.com/account/api-keys'}"></label><button type="button" class="secondary" data-civitai-save>保存 key</button><span class="platform-key-hint">下载 Checkpoint / LoRA 原文件需要；关键词检索无需填写。key 只保存在本机服务端。</span></div>`;
+ // 分组内先铺已支持平台（有开关 / 可测试），再接免费站只读名片；分组标题计数把两者相加。
+ const picturePanels=pictureGroupTabs+groups.map(group=>`<div class="picture-site-group" data-group="${esc(group.name)}"><h5 class="platform-group-title"><span class="platform-group-dot" aria-hidden="true"></span>${esc(group.name)}<span class="platform-group-count">${groupCount(group.name)} 个</span></h5><div class="platform-module-grid">${group.sites.map(pictureCard).join('')}${(freeByGroup.get(group.name)||[]).map(freeCard).join('')}</div></div>`).join('')+extraFreeNames.map(name=>`<div class="picture-site-group" data-group="${esc(name)}"><h5 class="platform-group-title"><span class="platform-group-dot" aria-hidden="true"></span>${esc(name)}<span class="platform-group-count">${groupFreeCount(name)} 个</span></h5><div class="platform-module-grid">${freeByGroup.get(name).map(freeCard).join('')}</div></div>`).join('');
+ // 视频 / 音频 / 摄影 / 灵感社区各自独立成 Tab：正式平台在前、免费站名片在后，Pixabay key 输入跟到视频 Tab。
+ const splitPanel=(group,free,extra='',title)=>{
+  if(!group&&!free.length)return '';
+  const label=title||group?.name||'免费素材站';
+  const official=(group?.sites||[]).map(pictureCard).join('');
+  return `<div class="picture-site-group" data-group="${esc(label)}"><h5 class="platform-group-title"><span class="platform-group-dot" aria-hidden="true"></span>${esc(label)}<span class="platform-group-count">${(group?.sites.length||0)+free.length} 个</span></h5><div class="platform-module-grid">${official}${free.map(freeCard).join('')}</div>${extra}</div>`;
+ };
+ const videoPanel=splitPanel(videoGroup,videoFree,pixabayKeyRow);
+ const audioPanel=splitPanel(audioGroup,audioFree);
+ const photoPanel=splitPanel(photoGroup,photoFree);
+ // 灵感社区：原「设计灵感」组的 5 个社区平台（站酷 / Designspiration / 花瓣 / Pinterest / 小红书）。
+ const socialPanel=splitPanel(socialGroup,[],'','灵感社区');
+ const videoCount=(videoGroup?.sites.length||0)+videoFree.length;
+ const audioCount=(audioGroup?.sites.length||0)+audioFree.length;
+ const photoCount=(photoGroup?.sites.length||0)+photoFree.length;
+ const socialCount=socialGroup?.sites.length||0;
+ // UI 设计：图标 / 字体 / 配色 / 样机四个子分组，全是免费站名片，插画与图片平台已移出到图站。
+ // UI 设计：UI 组件（Uiverse，正式平台，可开关可测试）+ 图标 / 字体 / 配色 / 样机四个免费子分组。
+ // Uiverse 的 group 是「UI 动效」，不在 PICTURE_GROUP_ORDER 里，所以要从 PICTURE_SITES 直接取，否则整站从设置页消失。
+ const uiOfficialHtml=UI_SITES.uiverse?`<div class="platform-subgroup"><h5 class="platform-group-title"><span class="platform-group-dot" aria-hidden="true"></span>UI 组件<span class="platform-group-count">1 个</span></h5><div class="platform-module-grid">${pictureCard(UI_SITES.uiverse)}</div></div>`:'';
+ const uiSubgroupHtml=name=>{
+  const sites=freeByGroup.get(name)||[];
+  if(!sites.length)return '';
+  return `<div class="platform-subgroup"><h5 class="platform-group-title"><span class="platform-group-dot" aria-hidden="true"></span>${esc(name)}<span class="platform-group-count">${sites.length} 个</span></h5><div class="platform-module-grid">${sites.map(freeCard).join('')}</div></div>`;
+ };
+ const uiPanel=uiOfficialHtml+UI_SUBGROUPS.map(uiSubgroupHtml).join('');
+ const uiCount=(UI_SITES.uiverse?1:0)+UI_SUBGROUPS.reduce((n,name)=>n+(freeByGroup.get(name)?.length||0),0);
  // 配图能力不再单独占一个 Tab：按输出拆成两个子分组，并入「3D 平台」一屏。
  // 开关与上方模型卡共用同一个 platform id，切换任一处两边立刻同步。
  const CAP_GROUPS=[
@@ -77,18 +182,23 @@ export function createPlatformSettingsCard({settings,toast}){
  };
  const capGroupsHtml=CAP_GROUPS.filter(group=>group.ids.some(id=>modules.some(m=>m.id===id))).map(group=>`<div class="platform-subgroup"><h5 class="platform-group-title"><span class="platform-group-dot" aria-hidden="true"></span>${esc(group.name)}<span class="platform-group-count">${group.ids.length}</span></h5><div class="platform-module-grid">${group.ids.map(capCard).join('')}</div></div>`).join('');
  const tabs=[
-  {id:'3d',label:'3D 平台',count:modules.length,note:'开启后参与在线搜索；关闭只影响检索，不影响本地资产和已有任务。',panel:`<div class="platform-module-grid" data-module-grid>${platformCards}</div>${capGroupsHtml}`},
-  {id:'picture',label:'图站',count:siteCount,note:'粘作品页或标签页链接即可整站解析入库；关掉即禁止解析与下载。',panel:picturePanels},
+  {id:'3d',label:'3D',count:d3Modules.length+free3d.length,note:'开启后参与在线搜索；关闭只影响检索，不影响本地资产和已有任务。',panel:`<div class="platform-module-grid" data-module-grid>${platformCards}</div>${capGroupsHtml}${free3dHtml}${civitaiKeyRow}`},
+  {id:'picture',label:'图站',count:pictureTotal,note:'粘作品页或标签页链接即可整站解析入库；关掉即禁止解析与下载。',panel:picturePanels},
+  {id:'photo',label:'摄影',count:photoCount,note:'粘摄影作品页或标签页链接即可整站解析入库；关掉即禁止解析与下载。',panel:photoPanel},
+  {id:'social',label:'社区',count:socialCount,note:'站酷、花瓣、Pinterest、小红书等设计灵感社区；粘作品页或作者主页即可整站解析入库。',panel:socialPanel},
+  {id:'ui',label:'UI',count:uiCount,note:'图标、字体、配色与模板素材站；点官网查看许可与下载，不参与检索。',panel:uiPanel},
+  {id:'video',label:'视频',count:videoCount,note:'粘视频作品页或标签页链接即可整站解析入库；关掉即禁止解析与下载。',panel:videoPanel},
+  {id:'audio',label:'音频',count:audioCount,note:'粘音乐分享链接解析试听与下载；关掉即禁止解析与下载。',panel:audioPanel},
  ].filter(tab=>tab.panel);
  const tabBar='<div class="platform-tabs" role="tablist" aria-label="平台分组">'+tabs.map((tab,index)=>`<button type="button" role="tab" class="platform-tab${index===0?' active':''}" data-tab="${tab.id}" id="platform-tab-${tab.id}" aria-controls="platform-panel-${tab.id}" aria-selected="${index===0?'true':'false'}" tabindex="${index===0?'0':'-1'}">${esc(tab.label)}<span class="platform-tab-count">${tab.count}</span></button>`).join('')+'<span class="platform-tab-indicator" aria-hidden="true"></span></div>';
  const panels='<div class="platform-panels">'+tabs.map((tab,index)=>`<section class="platform-panel" data-panel="${tab.id}" id="platform-panel-${tab.id}" role="tabpanel" aria-labelledby="platform-tab-${tab.id}"${index===0?'':' hidden'}><p class="platform-panel-note">${esc(tab.note)}</p>${tab.panel}</section>`).join('')+'</div>';
  // 顶栏：计数在左、平台 Tab 居中、批量测试在最右，和 Tab 切换同一行。
- const topbar='<div class="platform-topbar"><span class="platform-count" data-module-count aria-live="polite">已开启 0 / 0</span>'+tabBar+'<button type="button" class="platform-batch-test" data-batch-test>'+icon('zap')+'<span data-batch-label>批量测试</span></button></div>';
+ const topbar='<div class="platform-topbar">'+tabBar+'<div class="platform-subbar"><span class="platform-count" data-module-count aria-live="polite">已开启 0 / 0</span><button type="button" class="platform-batch-test platform-only-btn" data-only-connected aria-pressed="false" title="隐藏未接入工具、仅作导航的免费素材站">'+icon('check')+'<span>只看接入</span></button><button type="button" class="platform-batch-test" data-batch-test>'+icon('zap')+'<span data-batch-label>批量测试</span></button></div></div>';
  const batchProgressHtml='<div class="platform-batch-progress" data-batch-progress hidden><span class="pbp-text" data-batch-text></span><span class="pbp-track"><span class="pbp-fill" data-batch-fill></span></span></div>';
  const card=document.createElement('div');card.className='settings-card platform-settings';
  // 不设「保存并应用」—— 开关即改即存（防抖），自动保存后提示一句即可。
- // 标题带一句右侧说明：这一页独立成「平台模块」后，分组行要与 AI 页、软件连接页一样有主标题 + 副说明。
- card.innerHTML='<h3 class="settings-section-title"><span>在线平台</span><small>开关即时生效，改动自动保存</small></h3>'+topbar+batchProgressHtml+panels;
+ // 刻意不放 .settings-section-title：设置面板见到它就会套一层 <details> 折叠，这一页内容已分组，不需要多一层。
+ card.innerHTML=topbar+batchProgressHtml+panels;
 
  const tabButtons=[...card.querySelectorAll('.platform-tab')];
  const indicator=card.querySelector('.platform-tab-indicator');
@@ -123,7 +233,9 @@ export function createPlatformSettingsCard({settings,toast}){
  function updateCount(){
   const panel=activePanel();
   if(!panel)return;
-  const inputs=activeTab==='picture'
+  // 图站 / 摄影 / 灵感社区 / UI / 视频 / 音频的开关都是 data-picture-platform，3D 才是 data-platform。
+  const pictureLike=['picture','photo','social','ui','video','audio'].includes(activeTab);
+  const inputs=pictureLike
    ?[...panel.querySelectorAll('input[data-picture-platform]')]
    :[...panel.querySelectorAll('[data-module-grid] input[data-platform]')];
   const output=card.querySelector('[data-module-count]');
@@ -179,16 +291,17 @@ export function createPlatformSettingsCard({settings,toast}){
  // Pixabay key 单独保存：它会真的打到外部 API，误触发（每敲一个字）没有意义，
  // 所以只在点「保存 key」时提交，且空值不提交。
  card.addEventListener('click',async event=>{
-  const button=event.target.closest('[data-pixabay-save]');
+  const button=event.target.closest('[data-pixabay-save],[data-civitai-save]');
   if(!button)return;
-  const input=card.querySelector('[data-pixabay-key]');
+  const isCivitai=Boolean(button.closest('[data-civitai-save]'));
+  const input=card.querySelector(isCivitai?'[data-civitai-key]':'[data-pixabay-key]');
   const key=String(input?.value||'').trim();
-  if(!key){toast('请先填入 Pixabay API key');return;}
+  if(!key){toast(`请先填入 ${isCivitai?'Civitai':'Pixabay'} API key`);return;}
   button.disabled=true;
   try{
-   await postSettings({pixabayKey:key});
+   await postSettings(isCivitai?{civitaiKey:key}:{pixabayKey:key});
    if(input){input.value='';input.placeholder='已设置，留空则不改';}
-   toast('Pixabay key 已保存');
+   toast(`${isCivitai?'Civitai':'Pixabay'} key 已保存`);
   }catch(error){toast(`保存失败：${error.message}`);}
   finally{button.disabled=false;}
  });
@@ -258,17 +371,33 @@ const paintLogin=(button,hosts)=>{
    const id=button.dataset.login;
    if(watchers.has(id))return;
    const started=Date.now();
+   let askedEula=false;
    const timer=setInterval(async()=>{
     if(id==='fab'){await paintFabLogin(button);}
     else{const hosts=await readCookieHosts();if(hosts)paintLogin(button,hosts);}
-    let open=false;
+    let open=false,reason='',needEula='';
     try{
      const response=await fetch('/api/browser/login',{headers:{'X-SFX-Local':'1'}});
-     open=Boolean((await response.json())?.open);
+     const state=await response.json().catch(()=>({}));
+     open=Boolean(state?.open);reason=String(state?.error||'');needEula=String(state?.needEula||'');
     }catch{open=false;}
+    // Epic 的启动器协议在网页上根本接受不了（跳过去也只有一段 JSON），只能在这里问一次：
+    // 用户点了同意才让后端代为提交，不同意就什么都不做。
+    if(needEula&&!askedEula&&typeof globalThis.confirm==='function'){
+     askedEula=true;
+     const yes=globalThis.confirm('Epic 要求接受一次启动器终端用户许可协议（EULA）。\n接受后才能用 Fab 下载。现在接受并继续登录？');
+     if(yes){
+      try{
+       const r=await fetch('/api/fab/accept-eula',{method:'POST',headers:{'X-SFX-Local':'1'}});
+       const data=await r.json().catch(()=>({}));
+       if(!r.ok)throw Error(data.error||'接受协议失败');
+       toast('已接受协议，正在完成登录…');
+      }catch(error){toast(String(error?.message||'接受协议失败'));}
+     }else{button.dataset.busy='0';}
+    }
     if(open&&Date.now()-started<15*60*1000)return;
     clearInterval(timer);watchers.delete(id);button.dataset.busy='0';
-    if(id==='fab'){await paintFabLogin(button);if(button.dataset.state!=='ok')toast(`${button.dataset.label||'Fab'} 还没登录成功，可以再点一次`);}
+    if(id==='fab'){await paintFabLogin(button);if(button.dataset.state!=='ok')toast(reason||`${button.dataset.label||'Fab'} 还没登录成功，可以再点一次`);}
     else{const finalHosts=await readCookieHosts();if(finalHosts)paintLogin(button,finalHosts);if(!['ok','have','warn'].includes(button.dataset.state||''))toast(`${button.dataset.label||''} 还没拿到 cookie，可以再点一次登录`);}
    },3000);
    watchers.set(id,timer);
@@ -334,6 +463,23 @@ const paintLogin=(button,hosts)=>{
  const batchButton=card.querySelector('[data-batch-test]');
  const batchLabel=card.querySelector('[data-batch-label]');
  let batchRunning=false;
+ // 「只看接入」：隐藏只作导航的免费站名片，只含免费站的分组连标题一起收起。
+ // 计数按可见的正式平台重算，原总数存在 dataset 里，切回来时还原。
+ function applyOnlyConnected(on){
+  const panels=card.querySelector('.platform-panels');
+  if(!panels)return;
+  panels.classList.toggle('only-connected',on);
+  const button=card.querySelector('[data-only-connected]');
+  if(button){button.setAttribute('aria-pressed',String(on));button.classList.toggle('active',on);}
+  for(const group of card.querySelectorAll('.picture-site-group,.platform-subgroup')){
+   const counter=group.querySelector('.platform-group-count');
+   if(!counter)continue;
+   if(!counter.dataset.total)counter.dataset.total=counter.textContent.replace(/[^\d]/g,'');
+   const total=Number(counter.dataset.total||0);
+   const free=group.querySelectorAll('.free-site-card').length;
+   counter.textContent=`${on?Math.max(total-free,0):total} 个`;
+  }
+ }
  function visibleTestButtons(){
   const panel=activePanel();if(!panel)return [];
   const groups=panel.querySelectorAll('.picture-site-group');
@@ -426,8 +572,13 @@ card.addEventListener('click',async event=>{
  if(test){event.preventDefault();event.stopPropagation();runTest(test);return;}
  const batch=event.target.closest('[data-batch-test]');
  if(batch){event.preventDefault();event.stopPropagation();runBatch();return;}
- // 卡片内的「官网」是外链，点它不能顺带拨动外面的开关。
- if(event.target.closest('a.platform-icon-btn'))event.stopPropagation();
+ const onlyBtn=event.target.closest('[data-only-connected]');
+ if(onlyBtn){event.preventDefault();event.stopPropagation();applyOnlyConnected(onlyBtn.getAttribute('aria-pressed')!=='true');return;}
+ // 卡片内的「官网」是外链：桌面版 WebView 不认 target="_blank"，全靠 document 上的委托处理器接走，
+ // 但这里若 stopPropagation 会把事件掐死在卡片层，冒泡不到全局处理器，于是点了没反应。
+ // 直接在这里调 openExternal 最稳：桌面版走系统浏览器、浏览器版回退 window.open，都不依赖冒泡。
+ const homeLink=event.target.closest('a.platform-icon-btn');
+ if(homeLink){event.preventDefault();event.stopPropagation();openExternal(homeLink.href);return;}
  });
  return card;
 }

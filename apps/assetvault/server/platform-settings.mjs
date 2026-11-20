@@ -1,18 +1,18 @@
 import {readFileSync} from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import {platformModules,PICTURE_SITES} from '../src/library/platforms.js';
+import {platformModules,PICTURE_SITES,UI_SITES} from '../src/library/platforms.js';
 
 /**
- * 唯一的字符串型配置：Pixabay 视频要官方免费 API key。
+ * 字符串型配置：Pixabay 视频与 Civitai 模型的官方 API key。
  * 其余平台都是「开关」布尔值，校验逻辑保持严格 —— 只有这里点名放行字符串，
  * 免得一个手滑的字段把开关表写坏。
  */
-const STRING_KEYS = Object.freeze(['pixabayKey']);
+const STRING_KEYS = Object.freeze(['pixabayKey','civitaiKey']);
 
 export function createPlatformSettings(file){
  // 图站和 3D 平台共用一份设置：默认全开，关掉即禁止解析与整站下载。
- const defaults={...Object.fromEntries([...platformModules(),...Object.values(PICTURE_SITES)].map(p=>[p.id,true])),pixabayKey:''};
+ const defaults={...Object.fromEntries([...platformModules(),...Object.values(PICTURE_SITES),...Object.values(UI_SITES)].map(p=>[p.id,true])),pixabayKey:'',civitaiKey:''};
  let settings={...defaults};
  try{
   const saved=JSON.parse(readFileSync(file,'utf8'));
@@ -26,9 +26,10 @@ export function createPlatformSettings(file){
  let saving=Promise.resolve();
  return {
   // 对外只暴露「有没有填」：key 明文不出本机服务端，前端也只需要知道该不该再提示。
-  get:()=>{const {pixabayKey,...flags}=settings;return {...flags,pixabayKeySet:!!pixabayKey};},
+  get:()=>{const {pixabayKey,civitaiKey,...flags}=settings;return {...flags,pixabayKeySet:!!pixabayKey,civitaiKeySet:!!civitaiKey};},
   /** 解析时内部取用，不走 HTTP 返回体。 */
   pixabayKey:()=>String(settings.pixabayKey||''),
+  civitaiKey:()=>String(settings.civitaiKey||''),
   enabled:id=>settings[id]!==false,
   save(input){
    if(!input||typeof input!=='object'||Array.isArray(input))throw Error('平台配置无效');
@@ -41,5 +42,5 @@ export function createPlatformSettings(file){
 
 export function platformForPath(pathname){
  if(pathname==='/api/search'||pathname==='/api/scan')return 'sketchfab';
- return /^\/api\/(simready|artstation|polyhaven|ambientcg|polypizza|kenney|freestylized|polyfork|uiverse|fab)(?:\/|$)/.exec(pathname)?.[1];
+ return /^\/api\/(simready|artstation|polyhaven|ambientcg|polypizza|kenney|freestylized|polyfork|uiverse|fab|civitai)(?:\/|$)/.exec(pathname)?.[1];
 }

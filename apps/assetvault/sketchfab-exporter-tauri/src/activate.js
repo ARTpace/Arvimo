@@ -62,7 +62,7 @@
     setStatus('激活成功，正在启动本地服务…', 'ok');
     $('act-form').hidden = true;
     $('act-online').hidden = true;
-    showBoot('激活成功，正在启动本地模型库服务…');
+    showBoot('激活成功，正在进入工作台…');
     return true;
   }
 
@@ -135,9 +135,11 @@
     state.fingerprint = status.fingerprint || '';
     state.factors = status.factors || [];
     // 免激活发布（闸门关着）时不再摆激活面板：Rust 那边已经把本地服务拉起来了，
-    // 共用加载页会等待服务就绪后直接进入工作台，这里只负责更新启动提示。
+    // 共用加载页会等待服务就绪后直接进入工作台，这里只负责切到加载卡片。
+    // 不再往 #tip 写「正在启动本地模型库服务…」——splash.js 已经在进度条下方写着同一句，
+    // 重复一句只会多占一行、还被撑成两条一模一样的提示。
     if (status.gate === false || status.licensed) {
-      showBoot('正在启动本地模型库服务…');
+      showBoot();
       return;
     }
     $('act-machine').textContent = state.fingerprint || state.machineCode || '（读取失败）';

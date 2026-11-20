@@ -14,7 +14,7 @@ export const PRESETS = Object.freeze([
   { id: 'black', label: '纯黑', color: '#000000' },
 ]);
 
-export const DEFAULT_APPEARANCE = Object.freeze({ color: '#0d1117', image: null, alpha: 1 });
+export const DEFAULT_APPEARANCE = Object.freeze({ mode: 'dark', color: '#0d1117', image: null, alpha: 1 });
 
 const clampAlpha = value => {
   const number = Number(value);
@@ -28,6 +28,7 @@ export function readAppearance(storage = globalThis.localStorage) {
     if (!raw) return { ...DEFAULT_APPEARANCE };
     const parsed = JSON.parse(raw);
     return {
+      mode: parsed?.mode === 'light' ? 'light' : 'dark',
       color: /^#[0-9a-f]{6}$/i.test(parsed?.color || '') ? parsed.color : DEFAULT_APPEARANCE.color,
       image: typeof parsed?.image === 'string' && parsed.image.startsWith('data:image/') ? parsed.image : null,
       alpha: clampAlpha(parsed?.alpha),
@@ -60,23 +61,28 @@ export function applyAppearance(view) {
   if (!root) return;
   const state = { ...DEFAULT_APPEARANCE, ...(view || {}) };
   const alpha = clampAlpha(state.alpha);
+  const light=state.mode==='light';
+  root.setAttribute?.('data-theme',light?'light':'dark');
+  root.style.colorScheme=light?'light':'dark';
   const rgb = channels(state.color);
+  const direction=light?-1:1;
+  const tone=delta=>shift(rgb,delta*direction);
   root.style.setProperty('--av-bg-color', state.color);
   root.style.setProperty('--av-bg-image', state.image ? `url("${state.image}")` : 'none');
   root.style.setProperty('--av-panel-alpha', String(alpha));
-  root.style.setProperty('--av-panel', fade(shift(rgb, 4), alpha));
-  root.style.setProperty('--av-panel-raised', fade(shift(rgb, 18), alpha));
-  root.style.setProperty('--av-panel-hover', fade(shift(rgb, 28), alpha));
-  root.style.setProperty('--av-line', fade(shift(rgb, 42), 0.65));
-  root.style.setProperty('--av-line-hover', fade(shift(rgb, 66), 0.8));
-  root.style.setProperty('--av-caption', fade(shift(rgb, -4), 0.94));
+  root.style.setProperty('--av-panel', fade(tone(4), alpha));
+  root.style.setProperty('--av-panel-raised', fade(tone(18), alpha));
+  root.style.setProperty('--av-panel-hover', fade(tone(28), alpha));
+  root.style.setProperty('--av-line', fade(tone(42), 0.65));
+  root.style.setProperty('--av-line-hover', fade(tone(66), 0.8));
+  root.style.setProperty('--av-caption', fade(tone(-4), 0.94));
   // Legacy surfaces and newer components share the same live theme palette.
   root.style.setProperty('--bg', state.color);
-  root.style.setProperty('--surface', fade(shift(rgb, 4), alpha));
-  root.style.setProperty('--card', fade(shift(rgb, 18), alpha));
-  root.style.setProperty('--border', fade(shift(rgb, 42), 0.65));
+  root.style.setProperty('--surface', fade(tone(4), alpha));
+  root.style.setProperty('--card', fade(tone(18), alpha));
+  root.style.setProperty('--border', fade(tone(42), 0.65));
   // 输入区比面板再深一档，保住「凹进去」的层次；聚焦时再亮一点。
-  root.style.setProperty('--av-field', fade(shift(rgb, -4), alpha));
+  root.style.setProperty('--av-field', fade(tone(-4), alpha));
   root.style.setProperty('--av-field-focus', fade(rgb, alpha));
   root.style.setProperty('--av-panel-solid', fade(rgb, Math.max(alpha, 0.94)));
   root.style.setProperty('--av-modal', fade(rgb, 0.55 + alpha * 0.45));
@@ -113,6 +119,7 @@ export function createAppearanceCard({ toast = () => {}, storage = globalThis.lo
   card.className = 'settings-card';
   card.innerHTML = `
     <div class="settings-section-title"><span>外观</span></div>
+    <div class="appearance-theme" role="group" aria-label="界面主题"><button type="button" data-appearance-mode="dark">☾ 深色</button><button type="button" data-appearance-mode="light">☀ 浅色</button></div>
     <div class="appearance-row" data-appearance-presets></div>
     <div class="appearance-row">
       <label class="field appearance-color"><span>自定义底色</span><input type="color" data-appearance-color aria-label="自定义背景底色"></label>
@@ -158,6 +165,7 @@ export function createAppearanceCard({ toast = () => {}, storage = globalThis.lo
   }
 
   function paint() {
+    for(const button of card.querySelectorAll('[data-appearance-mode]'))button.setAttribute('aria-pressed',String(button.dataset.appearanceMode===view.mode));
     colorInput.value = view.color;
     alphaInput.value = String(Math.round(view.alpha * 100));
     alphaValue.textContent = `${Math.round(view.alpha * 100)}%`;
@@ -166,9 +174,14 @@ export function createAppearanceCard({ toast = () => {}, storage = globalThis.lo
     }
   }
 
+  card.querySelector('.appearance-theme').addEventListener('click',event=>{
+    const mode=event.target.closest('[data-appearance-mode]')?.dataset.appearanceMode;
+    if(!mode||mode===view.mode)return;
+    save({mode,color:mode==='light'?'#f3f5f7':'#0d1117'});
+  });
   presetBox.addEventListener('click', event => {
     const button = event.target.closest('.appearance-swatch');
-    if (button) save({ color: button.dataset.color });
+    if (button) save({ mode:'dark', color: button.dataset.color });
   });
   colorInput.addEventListener('change', () => save({ color: colorInput.value }));
   alphaInput.addEventListener('input', () => save({ alpha: clampAlpha(Number(alphaInput.value) / 100) }));
@@ -193,6 +206,7 @@ export function createAppearanceCard({ toast = () => {}, storage = globalThis.lo
     toast('已恢复默认外观');
   });
 
+  globalThis.window?.addEventListener('storage',event=>{if(event.key===KEY){view=readAppearance(storage);applyAppearance(view);paint();}});
   paint();
   return { card };
 }

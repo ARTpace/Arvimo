@@ -1,3 +1,7 @@
+import {rememberPictureSnapshot} from './discovery-feed.js';
+import {mergePicturePage} from './picture-page.js';
+import {isMusicSite} from './music-platforms.js';
+import {isSocialMediaSite} from './short-video-platforms.js';
 import {createLibraryGridCache} from './library-grid-cache.js';
 import {orderedCategories} from './category-order.js';
 import {syncLocalFilterMarkup,toggleLocalFilterBranch} from './local-filter-dom.js';
@@ -13,12 +17,14 @@ import {tagPanel} from './asset-tags.js';
 import {statusText,subtitleText,pageInfoNote,describeRequest,SOURCE_LABELS} from './discovery-view.js';
 import {aspectRatioStyle,displayGridClass,galleryAvailable} from './gallery-view.js';
 import {platformById,isPictureSite,pictureSiteLoginable,pictureSiteSearchable,platformLabel} from './platforms.js';
-import {bindSiteLogin,markSiteLogin} from './site-login.js';
+import {bindSiteLogin} from './site-login.js';
+import {askText} from './ask-dialog.js';
 import {modePresetById} from './mode-presets.js';
 import {kindById} from './content-kind-tabs.js';
 import {TYPE_GROUPS,activeLocalTypeId,localTypeFacets} from './local-type-tree.js';
 import {filterTagEntries,tagHitLabel} from './tag-search.js';
 import {groupTagEntries,ensureFacetVocab} from './tag-facet-map.js';
+import {loadingHtml} from './loading-indicator.js';
 /** 展示区标题带上当前模式，让人一眼看出这一屏是哪一类资源（模式是显式主状态）。 */
 const modeTitlePrefix=state=>{const preset=modePresetById(state.mode);return preset?`${preset.label} · `:'';};
 import {findLocalJob} from './blender-send.js';
@@ -46,7 +52,7 @@ import {localAssetCategories} from './local-filters.js';
 export const FILTER_ROWS=['filters-sketchfab','filters-artstation','filters-polyhaven','filters-ambientcg','filters-polypizza','filters-kenney','filters-freestylized','filters-polyfork','filters-uiverse','filters-fab','filters-merged','filters-all','filters-platform-empty'];
 
 export function createLibraryView(ctx){
- const {$,icon,esc,fmt,state,queuePulse,cardView,composite,filtered,activeModes,galleryActive,categories,describeArt,artstationUI,downloadsUI,filterTreesUI,mergedFiltersUI,findModel,sendControl,isVisitor=false,imageDownload,gltfPreview,extraCards=()=>[],openPictureBoard,openPictureAuthor,backToPictureBoards,toast,openImageGallery,refreshAssets=()=>{},pageRows=rows=>rows,reloadPictureSite=()=>{},openPictureUrl=()=>{}}=ctx;
+ const {$,icon,esc,fmt,state,queuePulse,cardView,composite,filtered,activeModes,galleryActive,categories,describeArt,artstationUI,downloadsUI,filterTreesUI,mergedFiltersUI,findModel,sendControl,isVisitor=false,imageDownload,gltfPreview,extraCards=()=>[],openPictureBoard,openPictureAuthor,backToPictureBoards,toast,openImageGallery,refreshAssets=()=>{},pageRows=rows=>rows,reloadPictureSite=()=>{},openPictureUrl=()=>{},onFabSeller=null}=ctx;
  const masonry=observeMasonry($('#grid'));
  const libraryGridCache=createLibraryGridCache($('#grid'));
 // 缩略图确认加载失败的在线条目（Sketchfab 图床 404，基本等于模型已下架）：记住 uid，
@@ -55,9 +61,8 @@ const coverErrorsBound=new WeakSet(),coverRatiosBound=new WeakSet();
 function counts(){
  const activeStates=new Set(['queued','held','retry_wait','running','transferring','validating','saving','cancelling']);
  const activeJobs=(downloadsUI()?.jobs||[]).filter(j=>activeStates.has(j.state));
- const activeUids=new Set(activeJobs.map(j=>j.uid));
- const pulse=[...queuePulse].filter(([uid,t])=>Date.now()-t<6000&&!activeUids.has(uid)).length;
- const queue=activeJobs.length+pulse;
+ // 徽标只统计后台已接受的任务；卡片的点击动画不代表入队成功。
+ const queue=activeJobs.length;
  // 本地素材包（含图站整站下载的图片文件夹）也是资产库里看得见的卡片，
  // 侧栏数字得跟着它们走，否则「卡片比数字多」看起来就像扫描出错。
  const localExtra=state.route==='discover'?0:(extraCards?.()||[]).length;
@@ -68,15 +73,14 @@ function renderStatus(){
  const f=composite(),el=$('#scan-status');el.hidden=state.route!=='discover';
  // 各站「已加载 / 本轮跳过 / 没有匹配」已经能从结果本身看出来，不再铺在搜索框下面。
  // 检索中的进度由顶部小猫播报，取消键搬进结果头部的 .picture-site-bar；
- // 这一行只剩失败、中止，以及链接解析的返回按钮，正常搜索时整条不占位。
+ // 这一行现在只剩失败与中止，正常搜索时整条不占位（「返回搜索结果」入口已按 2026-11-19 反馈去掉）。
  const warnings=(f.warnings||[]).filter(text=>!/本轮跳过|没有对应分类|没有匹配/.test(text));
- const noteworthy=f.error||f.aborted||state.source==='link';
- el.classList.toggle('idle',!noteworthy);el.classList.toggle('error',f.error);
+ const showFailure=(f.error||f.aborted)&&!f.rows.length;
+ el.classList.toggle('idle',!showFailure);el.classList.toggle('error',f.error);
  el.replaceChildren();
- if(!noteworthy)return;
- if(f.error||f.aborted){const span=document.createElement('span');span.textContent=statusText({sources:f.sources,feeds:state.feeds,platform:state.platform});el.append(span);}
- if(state.source==='link'){const back=document.createElement('button');back.className='text-button';back.id='back-to-search';back.textContent='返回搜索结果';back.onclick=()=>{state.source='search';renderGrid();};el.append(back);}
- if(warnings.length&&(f.error||f.aborted)){const warning=document.createElement('span');warning.className='warning';warning.textContent=warnings.slice(0,2).join('；');el.append(warning);}
+ if(!showFailure)return;
+ {const span=document.createElement('span');span.textContent=statusText({sources:f.sources,feeds:state.feeds,platform:state.platform});el.append(span);
+ if(warnings.length){const warning=document.createElement('span');warning.className='warning';warning.textContent=warnings.slice(0,2).join('；');el.append(warning);}}
 }
 /** 网格绘制。数据集签名 = uid 序列 + 视图标志（瀑布流/紧凑）：签名不变说明这一轮只是
  *  状态变化（收藏、勾选、下载态、精度选择），逐卡比对 HTML 字符串，只替换有变化的卡片，
@@ -167,8 +171,13 @@ function paintGrid(models,gallery,online,busy){
  const signature=items.map(item=>item.key).join('|')+(gallery?'#g':'');
  // 网格 ↔ 瀑布流、发现页 ↔ 本地库、首次绘制：DOM 结构与定位方式完全不同，只能整块重建。
  const mode=`${gallery?'g':'l'}${online?'o':'l'}`;
+ // 一张卡片都没有、又在加载中：只画通用加载动效并直接返回。不能走下面的增量对齐——
+ // 它会把上一个动效节点当成「没有 key 的旧节点」删掉，两次 busy 之后屏幕上就什么都不剩。
+ // gridMode 清空是为了强制下一帧整块重建：瀑布流的卡片是绝对定位的，动效块不是，
+ // 两种布局不能共用同一份 DOM（否则有数据后卡片会全部叠在原点）。
+ if(!items.length&&busy){gridMode='';gridSignature='';grid.classList.remove('gallery');grid.style.removeProperty('--masonry-height');grid.innerHTML=loadingHtml('正在加载…');return visible;}
  if(mode!==gridMode||!grid.firstElementChild){
-  grid.innerHTML=items.map(cardMarkup).join('')||(busy?'<div class="skeleton"></div>'.repeat(4):'');
+  grid.innerHTML=items.map(cardMarkup).join('')||(busy?loadingHtml('正在加载…'):'');
   gridMode=mode;gridSignature=signature;cardHtml=htmlOf;
   if(gallery)masonry.flush();
   return visible;
@@ -420,7 +429,9 @@ function renderGrid(){
    state.filter==='trash'?'移除的资产先在这里暂存，可恢复或彻底删除':'入库保存资源记录，下载后可使用本地文件');
  }
  // 网格 / 瀑布流互斥，按钮状态只由这里的状态推导，不在点击处理里各写一遍。
- $('#grid').classList.toggle('gallery',gallery);$('#grid').classList.toggle('loading',online&&f.busy&&!models.length);$('#grid').setAttribute('aria-busy',online&&f.busy?'true':'false');
+ // 首次加载（还没有旧卡片）交给居中的加载动效表达，别把动效本身也调成 55% 透明度；
+ // 只有「重新搜索、旧结果还在」时才需要整体压暗提示正在换数据。
+ $('#grid').classList.toggle('gallery',gallery);$('#grid').classList.toggle('loading',online&&f.busy&&models.length>0);$('#grid').setAttribute('aria-busy',online&&f.busy?'true':'false');
  renderDisplayButtons();
  // 只在绘制层分页：models 仍是筛选后的完整集合，计数 / 空状态 / 全选都按全量算。
  const visible=paintGrid(models,gallery,online,f.busy);
@@ -431,6 +442,7 @@ function renderGrid(){
  $('#empty h3').textContent=online?(f.error?'暂时无法获取资产':searched?'没有找到匹配的资产':'从一个关键词开始'):state.route==='favorites'?'还没有匹配的收藏':'模型库，留给真正想用的资产';
  $('#empty p').textContent=online?(f.error?'检查网络后重新搜索。旧结果不会被失败请求覆盖。':searched?`试试更短的关键词、英文关键词，或减少筛选条件。${state.platform==='artstation'?'ArtStation 上的 Marmoset Viewer 作品只占搜索结果的一部分。':''}`:'直接输入关键词，或选择上方的推荐词。'):state.search||state.filter!=='all'?'尝试清除本地搜索与筛选条件。':'去“发现资产”搜索，点击加入模型库或爱心收藏，即可在这里保留。';
  $('#empty-explore').hidden=online&&f.busy;
+ $('#empty-explore').innerHTML=`浏览热门资产 ${icon('arrow-right')}`;
  // 登录键默认收起：只有「图站空状态且这个站有登录入口」那一支才点亮它，
  // 否则从图站切回 3D 平台时会留下一颗指向别的站的登录键。
  // （用可选链：老进程/老壳子里可能还没有这颗键，缺了也不该把整个网格绘制打断。）
@@ -440,30 +452,36 @@ function renderGrid(){
   // 能搜的站（小红书 / Pinterest / 花瓣…）过去被这段写死的「按链接解析」误导：展示区教人粘链接，
   // 用户就以为它搜不了关键词。现在按 pictureSiteSearchable 分两种文案，搜索/登录入口都摆在卡片里。
   const picture=isPictureSite(state.platform),current=platformById(state.platform);
+  // 个人内容入口在首次进入时直接可用，无需先搜索一次才能看见。
+  if(state.platform==='xiaohongshu')renderPictureHead({platform:state.platform,url:''},{items:[],boards:[],boardMode:false});
   const searchable=picture&&pictureSiteSearchable(state.platform);
-  const loginable=picture&&pictureSiteLoginable(state.platform);
-  const loginWhy=current.loginFor?`${current.loginFor}需要先登录`:'这个站需要登录态';
+  const keyword=$('#asset-query').value.trim(),keywordOnly=!!keyword&&!/^https?:\/\//i.test(keyword);
+  const loginable=picture&&pictureSiteLoginable(state.platform)&&!(current.keywordNotice&&keywordOnly);
   // 标题沿用图站占位符那一套说法（`输入关键词搜索 X`），不必再给中文站名硬凑一个空格。
   $('#empty h3').textContent=picture?(searchable?`搜索 ${current.label}`:`${current.label} 按链接解析`):'所有平台已关闭';
   $('#empty p').textContent=picture?(searchable
-   ?`输入关键词回车即可搜索 ${current.label}${loginable?`（${loginWhy}，点下面的键扫码一次即可）`:''}；也可以粘笔记 / 作品页 / 博主主页地址。`
-   :`把 ${current.label} 的作品页 / 标签页地址粘到上方搜索框，回车即可解析整站图片。`):'在设置 → 平台模块中开启需要的平台后，即可搜索在线资产。本地资产仍可使用。';
+   ?`输入关键词或粘贴链接，回车搜索${loginable?'；需要时请先登录':''}。`
+   :(current.keywordNotice||'粘贴作品页或标签页链接，回车解析。')):'请在设置中开启需要的平台。';
   // 「浏览热门资产」是 3D 平台的入口（写死 sort:'popular' 去检索），图站上没有对应的推荐流，
   // 点它只会打一个空请求出去 —— 图站的空状态只留登录键与说明。
   $('#empty-explore').hidden=picture;
+  if(picture&&current.searchAlternative&&keywordOnly){
+   $('#empty-explore').hidden=false;
+   $('#empty-explore').textContent=`用${platformById(current.searchAlternative).label}搜索「${keyword}」`;
+  }
   const loginKey=$('#empty-login');
   if(loginKey)loginKey.hidden=!loginable;
   if(loginable)bindSiteLogin(loginKey,state.platform,{toast,onClosed:async()=>{
    // 登录完原地重跑：手上那一次解析（关键词 / 链接）优先，没搜过就退回站点首页推荐。
    const reloaded=await reloadPictureSite?.();
-   if(!reloaded)toast?.('登录已完成，在上方输入关键词即可搜索');
+   if(!reloaded)toast?.(searchable?'登录已完成，在上方输入关键词即可搜索':'登录已完成，请粘贴作品分享链接解析');
   }});
  }
 // 链接解析（文本 / 视频）：没有聚合源，空状态要指出「粘链接」这条路，
 // 而不是沿用上面「所有平台已关闭」的兜底文案。放在原块之后覆盖，避免改动那一大段图站分支。
 if(online&&!activeModes().length&&platformById(state.platform).link){
  $('#empty h3').textContent='粘贴链接开始解析';
- $('#empty p').textContent='视频 / 文本暂无公开聚合源：把视频页、文档页或直链地址粘到上方搜索框，回车即可解析成卡片。要按类型筛本地文件，去「资产库」点同一枚图标。';
+ $('#empty p').textContent='粘贴页面或直链地址，回车解析。';
  $('#empty-explore').hidden=true;
  const linkLogin=$('#empty-login');
  if(linkLogin)linkLogin.hidden=true;
@@ -1033,8 +1051,18 @@ function preview(uid){
    openPicturePreview(items[0],{platform:'artstation',source:metadata.pageUrl,items,project:true,model});
   }catch(error){if(token===picturePreviewToken)toast?.(`作品预览读取失败：${error.message}`);}
  }
- function openPicturePreview(it,ps){
-  picturePreviewToken++;
+ async function openPicturePreview(it,ps){
+  const token=++picturePreviewToken;
+  if(it.type==='video'&&!it.url&&isSocialMediaSite(ps?.platform)){
+   try{
+    toast?.('正在解析视频预览…');
+    const response=await fetch('/api/picture-site/resolve?'+new URLSearchParams({platform:ps.platform,url:it.pageUrl,limit:'60'}),{headers:{'X-SFX-Local':'1'}});
+    const data=await response.json();if(!response.ok)throw Error(data.error||'视频解析失败');
+    if(token!==picturePreviewToken)return;
+    const first=data.items?.find(item=>item.url);if(!first)throw Error('未取得可预览媒体');
+    return openPicturePreview(first,{...ps,...data});
+   }catch(error){if(token===picturePreviewToken)toast?.(error.message);return;}
+  }
   const dlg=$('#file-preview-dialog'),stage=$('#file-preview-stage'),aside=$('#file-preview-details');
   if(!dlg||!stage||!aside)return;
   const images=ps?.items?.length?ps.items:[it];
@@ -1056,7 +1084,12 @@ function preview(uid){
   // 名字就是一个入口 —— 点了用同一套图站解析去看他的作品或画板，不用回浏览器翻。
   const authorName=it.author||ps?.author||'';
   const canJump=typeof openPictureAuthor==='function'&&!!it.authorUrl;
-  const authorLine=it.platform==='artstation'&&it.authorUrl?`<a class="picture-author" href="${esc(it.authorUrl)}" target="_blank" rel="noopener noreferrer">${esc(authorName)}</a>`:canJump
+  // Fab 的作者是一等筛选维度（服务端 fabSearch 支持 seller 精确匹配），所以这里的名字直接
+  // 做成「只看这位卖家」的入口：点了带着 seller 重搜，不再把人甩到浏览器里自己翻。
+  const fabSeller=String((it.platform||ps?.platform||'')==='fab'?authorName:'').trim();
+  const authorLine=fabSeller
+   ?`<button class="picture-author" data-fab-seller="${esc(fabSeller)}" title="只看这位卖家在 Fab 上的资产">${esc(fabSeller)}<span class="picture-author-go" aria-hidden="true">›</span></button>`
+   :it.platform==='artstation'&&it.authorUrl?`<a class="picture-author" href="${esc(it.authorUrl)}" target="_blank" rel="noopener noreferrer">${esc(authorName)}</a>`:canJump
    ?`<button class="picture-author" data-author-url="${esc(it.authorUrl)}" title="查看该作者的作品 / 画板">${esc(authorName||'查看作者')}<span class="picture-author-go" aria-hidden="true">›</span></button>`
    :`<p class="author-name">${esc(authorName||'图站抓取')}</p>`;
   const tagLine=(Array.isArray(it.tags)&&it.tags.length)
@@ -1068,13 +1101,26 @@ function preview(uid){
    ${model?tagPanel(state,model,esc):tagLine}
    ${it.description?`<details class="pv-extra"><summary>${icon('help')}<span>详细信息</span></summary><p class="picture-description">${esc(it.description)}</p></details>`:''}
    ${model?artworkActions(model):`<div class="preview-actions"><a class="primary" title="打开原图" aria-label="打开原图" href="${esc(it.embedUrl||it.url)}" target="_blank" rel="noopener noreferrer">${icon('image')}</a>${it.pageUrl?`<a title="查看原网页" aria-label="查看原网页" href="${esc(it.pageUrl)}" target="_blank" rel="noopener noreferrer">${icon('external')}</a>`:''}${it.pid?`<button title="找相似" aria-label="找相似" data-pin-similar="${esc(it.pid)}">${icon('search')}</button>`:''}</div>`}`;
-  if(canJump||it.authorUrl)aside.querySelector('.pv-origin')?.insertAdjacentHTML('beforeend',authorLine);
+  // 来源行本来就印着「Fab · 作者名」，卖家可点时就地把名字换成按钮，免得同一个名字出现两次。
+  if(fabSeller){
+   const origin=aside.querySelector('.pv-origin');
+   if(origin){
+    const label=origin.querySelector('span');if(label)label.textContent='Fab · ';
+    origin.insertAdjacentHTML('beforeend',authorLine);
+   }
+  }else if(canJump||it.authorUrl)aside.querySelector('.pv-origin')?.insertAdjacentHTML('beforeend',authorLine);
   compactPreview(aside,infoModel);
   const authorBtn=aside.querySelector('[data-author-url]');
   if(authorBtn)authorBtn.addEventListener('click',()=>{
    const target=authorBtn.dataset.authorUrl;
    dlg.close();
    openPictureAuthor?.(target,ps?.platform);
+  });
+  const fabSellerBtn=aside.querySelector('[data-fab-seller]');
+  if(fabSellerBtn)fabSellerBtn.addEventListener('click',()=>{
+   const seller=fabSellerBtn.dataset.fabSeller;
+   dlg.close();
+   onFabSeller?.(seller);
   });
   const similarBtn=aside.querySelector('[data-pin-similar]');
   if(similarBtn)similarBtn.onclick=async()=>{
@@ -1111,28 +1157,41 @@ function preview(uid){
  *  结构刻意和模型卡（card-view.js）对齐：左上角类型角标、标题行（标题 + 作者 + 来源平台）、
  *  底部一排圆形图标键。以前这里只有「标题 + 作者块 + 标签行」，和模型卡并排时高度、
  *  角标、动作区全都不一样 —— 同一个资产库里两种卡片语言，看着像没做完。 */
-function pictureCardHtml(it,ps,gallery,isPin){
+async function downloadMediaPost(ps,url=ps.source||ps.url){
+ const manager=downloadsUI();if(!manager?.enqueue){toast?.('后台服务未连接');return;}
+ try{
+  const song=(ps.items||[]).find(item=>item.pageUrl===url);
+  const result=await manager.enqueue([{uid:pictureSiteJobUid(ps.platform,url),platform:ps.platform,name:song?.title||ps.title||'媒体作品',author:song?.author||ps.author||'',thumbnail:song?.thumb||ps.cover||'',url,assetType:isMusicSite(ps.platform)?'audio':(ps.items||[]).some(item=>item.type==='video'||item.mediaType==='video')?'video':'images'}],{output:'folder'},false,undefined,'media');
+  toast?.(result.added.length?'已加入媒体下载任务':'此作品已在队列或已下载');
+ }catch(error){toast?.(error.message);}
+}
+function pictureCardHtml(it,ps,gallery,isPin,eager=false){
  // `thumb` 是站方 CDN 的小尺寸变体（花瓣 _fw480：1.7MB → 173KB）；没有就用原图。data-url 始终是原图。
  // v=2：之前缩略图解析失败时服务端会把 4xx 连同 7 天 max-age 一起发回去，浏览器就把「裂图」记了一周。
  // 换一次 URL 绕过那些坏缓存（服务端不读 v，纯缓存键扰动）。
  // 视频投稿（Civitai 的 mp4）：没有海报图，卡片直接用 <video> 播首帧，悬停再静音播一下。
- const isVideo=it.type==='video'||/\.(mp4|webm|mov)(\?|$)/i.test(it.url||'');
- const src=isVideo?`/api/video?url=${encodeURIComponent(it.play||it.url)}`:`/api/image?url=${encodeURIComponent(it.thumb||it.url)}&card=1&v=2`;
+ const isAudio=it.type==='audio';
+ const isVideo=it.type==='video'||it.mediaType==='video'||it.noteType==='video'||/\.(mp4|webm|mov)(\?|$)/i.test(it.url||'');
+ const isLazyVideo=isVideo&&(!it.url||(ps.platform==='xiaohongshu'&&it.noteType==='video'&&!it.play));
+ const audioCover=it.thumb||ps.cover||'';
+ const src=isAudio?(audioCover?`/api/image?url=${encodeURIComponent(audioCover)}&card=1&v=2`:'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%22320%22 height=%22320%22%3E%3Crect width=%22320%22 height=%22320%22 fill=%22%23252c3a%22/%3E%3Ctext x=%22160%22 y=%22195%22 text-anchor=%22middle%22 fill=%22%23b9c6dd%22 font-size=%22100%22%3E%E2%99%AB%3C/text%3E%3C/svg%3E'):isLazyVideo?`/api/image?url=${encodeURIComponent(it.thumb||ps.cover||'')}&card=1&v=2`:isVideo?`/api/video?url=${encodeURIComponent(it.play||it.url)}`:`/api/image?url=${encodeURIComponent(it.thumb||it.url)}&card=1&v=2`;
  const tags=(it.tags||[]).filter(Boolean);
  const ratio=gallery?aspectRatioStyle(it.width,it.height):'';
- const attrs=`data-url="${esc(it.url)}" data-play="${esc(it.play||'')}" data-type="${isVideo?'video':''}" data-pid="${esc(it.pid||'')}" data-w="${it.width||''}" data-h="${it.height||''}" data-title="${esc(it.title||'')}" data-platform="${esc(ps.platform||'')}" data-source="${esc(ps.source||'')}" data-author="${esc(it.author||'')}" data-author-url="${esc(it.authorUrl||'')}" data-page-url="${esc(it.pageUrl||'')}" data-tags="${esc(tags.join(' '))}" data-category="${esc(it.category||'')}" style="cursor:zoom-in${ratio?`;aspect-ratio:${ratio}`:''}"`;
+ const attrs=`data-url="${esc(it.url)}" data-play="${esc(it.play||'')}" data-type="${isAudio?'audio':isVideo?'video':''}" data-pid="${esc(it.pid||'')}" data-w="${it.width||''}" data-h="${it.height||''}" data-title="${esc(it.title||'')}" data-platform="${esc(ps.platform||'')}" data-source="${esc(ps.source||'')}" data-author="${esc(it.author||'')}" data-author-url="${esc(it.authorUrl||'')}" data-page-url="${esc(it.pageUrl||'')}" data-tags="${esc(tags.join(' '))}" data-category="${esc(it.category||'')}" style="cursor:zoom-in${ratio?`;aspect-ratio:${ratio}`:''}"`;
  // 骨架、封面裁切、标题与作者排版一律交给 card-shell：图站卡片和 ArtStation 图片卡共用同一份 DOM，
  // 样式自然一致。卡片只负责「填什么」。
- const media=isVideo
+ const media=isAudio
+  ?`<img class="thumbnail" src="${esc(src)}" alt="${esc(it.title||'音频')}" ${attrs}><audio controls preload="none" src="/api/audio?${it.url?`url=${encodeURIComponent(it.url)}`:`platform=${encodeURIComponent(ps.platform)}&amp;source=${encodeURIComponent(it.pageUrl)}`}" aria-label="试听 ${esc(it.title||'歌曲')}" style="position:absolute;bottom:8px;left:8px;width:calc(100% - 16px);z-index:4"></audio>`
+  :isVideo&&!isLazyVideo
   ?`<video class="thumbnail" src="${esc(src)}" ${attrs} muted playsinline loop preload="metadata" aria-label="${esc(it.title||'视频')}"></video>`
-  :`<img class="thumbnail" loading="lazy" decoding="async" src="${esc(src)}" alt="${esc(it.title||'')}" ${attrs}>`;
+  :`<img class="thumbnail" loading="${eager?'eager':'lazy'}" decoding="async" src="${esc(src)}" alt="${esc(it.title||'')}" ${attrs}>`;
  // 左上角类型角标：模型卡是「3D ASSET / PBR 材质 / HDRI」，图站这边按图片 / 视频分。
- const typeBadge=`<div class="card-type">${icon(isVideo?'play':'image')}${isVideo?'视频':'图片'}</div>`;
+ const typeBadge=`<div class="card-type">${icon(isAudio?'music':isVideo?'play':'image')}${isAudio?'音频':isVideo?'视频':'图片'}</div>`;
  // 图站单图以前整张卡没有收藏键。现在按「平台 + 原图地址」生成稳定 uid，登记成可收藏目标，
  // 复用模型卡那颗心形键与 toggleFavorite -> collect 链路：点一下会真的把这张图记进资产库与收藏。
  const favUid=favoriteUid('picture',`${ps.platform}:${it.url||it.pid||it.pageUrl||it.title||''}`);
  registerFavoriteTarget(favUid,{uid:favUid,name:it.title||ps.title||'未命名图片',platform:ps.platform,
-  assetType:isVideo?'video':'image',thumbnail:it.thumb||it.url,url:it.pageUrl||it.url,
+  assetType:isAudio?'audio':isVideo?'video':'image',thumbnail:it.thumb||it.url,url:it.pageUrl||it.url,
   author:it.author||'',license:'',tags});
  const heart=favoriteButtonHtml({uid:favUid,saved:state.favorites.has(favUid),icon,esc});
  // 中间热区沿用 ArtStation 图片卡的同一个 .preview-hit，hover 才浮出来；视频再给一个常驻播放角标。
@@ -1148,11 +1207,12 @@ function pictureCardHtml(it,ps,gallery,isPin){
  const openTarget=it.pageUrl||it.url;
  const openLabel=it.pageUrl?'打开原页面':'打开原图';
  const actions=[
-  `<button class="card-action-pic" data-pic-preview title="查看大图" aria-label="查看大图 ${esc(it.title||'')}">${icon('eye')}<span>查看大图</span></button>`,
+  (isSocialMediaSite(ps.platform)||isMusicSite(ps.platform))?`<button class="card-action-pic" data-pic-download="${esc(it.pageUrl||ps.source||ps.url)}" title="${isAudio?'下载音频':'下载作品全部媒体'}" aria-label="${isAudio?'下载音频':'下载作品全部媒体'}">${icon('download')}<span>下载作品</span></button>`:'',
+  `<button class="card-action-pic" data-pic-preview title="${isAudio?'试听 / 暂停':'查看大图'}" aria-label="${isAudio?'试听 / 暂停':'查看大图'} ${esc(it.title||'')}">${icon('eye')}<span>查看大图</span></button>`,
   `<button class="card-action-pic" data-pic-tags="${esc(tags.join(' '))}" title="${esc(tagTip)}" aria-label="标签${tags.length?` ${tags.length}`:''}">${icon('tag')}<span>标签${tags.length?` ${tags.length}`:''}</span></button>`,
   openTarget?`<a class="card-action-pic" href="${esc(openTarget)}" target="_blank" rel="noopener noreferrer" title="${openLabel}" aria-label="${openLabel}">${icon('external')}<span>${openLabel}</span></a>`:'',
   isPin&&it.pid?`<button class="card-action-pic" data-pin-similar data-pid="${esc(it.pid)}" title="用这张图找相似" aria-label="用这张图找相似">${icon('search')}<span>找相似</span></button>`:'',
-  ps.platform==='xiaohongshu'&&it.pid&&(ps.albums||[]).length?`<label class="card-select xhs-pick"><input type="checkbox" data-xhs-pick="${esc(it.pid)}" aria-label="选择这篇笔记"></label>`:'',
+  (ps.collectionPlatform&&collectionState.platform===ps.collectionPlatform&&collectionState.ops.includes('removeItem')&&it.pid)?`<button class="card-action-pic" data-collection-remove-item data-pid="${esc(it.pid)}" title="从当前收藏夹移出" aria-label="从收藏夹移出">${icon('close')||'✕'}<span>移出收藏</span></button>`:'',
  ].join('');
  return assetCard({keyName:'pid',keyValue:esc(it.pid||''),media,overlay,title:esc(it.title||''),titleAttrs:`data-pic-preview title="${esc(it.title||'')}"`,byline:byline+sourceBadge,actions});
 }
@@ -1166,24 +1226,31 @@ async function openXhsNote(it,ps){
   openPicturePreview(it,ps);
   return;
  }
- openPicturePreview(it,{...ps,items:[it],title:it.title,source:pageUrl,noteLoading:true});
+ const cover={...it,type:'image',mediaType:'image'};
+ openPicturePreview(cover,{...ps,items:[cover],title:it.title,source:pageUrl,noteLoading:true});
  const token=picturePreviewToken;
- toast?.('正在读取笔记里的图片…');
+ toast?.('正在读取笔记内容…');
  try{
-  const response=await fetch(`/api/picture-site/resolve?platform=xiaohongshu&url=${encodeURIComponent(pageUrl)}`,{headers:{'X-SFX-Local':'1'}});
+  const response=await fetch(`/api/picture-site/resolve?platform=xiaohongshu&refresh=1&url=${encodeURIComponent(pageUrl)}`,{headers:{'X-SFX-Local':'1'}});
   const data=await response.json();
   if(token!==picturePreviewToken)return;
   if(!response.ok)throw Error(data.error||'读取笔记失败');
   const items=(data.items||[]).map(item=>({...item,platform:'xiaohongshu',thumb:item.thumb||item.url,description:item.description||''}));
   if(!items.length)throw Error('这篇笔记没有可展示的图片');
-  openPicturePreview(items[0],{platform:'xiaohongshu',source:pageUrl,title:data.title||it.title,author:data.author||it.author,items});
+  const first=items.find(item=>item.type==='video'||item.mediaType==='video')||items[0];
+  openPicturePreview(first,{platform:'xiaohongshu',source:pageUrl,title:data.title||it.title,author:data.author||it.author,items});
  }catch(error){
   if(token===picturePreviewToken)toast?.(`笔记读取失败：${error.message}`);
  }
 }
-function bindPictureCards(root,ps){
+function bindPictureCards(root,ps,gallery=root?.classList?.contains('gallery')){
  if(!root)return;
- const gallery=root.classList.contains('gallery');
+ root.querySelectorAll('audio').forEach(audio=>{if(audio.dataset.bound)return;audio.dataset.bound='1';audio.addEventListener('click',event=>event.stopPropagation());audio.addEventListener('error',()=>toast?.('试听失败：平台可能需要登录或未提供完整音频')); });
+ root.querySelectorAll('[data-pic-download]').forEach(button=>{
+  if(button.dataset.picDownloadBound)return;button.dataset.picDownloadBound='1';
+  button.addEventListener('click',event=>{event.preventDefault();event.stopPropagation();downloadMediaPost(ps,button.dataset.picDownload);});
+ });
+
  root.querySelectorAll('[data-card-author]').forEach(btn=>{
   if(btn.dataset.picBound||!btn.dataset.cardAuthor)return;
   btn.dataset.picBound='1';
@@ -1213,10 +1280,25 @@ function bindPictureCards(root,ps){
    pictureSimilarHandler([btn.dataset.pid],btn);
   });
  });
+ // 「移出收藏」：通用收藏夹契约的单条移出操作，能力位来自探测。
+ root.querySelectorAll('[data-collection-remove-item]').forEach(btn=>{
+  if(btn.dataset.picBound)return;
+  btn.dataset.picBound='1';
+  btn.addEventListener('click',async event=>{
+   event.preventDefault();event.stopPropagation();
+   if(!confirm?.('确定把这条从当前收藏夹移出吗？'))return;
+   try{
+    await collectionMutate(ps,{action:'removeItem',noteId:btn.dataset.pid,boardId:ps.boardId||''});
+    toast?.('已从收藏夹移出');
+    btn.closest('.model-card')?.remove();
+   }catch(error){toast?.(error.message);}
+  });
+ });
  root.querySelectorAll('img[data-url],video[data-url]').forEach(img=>{
   if(img.dataset.picBound)return;
   img.dataset.picBound='1';
   img.addEventListener('click',()=>{
+   if(img.dataset.type==='audio'){const audio=img.closest('.model-card')?.querySelector('audio');if(audio){if(audio.paused)audio.play().catch(error=>toast?.('试听失败：'+error.message));else audio.pause();}return;}
    const item={
     url:img.dataset.url,play:img.dataset.play||'',type:img.dataset.type||'',pid:img.dataset.pid||'',
     width:Number(img.dataset.w)||0,height:Number(img.dataset.h)||0,
@@ -1241,8 +1323,8 @@ function bindPictureCards(root,ps){
   // 同一个 3:2 —— 这就是「切了瀑布流，图片比例却都一个样」的真正原因。
   // 只有条目没给宽高的平台，才靠解码后的真实尺寸兜底。
   const itemRatio=aspectRatioStyle(node.dataset.w,node.dataset.h);
+  if(itemRatio)return;
   const apply=()=>{
-   if(itemRatio)return;
    // video 用 videoWidth/videoHeight，走 loadedmetadata；以前整类视频卡片被跳过，全落到 1:1。
    const ratio=isVideo
     ?aspectRatioStyle(node.videoWidth,node.videoHeight)
@@ -1256,9 +1338,8 @@ function bindPictureCards(root,ps){
    return;
   }
   if(node.complete&&node.naturalWidth)apply();else node.addEventListener('load',apply,{once:true});
-  // loading="lazy" 的卡片在绝对定位瀑布流里可能一直等不到 load（量到 0 高 → 不进视口 → 不解码）。
-  // decode() 不靠滚动触发，兜底把比例补上；失败就留给 error 那条例图的占位逻辑。
-  node.decode?.().then(apply).catch(()=>{});
+  // CSS 已提供 1:1 占位高度，懒加载图片可正常进入视口。
+  // 不主动 decode：它会提前请求屏幕外图片，绕过 loading="lazy"。
  });
 }
 
@@ -1275,35 +1356,74 @@ const PICTURE_PAGE=60;
 const PICTURE_LIMIT_MAX=5000;
 let pictureMoreObserver=null;
 const requestPictureMore=scrollIdleTask(()=>maybeLoadMorePicture());
+document.addEventListener('visibilitychange',()=>{if(!document.hidden)requestPictureMore();});
 /** Pinterest 的「找相似」处理器：由 renderPictureSite 注入，bindPictureCards 负责给卡片挂事件。 */
 let pictureSimilarHandler=null;
 /** 工具条入场动效只在该图站这一屏第一次绘制时播：切视图 / 追加卡片都别重放（会闪）。 */
 let barKey='';
+// 收藏夹能力位（通用契约）：平台无关，进入「我的收藏」视图时按平台拉取一次并缓存。
+// ops 是探测后真实可用的写操作；首页/搜索视图为空，前端据此显示或隐藏专辑管理按钮。
+let collectionState={platform:'',ops:[],signatures:{},loaded:false};
+
+/** 拉取某平台收藏夹的真实写能力；结果写入 collectionState，供工具条和卡片渲染读取。 */
+async function ensureCollectionCaps(ps){
+ const platform=ps?.collectionPlatform||'';
+ if(!platform)return;
+ if(collectionState.loaded&&collectionState.platform===platform)return;
+ collectionState={platform,ops:[...(ps.collectionOps||[])],signatures:{},loaded:false};
+ try{
+  const res=await fetch(`/api/platform-collections/caps?platform=${encodeURIComponent(platform)}`,{headers:{'x-sfx-local':'1'}});
+  const data=await res.json().catch(()=>({}));
+  if(res.ok&&data.supported){
+   collectionState={platform,ops:data.live?.ops||data.collectionOps||[],signatures:data.live?.signatures||{},loaded:true};
+  }else collectionState.loaded=true;
+ }catch{collectionState.loaded=true;}
+ // 能力位到齐后重绘当前视图（工具条 + 专辑卡 + 卡片按钮），让用户立刻看到管理入口。
+ if(ps?.mode==='boards'||/\/(?:user\/collect|board\/)/.test(ps?.url||''))renderPictureSite();
+}
+
+/** 统一的收藏夹写操作调用；成功返回 data，失败抛错由调用方 toast。 */
+async function collectionMutate(ps,input){
+ const platform=ps?.collectionPlatform||'';
+ const signature=collectionState.signatures?.[input.action];
+ const res=await fetch('/api/platform-collections',{method:'POST',headers:{'Content-Type':'application/json','x-sfx-local':'1'},body:JSON.stringify({...input,platform,signature})});
+ const data=await res.json().catch(()=>({}));
+ if(!res.ok)throw Error(data.error||'操作失败');
+ return data;
+}
 /** 状态胶囊上的数字：有总数就写「已取 / 共」，否则只写已取。 */
 function pictureStatText(n,total){return total>n?`${n} / ${total}`:`${n}`;}
 /** 状态胶囊的 title：把原来那一整行说明（含来源）收进提示，不在界面上占位置。 */
 function pictureStatTitle(ps,n){
+ if(ps?.busy)return ps.status||'正在加载图片…';
+ if(ps?.error)return ps.status||'图片加载失败';
  const total=Number(ps?.total)||0;
- const head=ps?.truncated?`已加载 ${n}${total>n?` / 共 ${total}`:''} 张 · 继续下滑自动加载更多`:`已加载全部 ${n} 张`;
+ const head=ps?.truncated?`已加载 ${n}${total>n?` / 共 ${total}`:''} 张 · 继续下滑自动加载更多`:`已加载 ${n} 张 · 当前清单已结束`;
  return `${head}；下载会抓取整站原图${ps?.source?`（来源：${ps.source}）`:''}`;
 }
 function pictureMoreHost(){return $('#grid')?.querySelector('.picture-site-more');}
 /** 底部续页行与顶部状态胶囊跟着 items/truncated/total 走，追加卡片后必须重算一次。 */
 function syncPictureMore(){
- const ps=state.pictureSite,host=pictureMoreHost(),n=(ps?.items||[]).length;
+ const ps=state.pictureSite,host=pictureMoreHost(),n=(ps?.mode==='boards'?ps.boards||[]:ps?.items||[]).length;
+ const unit=ps?.mode==='boards'?'位关注用户':'张';
  const total=Number(ps?.total)||0;
  const count=pictureStatText(n,total);
+ const error=ps?.lastError||ps?.warning||'';
  if(host){
-  host.hidden=!ps?.truncated&&!ps?.loadingMore;
+  host.hidden=false;
   host.innerHTML=ps?.loadingMore
    ?'<span class="picture-more-text">正在加载更多…</span>'
+   :error
+    ?`<span>${ps.lastError?'加载更多失败：':''}${esc(error)}</span><button type="button" class="secondary" id="picture-more-retry">重试</button>`
    :ps?.truncated
     ?`<span class="picture-more-text">${count} · 继续下滑自动加载</span><button type="button" class="secondary" id="picture-more-button">加载更多</button>`
-    :`<span class="picture-more-text">已经到底了 · 共 ${n} 张</span>`;
+    :`<span class="picture-more-text">已经到底了 · 共 ${n} ${unit}</span>`;
   // 滚动之外留一个显式的「加载更多」：触控板惯性不好使、或者观察器被判到视口外时，
   // 用户至少有一个能点的东西 —— 模型平台的分页按钮就是这个角色。
   const button=host.querySelector('#picture-more-button');
   if(button)button.onclick=()=>loadMorePicture();
+  const retry=host.querySelector('#picture-more-retry');
+  if(retry)retry.onclick=()=>{ps.retryAt=0;ps.warning='';ps.lastError='';loadMorePicture();};
  }
  // 顶部状态胶囊：只改数字与状态，不重建节点（重建会把动效吃掉、也没必要重排）。
  const hint=document.getElementById('picture-site-hint');
@@ -1331,8 +1451,9 @@ function observePictureMore(){
  if(host&&!host.hidden)pictureMoreObserver.observe(host);
 }
 function maybeLoadMorePicture(){
+ if(document.hidden)return;
  const ps=state.pictureSite;
- if(!ps||ps.busy||ps.loadingMore||!ps.truncated||ps.mode==='boards'||!ps.items?.length)return;
+ if(!ps||ps.busy||ps.controller||ps.loadingMore||ps.warning||ps.lastError||!ps.truncated||!(ps.mode==='boards'?ps.boards:ps.items)?.length)return;
  if(state.route!=='discover')return;
  if(ps.retryAt&&Date.now()<ps.retryAt)return;
  const host=pictureMoreHost();
@@ -1343,43 +1464,39 @@ function maybeLoadMorePicture(){
 }
 async function loadMorePicture(){
  const ps=state.pictureSite,current=Number(ps?.limit)||PICTURE_PAGE;
- if(!ps||ps.busy||ps.loadingMore||!ps.truncated||ps.mode==='boards')return;
+ if(!ps||ps.busy||ps.controller||ps.loadingMore||!ps.truncated||state.route!=='discover')return;
  const next=Math.min(current+PICTURE_PAGE,PICTURE_LIMIT_MAX);
  if(next<=current){ps.truncated=false;syncPictureMore();return;}
+ const controller=new AbortController();ps.moreController=controller;
  ps.loadingMore=true;ps.lastError='';
  syncPictureMore();
  try{
-  const res=await fetch(`/api/picture-site/resolve?platform=${encodeURIComponent(ps.platform)}&limit=${next}&url=${encodeURIComponent(ps.url)}`,{headers:{'x-sfx-local':'1'}});
+  const res=await fetch(`/api/picture-site/resolve?platform=${encodeURIComponent(ps.platform)}&limit=${next}&url=${encodeURIComponent(ps.url)}`,{headers:{'x-sfx-local':'1'},signal:controller.signal});
   const data=await res.json().catch(()=>({}));
   if(!res.ok)throw new Error(data.error||'加载更多失败');
   // 期间切了平台/页面：这批结果只服务旧的那一屏，丢掉。
-  if(state.pictureSite!==ps)return;
-  const have=new Set((ps.items||[]).map(it=>it.url));
-  const fresh=(data.items||[]).filter(it=>it.url&&!have.has(it.url));
-  ps.limit=next;
-  // total 只在服务端把整块画板翻完之后才给（见 picture-index.mjs），中途不猜。
-  if(Number(data.total)>0)ps.total=Number(data.total);
-  if(fresh.length){
-   ps.items=[...(ps.items||[]),...fresh];
-   ps.truncated=!!data.truncated;
-   appendPictureCards(fresh,ps);
-  }else{
-   // 站方翻到头了（服务端返回的还是同一批）：标记到底，避免每次滚动都重发同一个请求。
-   ps.truncated=false;
+  if(controller.signal.aborted||state.pictureSite!==ps||state.route!=='discover')return;
+  const previousItems=ps.items||[];
+  const fresh=mergePicturePage(ps,data,next);
+  const reordered=previousItems.some((item,index)=>item.url!==ps.items?.[index]?.url);
+  if(fresh.length||reordered){
+   if(ps.mode==='boards'||reordered)renderPictureSite();
+   else appendPictureCards(fresh,ps);
   }
-  ps.retryAt=0;
+  ps.retryAt=!fresh.length&&ps.truncated?Date.now()+1500:0;
+  rememberPictureSnapshot(ps);
  }catch(e){
+  if(controller.signal.aborted)return;
   ps.retryAt=Date.now()+5000;
   ps.lastError=e.message||'网络错误';
-  const host=pictureMoreHost();
-  if(host&&state.pictureSite===ps)host.innerHTML=`<span>加载更多失败：${esc(ps.lastError)}，稍后继续下滑重试</span>`;
  }finally{
-  if(state.pictureSite===ps){
-   ps.loadingMore=false;
-   if(!ps.lastError){
-    syncPictureMore();
+  if(ps.moreController!==controller)return;
+  ps.moreController=null;ps.loadingMore=false;
+  if(state.pictureSite===ps&&state.route==='discover'){
+   syncPictureMore();
+   if(!ps.lastError&&!ps.warning){
     // 追加后如果哨兵还在视口附近（超宽屏 / 短图），接着补下一页，不用等用户再滑。
-    if(ps.truncated)setTimeout(maybeLoadMorePicture,250);
+    if(ps.truncated)setTimeout(maybeLoadMorePicture,Math.max(250,(ps.retryAt||0)-Date.now()));
    }
   }
  }
@@ -1388,8 +1505,11 @@ async function loadMorePicture(){
 function appendPictureCards(items,ps){
  const root=$('#grid')?.querySelector('.picture-site-gallery');
  if(!root)return;
- root.insertAdjacentHTML('beforeend',items.map(it=>pictureCardHtml(it,ps,root.classList.contains('gallery'),ps.platform==='pinterest')).join(''));
- bindPictureCards(root,ps);
+ const gallery=root.classList.contains('gallery');
+ const batch=document.createElement('template');
+ batch.innerHTML=items.map(it=>pictureCardHtml(it,ps,gallery,ps.platform==='pinterest')).join('');
+ bindPictureCards(batch.content,ps,gallery);
+ root.append(batch.content);
 }
 
 /**
@@ -1418,21 +1538,30 @@ function pictureToolbarHost(){
  }
  return bar;
 }
-function accountButton(ps){
- const site=platformById(ps.platform)||{};
- const name=site.label||ps.platform||'';
- const login=pictureSiteLoginable(ps.platform);
- return `<span class="psb-account"><button type="button" class="psb-login" id="picture-site-login" data-label="${esc(name)}" ${login?'':'disabled'} title="${login?`登录 ${esc(name)}`:esc(name)}" aria-label="登录 ${esc(name)}">${icon('user')}</button><span class="psb-name">${esc(name)}</span></span>`;
-}
 function renderPictureHead(ps,{items,boards,boardMode}){
  const list=Array.isArray(items)?items:[];
  const title=$('#library-title');
  const xhs=ps.platform==='xiaohongshu';
+ // 收藏夹能力位（通用契约）：有 collectionPlatform 即视为可展示收藏入口，不再写死平台名。
+ const cp=ps.collectionPlatform||'';
+ const hasCollectionView=!!cp&&!!ps.collectionCollectUrl;
+ // 兜底：小红书是首个实现，切换键常驻显示，不依赖能力位链路。
+ // 服务端没重启 / 能力位没透传时，用户仍能从推荐页进收藏夹，不会被焊死入口。
+ // 其他平台继续纯能力位驱动，新平台照契约接入即可，不受此兜底影响。
+ const showCollectionSwitch=hasCollectionView||ps.platform==='xiaohongshu';
+ const pageUrl=ps.url||ps.source||'';
+ const isCollectView=xhs?/\/user\/collect|\/board\//.test(pageUrl):!!(ps.collectionCollectDetect&&new RegExp(ps.collectionCollectDetect).test(pageUrl));
+ const personalView=xhs?((ps.url||'').match(/\/user\/(likes|history|following)(?:[?#/]|$)/)?.[1]||''):'';
+ const huaban=ps.platform==='huaban';
+ const huabanView=huaban?((ps.url||'').match(/\/me\/(boards|following)(?:[?#/]|$)/)?.[1]||''):'';
+ const caps=collectionState.platform===cp?collectionState.ops:(ps.collectionOps||[]);
+ const canCreate=caps.includes('create');
  title.hidden=true;
  if(title.parentElement){
   title.parentElement.hidden=false;
   title.parentElement.querySelectorAll('.psb-account,.model-count-inline').forEach(node=>node.remove());
-  title.parentElement.insertAdjacentHTML('afterbegin',accountButton(ps));
+  // 加载中不在标题旁再写一句「加载中…」：内容区正中的动效已经表达同一件事，两处重复只会显得碎。
+  if(!ps.busy)title.parentElement.insertAdjacentHTML('afterbegin',`<span class="model-count-inline" id="picture-site-hint" role="status" title="${esc(personalView==='following'?'当前加载的关注用户，点击查看作品':pictureStatTitle(ps,list.length))}"><span class="psb-count">${esc(ps.error?'加载失败':personalView==='following'?String(boards.length):pictureStatText(list.length,Number(ps.total)||0))}</span>${ps.error?'':personalView==='following'?'<span>位关注用户</span>':'<span>张</span>'}</span>`);
  }
  const authorChip=$('#library-author');
  if(authorChip)authorChip.hidden=true;
@@ -1449,21 +1578,32 @@ function renderPictureHead(ps,{items,boards,boardMode}){
  barKey=`${ps.platform}|${ps.url}`;
  bar.className=`picture-site-bar${enter?' enter':''}`;
  bar.innerHTML=`
-   ${ps.fromBoards?`<button class="psb-icon" id="picture-site-back" title="返回画板墙（不发请求，画板列表还在内存里）" aria-label="返回画板墙">${icon('arrow-left')}</button>`:''}
-   <span class="psb-stat" id="picture-site-hint" data-state="${busy?'loading':(ps.truncated?'more':'done')}" role="status" title="${busy?'正在解析…':esc(pictureStatTitle(ps,list.length))}"><span class="psb-dot" aria-hidden="true"></span><span class="psb-count">${busy?'…':esc(pictureStatText(list.length,Number(ps.total)||0))}</span><span class="psb-unit">张</span></span>
-   ${xhs?'':`<button class="psb-icon" id="picture-site-download" ${canAct?'':'disabled'} title="${isSearchQuery?'把这次搜索到的图片抓进图片库':'把整站图片抓进图片库（原图，不是缩略图）'}" aria-label="${isSearchQuery?'下载这批':'下载整站'}">${icon('download')}</button>`}
-   ${ps.platform==='xiaohongshu'&&ps.mode==='boards'?`<form class="xhs-album-create" id="xhs-album-create"><input name="name" maxlength="20" placeholder="新专辑" aria-label="新专辑名称"><button type="submit">创建</button></form>`:''}
+   ${ps.fromBoards?`<button class="psb-icon" id="picture-site-back" title="返回上一页（画板墙）" aria-label="返回上一页">${icon('arrow-left')}</button>`:''}
+   ${((isMusicSite(ps.platform)||isSocialMediaSite(ps.platform))&&isSearchQuery)||(xhs&&!/\/(?:explore|discovery\/item)\/[a-z0-9]{16,}/i.test(ps.source||ps.url||''))?'':`<button class="psb-icon" id="picture-site-download" ${canAct?'':'disabled'} title="${(isSocialMediaSite(ps.platform)||isMusicSite(ps.platform))?'下载作品的视频、图集和实况图':isSearchQuery?'把这次搜索到的图片抓进图片库':'把整站图片抓进图片库（原图，不是缩略图）'}" aria-label="${isSearchQuery?'下载这批':'下载整站'}">${icon('download')}</button>`}
+   ${canCreate&&boardMode?`<form class="xhs-album-create" id="xhs-album-create"><input name="name" maxlength="20" placeholder="新${esc(ps.collectionLabel||'专辑')}" aria-label="新${esc(ps.collectionLabel||'专辑')}名称"><button type="submit">创建</button></form>`:''}
    ${xhs?'':`<button class="psb-icon" id="picture-site-bookmark" ${canAct?'':'disabled'} title="只入库不下载" aria-label="只入库不下载">${icon('save')}</button>`}
-   ${ps.platform==='xiaohongshu'?`<span class="psb-switch" role="group" aria-label="小红书内容"><button type="button" id="xhs-view-home" class="${/\/user\/collect/.test(ps.url||'')?'':'active'}">推荐</button><button type="button" id="xhs-view-collect" class="${/\/user\/collect/.test(ps.url||'')?'active':''}">我的收藏</button></span>`:''}
+   ${showCollectionSwitch?`<span class="psb-switch" role="group" aria-label="${esc(ps.collectionLabel||'平台')}内容"><button type="button" id="xhs-view-home" class="${isCollectView||personalView?'':'active'}">${icon('compass')}<span>推荐</span></button><button type="button" id="xhs-view-collect" class="${isCollectView?'active':''}">${icon('star')}<span>收藏</span></button>${xhs?`<button type="button" id="xhs-view-following" class="${personalView==='following'?'active':''}" aria-pressed="${personalView==='following'}">${icon('user')}<span>关注</span></button><button type="button" id="xhs-view-history" class="${personalView==='history'?'active':''}" aria-pressed="${personalView==='history'}">${icon('clock')}<span>浏览</span></button><button type="button" id="xhs-view-likes" class="${personalView==='likes'?'active':''}" aria-pressed="${personalView==='likes'}">${icon('heart')}<span>赞过</span></button>`:''}</span>`:''}
+   ${huaban?`<span class="psb-switch" role="group" aria-label="花瓣内容"><button type="button" id="huaban-view-home" class="${huabanView?'':'active'}">推荐</button><button type="button" id="huaban-view-boards" class="${huabanView==='boards'?'active':''}">收藏画板</button><button type="button" id="huaban-view-following" class="${huabanView==='following'?'active':''}">关注</button></span>`:''}
    ${ps.platform==='500px'?`<span class="psb-switch" role="group" aria-label="500px 精选流"><button type="button" data-px-feed="editors" class="${/\/fresh\/?(\?|$)/i.test(ps.url||'')?'':'active'}">编辑精选</button><button type="button" data-px-feed="fresh" class="${/\/fresh\/?(\?|$)/i.test(ps.url||'')?'active':''}">最新上架</button></span>`:''}
    ${ps.platform==='pinterest'?`<button class="psb-icon" id="picture-site-similar" ${canAct?'':'disabled'} title="用当前结果找相似" aria-label="用当前结果找相似">${icon('sparkle2')}</button>`:''}`;
- const loginButton=$('#picture-site-login');
- if(pictureSiteLoginable(ps.platform))bindSiteLogin(loginButton,ps.platform,{toast,onClosed:()=>{markSiteLogin(loginButton,(platformById(ps.platform)?.hosts||[])[0]||'');reloadPictureSite?.();}});
- const loginHost=(platformById(ps.platform)?.hosts||[])[0]||'';
- if(loginButton&&loginHost)markSiteLogin(loginButton,loginHost);
+ // 返回上一页：从导航栈弹出上一层操作（画板墙），不发请求、不丢内存里的画板列表。
+ // 之前这颗按钮只渲染没绑事件，点了没反应。栈空时给个提示，别留个死键。
+ const backBtn=$('#picture-site-back');
+ if(backBtn)backBtn.onclick=()=>{
+  if(typeof backToPictureBoards==='function'&&backToPictureBoards())return;
+  toast?.('没有可返回的上一页');
+ };
  const homeBtn=$('#xhs-view-home'),collectBtn=$('#xhs-view-collect');
- if(homeBtn)homeBtn.onclick=()=>openPictureUrl?.('https://www.xiaohongshu.com/explore');
- if(collectBtn)collectBtn.onclick=()=>openPictureUrl?.('https://www.xiaohongshu.com/user/collect');
+ // URL 同样兜底：能力位未到时用小红书默认地址，保证这两个键点了真能切页。
+ const homeUrl=ps.collectionHomeUrl||'https://www.xiaohongshu.com/explore';
+ const collectUrl=ps.collectionCollectUrl||'https://www.xiaohongshu.com/user/collect';
+ if(homeBtn)homeBtn.onclick=()=>openPictureUrl?.(homeUrl);
+ if(collectBtn)collectBtn.onclick=()=>openPictureUrl?.(collectUrl);
+ for(const kind of ['history','likes','following']){const button=$('#xhs-view-'+kind);if(button)button.onclick=()=>openPictureUrl?.('https://www.xiaohongshu.com/user/'+kind,'xiaohongshu');}
+ const huabanHome=$('#huaban-view-home'),huabanBoards=$('#huaban-view-boards'),huabanFollowing=$('#huaban-view-following');
+ if(huabanHome)huabanHome.onclick=()=>openPictureUrl?.('插画','huaban');
+ if(huabanBoards)huabanBoards.onclick=()=>openPictureUrl?.('https://huaban.com/me/boards','huaban');
+ if(huabanFollowing)huabanFollowing.onclick=()=>openPictureUrl?.('https://huaban.com/me/following','huaban');
  const createForm=$('#xhs-album-create');
  if(createForm)createForm.onsubmit=async event=>{
   event.preventDefault();
@@ -1471,11 +1611,9 @@ function renderPictureHead(ps,{items,boards,boardMode}){
   const button=createForm.querySelector('button');
   button.disabled=true;
   try{
-   const response=await fetch('/api/xhs/album',{method:'POST',headers:{'Content-Type':'application/json','x-sfx-local':'1'},body:JSON.stringify({action:'create',name})});
-   const data=await response.json().catch(()=>({}));
-   if(!response.ok)throw Error(data.error||'创建失败');
-   toast?.(`已在小红书创建专辑「${String(name||'').trim()}」`);
-   openPictureUrl?.('https://www.xiaohongshu.com/user/collect');
+   await collectionMutate(ps,{action:'create',name});
+   toast?.(`已在${ps.collectionLabel||'平台'}创建${ps.collectionLabel||'专辑'}「${String(name||'').trim()}」`);
+   openPictureUrl?.(ps.collectionCollectUrl);
   }catch(error){toast?.(error.message);button.disabled=false;}
  };
  // 500px 精选流切换：两个流都是真实可拉的公开流，点了换 URL 走同一套解析。
@@ -1525,8 +1663,8 @@ function renderPictureCategories(ps){
  const row=document.createElement('div');
  row.id='picture-site-categories';row.className='picture-site-categories';
  const chip=(kind,val,label)=>`<button type="button" class="psb-cat${cur[kind].has(val.toLowerCase())?' active':''}" data-px-filter="${kind}" data-val="${esc(val)}" aria-pressed="${cur[kind].has(val.toLowerCase())}">${esc(label)}</button>`;
- row.innerHTML=`<span class="psb-cat-label">分类</span>${PX_CATS.map(([v,l])=>chip('categories',v,l)).join('')}`
-  +(isFresh?`<span class="psb-cat-sep"></span><span class="psb-cat-label">器材</span>${PX_GEARS.map(([v,l])=>chip('equipments',v,l)).join('')}`
+  row.innerHTML=`<span class="psb-cat-label">分类</span>${PX_CATS.map(([v,l])=>chip('cats',v,l)).join('')}`
+  +(isFresh?`<span class="psb-cat-sep"></span><span class="psb-cat-label">器材</span>${PX_GEARS.map(([v,l])=>chip('gears',v,l)).join('')}`
    +`<span class="psb-cat-sep"></span><button type="button" class="psb-cat${cur.quality?' active':''}" data-px-filter="quality" aria-pressed="${cur.quality}">仅看推荐新作</button>`:'')
   +`<button type="button" class="psb-cat psb-cat-reset" data-px-filter="reset">重置</button>`;
  host.appendChild(row);
@@ -1574,77 +1712,22 @@ function clearPictureHead(){
  document.querySelectorAll('.psb-account,.model-count-inline').forEach(node=>node.remove());
 }
 /**
- * 模型 / 3D 平台的头部：左侧「平台名胶囊 + 纯文字数量」，右侧只有视图键 / 每批条数。
- * 2026-11-12 反馈：数量不再带「第 N 页」、不要外边框，且要紧跟在平台标识右边；
- * 原来底部那一整行说明（数量口径、待解析链接、未自动入库）不删信息，收进数量的 title。
- * 检索中的「停止检索」仍挂在右簇，只有那一刻才创建 .picture-site-bar。
+ * 所有发现平台共用左侧纯文字数量，右侧保留可用操作与显示设置。
  */
 function renderModelHead({f,subtitle}){
  const title=$('#library-title'),host=title?.parentElement;
  if(!title||!host)return;
  title.hidden=true;host.hidden=false;
  host.querySelectorAll('.psb-account,.model-count-inline').forEach(node=>node.remove());
- const label=state.source==='link'?'链接解析':platformLabel(state.platform);
  const note=`${f.rows.length} 个`;
  const detail=[subtitle||note,f.pending.length?`待解析 ${f.pending.length} 个链接`:'',pageInfoNote({source:state.source,platform:state.platform})].filter(Boolean).join(' · ');
- host.insertAdjacentHTML('afterbegin',`<span class="psb-account"><span class="psb-name">${esc(label)}</span></span><span class="model-count-inline" role="status" title="${esc(detail)}">${esc(note)}</span>`);
+ host.insertAdjacentHTML('afterbegin',`<span class="model-count-inline" role="status" title="${esc(detail)}">${esc(note)}</span>`);
  $('#library-subtitle').hidden=true;
- const bar=pictureToolbarHost();
- if(!bar)return;
- // 平时右簇不留一条空的 30px 工具条；检索中才点亮「停止检索」。
- if(!f.busy){bar.remove();return;}
- bar.className='picture-site-bar';
- bar.innerHTML=`<button class="psb-icon" id="cancel-discovery" type="button" title="停止检索" aria-label="停止检索">${icon('x')}</button>`;
- bar.querySelector('#cancel-discovery').onclick=()=>f.controller?.abort();
+ document.getElementById('picture-site-toolbar')?.remove();
 }
 
-let xhsPicked=new Set(),xhsPickUrl='';
-function paintXhsDropbar(ps,grid){
- document.getElementById('xhs-dropbar')?.remove();
- if(ps.platform!=='xiaohongshu'||!(ps.albums||[]).length)return;
- if(xhsPickUrl!==ps.url){xhsPicked=new Set();xhsPickUrl=ps.url||'';}
- const targets=(ps.albums||[]).filter(album=>album.id&&album.id!=='all'&&album.id!==ps.boardId);
- if(!targets.length)return;
- const bar=document.createElement('div');
- bar.id='xhs-dropbar';bar.className='xhs-dropbar';
- bar.innerHTML=`<span>勾选多张后拖到专辑</span>${targets.map(album=>`<button type="button" class="xhs-drop" data-board-id="${esc(album.id)}">${esc(album.title)}</button>`).join('')}`;
- grid.before(bar);
- bar.addEventListener('dragover',event=>{
-  if(![...event.dataTransfer.types].includes('application/x-xhs-notes'))return;
-  const chip=event.target.closest('[data-board-id]');
-  if(!chip)return;
-  event.preventDefault();
-  bar.querySelectorAll('.is-over').forEach(node=>node.classList.remove('is-over'));
-  chip.classList.add('is-over');
- });
- bar.addEventListener('dragleave',event=>{if(!bar.contains(event.relatedTarget))bar.querySelectorAll('.is-over').forEach(node=>node.classList.remove('is-over'));});
- bar.addEventListener('drop',async event=>{
-  const chip=event.target.closest('[data-board-id]');
-  bar.querySelectorAll('.is-over').forEach(node=>node.classList.remove('is-over'));
-  if(!chip)return;
-  event.preventDefault();
-  let ids=[];
-  try{ids=JSON.parse(event.dataTransfer.getData('application/x-xhs-notes')||'[]');}catch{ids=[];}
-  ids=ids.filter(Boolean);
-  if(!ids.length)return;
-  chip.disabled=true;
-  try{
-   const response=await fetch('/api/xhs/album',{method:'POST',headers:{'Content-Type':'application/json','x-sfx-local':'1'},body:JSON.stringify({action:'add',boardId:chip.dataset.boardId,noteIds:ids})});
-   const data=await response.json().catch(()=>({}));
-   if(!response.ok)throw Error(data.error||'移动失败');
-   const failed=data.failed?.length||0;
-   toast?.(failed?`放入 ${data.ok||0} 篇，${failed} 篇没放进去`:`${ids.length} 篇已放入「${chip.textContent}」`);
-   for(const id of ids)xhsPicked.delete(id);
-   grid.querySelectorAll('.model-card.is-picked').forEach(card=>{
-    if(!xhsPicked.has(card.dataset.pid)){card.classList.remove('is-picked');const box=card.querySelector('[data-xhs-pick]');if(box)box.checked=false;}
-   });
-  }catch(error){toast?.(error.message);}
-  chip.disabled=false;
- });
-}
 function renderPictureSite(){
  gridSignature='';gridMode='';cardHtml.clear();
- document.getElementById('xhs-dropbar')?.remove();
  const ps=state.pictureSite||{};
  const grid=$('#grid');
  const allItems=Array.isArray(ps.items)?ps.items:[];
@@ -1658,40 +1741,70 @@ function renderPictureSite(){
  const boards=Array.isArray(ps.boards)?ps.boards:[];
  // 两级解析的第一级：作者主页 → 画板墙（一块画板一张卡）；第二级才是它的图片。
  const boardMode=ps.mode==='boards';
+ // 收藏视图（resolver 带 collectionPlatform）才探测写能力，避免普通搜索/首页为探测开浏览器。
+ if(ps.collectionPlatform)ensureCollectionCaps(ps);
  $('#model-count').hidden=true;
  renderPictureHead(ps,{items,boards,boardMode});
  $('#empty').hidden=true;
  $('#pagination').hidden=true;
  renderDisplayButtons({boards:boardMode});
  // 三种「无图可看」的状态一律用普通网格：gallery 是多列瀑布流，会把单个提示块切成多栏错位。
- if(ps.busy){grid.className='model-grid';grid.innerHTML='<div class="skeleton"></div>'.repeat(6);return;}
- if(ps.error){const askLogin=pictureSiteLoginable(ps.platform)&&/登录|扫码|验证/.test(ps.status||'');grid.className='model-grid';grid.innerHTML=`<div class="empty"><div class="empty-cube">${icon('cube')}</div><h3>解析失败</h3><p>${esc(ps.status||'抓取失败')}</p><p class="hint">若提示「该图站暂不支持抓取」，说明后台服务仍是旧进程，重启 Arvimo · 艺团 后重试。</p>${askLogin?`<button class="secondary" id="picture-site-error-login" style="margin-top:14px">${icon('user')} 登录 / 扫码后重试</button>`:''}</div>`;
+ if(ps.busy){grid.className='model-grid';grid.innerHTML=loadingHtml(ps.status||'正在加载图片…');return;}
+ if(ps.error){const askLogin=pictureSiteLoginable(ps.platform)&&(ps.platform==='xiaohongshu'?/登录已失效|请先登录|需要登录|扫码登录|验证码/:/登录|扫码|验证/).test(ps.status||'');
+  const message=askLogin?'请登录后重试。':/platform|url|参数/i.test(ps.status||'')?'请粘贴有效链接后重试。':'请检查链接或网络后重试。';
+  const personalError=ps.platform==='xiaohongshu';
+  grid.className='model-grid';grid.innerHTML=`<div class="discovery-error" role="status"><p>${personalError?esc(ps.status||message):`解析失败，${message}`}</p>${askLogin?'<button class="secondary" id="picture-site-error-login">登录后重试</button>':''}</div>`;
   // 失败卡上也要有登录入口：'需要先登录' 这种原因，用户看得到却无处可点是最糟的。
   bindSiteLogin($('#picture-site-error-login'),ps.platform,{toast,onClosed:()=>reloadPictureSite?.()});
   return;}
  if(boardMode){
-  document.getElementById('xhs-dropbar')?.remove();
   if(!boards.length){grid.className='model-grid';grid.innerHTML='<div class="empty"><div class="empty-cube"><i data-icon="cube"></i></div><h3>没有公开画板</h3><p>这个作者还没有公开的画板。</p></div>';return;}
-  grid.className='board-grid';
-  grid.innerHTML=boards.map(board=>`<figure class="board-card" data-board-id="${esc(board.id)}" data-board-url="${esc(board.url||'')}" data-board-title="${esc(board.title||'')}" role="button" tabindex="0" aria-label="打开画板 ${esc(board.title||'')}">
+  // 注意：cp / caps 是 renderPictureHead 的局部变量，本函数作用域没有，必须就地重算。
+  const liveCp=ps.collectionPlatform||'';
+  const liveOps=collectionState.platform===liveCp?collectionState.ops:[];
+  const canRename=liveOps.includes('rename'),canRemove=liveOps.includes('remove');
+  grid.className=ps.platform==='xiaohongshu'&&/\/user\/following(?:[?#/]|$)/.test(ps.url||'')?'board-grid xhs-following-grid':'board-grid';
+  grid.innerHTML=boards.map(board=>{
+   const manage=board.id&&board.id!=='all'&&(canRename||canRemove)
+    ?`<span class="board-manage">${canRename?`<button type="button" class="board-mgmt" data-board-rename="${esc(board.id)}" data-title="${esc(board.title||'')}" title="重命名" aria-label="重命名画板">✎</button>`:''}${canRemove?`<button type="button" class="board-mgmt" data-board-remove="${esc(board.id)}" data-title="${esc(board.title||'')}" title="删除" aria-label="删除画板">✕</button>`:''}</span>`:'';
+   return `<figure class="board-card" data-board-id="${esc(board.id)}" data-board-url="${esc(board.url||'')}" data-board-title="${esc(board.title||'')}" role="button" tabindex="0" aria-label="${ps.platform==='xiaohongshu'&&/\/user\/following/.test(ps.url||'')?'查看关注用户':'打开画板'} ${esc(board.title||'')}">
     ${board.thumb||board.cover?`<img class="board-cover" loading="lazy" src="/api/image?url=${encodeURIComponent(board.thumb||board.cover)}&card=1" alt="">`:'<div class="board-cover board-cover-empty" aria-hidden="true"></div>'}
-    <figcaption><strong>${esc(board.title||'未命名画板')}</strong><span>${board.count?`${board.count} 张`:'空画板'}</span></figcaption>
-   </figure>`).join('');
+    ${manage}
+    <figcaption><strong>${esc(board.title||'未命名画板')}</strong><span>${board.count?`${board.count} ${esc(board.unit||'张')}`:ps.platform==='xiaohongshu'&&/\/user\/following/.test(ps.url||'')?'查看作品':'空画板'}</span></figcaption>
+   </figure>`;}).join('');
   // 点卡片 = 解析这块画板的图片（同一套 /api/picture-site/resolve，只是 URL 换成画板页）。
   grid.querySelectorAll('[data-board-id]').forEach(node=>{
    const open=()=>openPictureBoard?.({id:node.dataset.boardId,url:node.dataset.boardUrl,title:node.dataset.boardTitle});
-   node.addEventListener('click',open);
+   node.addEventListener('click',event=>{
+    if(event.target.closest('.board-manage'))return; // 管理按钮不触发打开
+    open();
+   });
    node.addEventListener('keydown',event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();open();}});
   });
+  // 专辑重命名 / 删除：走统一写操作端点，能力位来自探测。
+  grid.querySelectorAll('[data-board-rename]').forEach(btn=>btn.addEventListener('click',async event=>{
+   event.stopPropagation();
+   const next=await askText?.({title:'重命名画板',message:'新名称：',value:btn.dataset.title,maxLength:20});
+   if(!next||next===btn.dataset.title)return;
+   try{await collectionMutate(ps,{action:'rename',boardId:btn.dataset.boardRename,name:next});toast?.('已重命名');ensureCollectionCaps(ps);}catch(error){toast?.(error.message);}
+  }));
+  grid.querySelectorAll('[data-board-remove]').forEach(btn=>btn.addEventListener('click',async event=>{
+   event.stopPropagation();
+   if(!confirm?.(`确定删除画板「${btn.dataset.title}」吗？此操作不可撤销。`))return;
+   try{await collectionMutate(ps,{action:'remove',boardId:btn.dataset.boardRemove});toast?.('已删除');ensureCollectionCaps(ps);}catch(error){toast?.(error.message);}
+  }));
+  if(ps.truncated){
+   grid.insertAdjacentHTML('beforeend','<div class="picture-site-more" style="grid-column:1/-1"></div>');
+   syncPictureMore();observePictureMore();setTimeout(maybeLoadMorePicture,400);
+  }
   return;
  }
- if(!items.length){document.getElementById('xhs-dropbar')?.remove();grid.className='model-grid';grid.innerHTML=`<div class="empty"><div class="empty-cube">${icon('cube')}</div><h3>没有可显示的图片</h3><p>该链接可能未公开或需要登录。</p>${pictureSiteLoginable(ps.platform)?`<button class="secondary" id="picture-site-error-login" style="margin-top:14px">${icon('user')} 登录 / 扫码后重试</button>`:''}</div>`;bindSiteLogin($('#picture-site-error-login'),ps.platform,{toast,onClosed:()=>reloadPictureSite?.()});return;}
- paintXhsDropbar(ps,grid);
+ if(!items.length){const personalEmpty=ps.platform==='xiaohongshu'&&/\/user\/(?:likes|history|collect)/.test(ps.url||'');grid.className='model-grid';grid.innerHTML=`<div class="empty"><div class="empty-cube">${icon('cube')}</div><h3>${personalEmpty?'没有读到内容':'没有可显示的图片'}</h3><p>${esc(personalEmpty?(ps.warning||ps.status||'网页个人主页这一栏是空的，或登录已失效。'):'该链接可能未公开或需要登录。')}</p>${pictureSiteLoginable(ps.platform)?`<button class="secondary" id="picture-site-error-login" style="margin-top:14px">${icon('user')} 登录 / 扫码后重试</button>`:''}</div>`;bindSiteLogin($('#picture-site-error-login'),ps.platform,{toast,onClosed:()=>reloadPictureSite?.()});return;}
   grid.className='picture-site-results';
   // 瀑布流按原图比例排：接口里带宽高的卡片直接写内联 aspect-ratio，列高一次就位。
  // 不带的（booru / 站酷这类只给缩略图地址）等图片解码后由下方循环补上。
  const gallery=galleryActive(state);
- const cards=items.map(it=>pictureCardHtml(it,ps,gallery,isPin)).join('');
+ const cards=items.map((it,index)=>pictureCardHtml(it,ps,gallery,isPin,index<8)).join('');
  // limit：这一屏已经取到第几张（滚动加载按 PICTURE_PAGE 递增）。从缓存恢复的旧数据没这个字段，用条目数顶上。
  if(!Number(ps.limit))ps.limit=items.length||PICTURE_PAGE;
 
@@ -1702,14 +1815,7 @@ function renderPictureSite(){
    `<div class="picture-site-more"${more?'':' hidden'}><span class="picture-more-text">${more?'继续下滑自动加载…':`已经到底了 · 共 ${items.length} 张`}</span></div>`;
  // 卡片事件与瀑布流比例纠正统一走 bindPictureCards：追加新卡片时只绑没绑过的节点。
  bindPictureCards(grid.querySelector('.picture-site-gallery'),ps);
- grid.querySelectorAll('.model-card[data-pid]').forEach(card=>{
-  if(ps.platform!=='xiaohongshu'||!(ps.albums||[]).length)return;
-  card.draggable=true;
-  if(!xhsPicked.has(card.dataset.pid))return;
-  card.classList.add('is-picked');
-  const box=card.querySelector('[data-xhs-pick]');
-  if(box)box.checked=true;
- });
+ syncPictureMore();
  // 滚动到底自动续页：观察底部那颗哨兵，机制与模型平台的分页行完全一致。
  // 首帧不要立刻判断哨兵：瀑布流此时还没排完版（--masonry-height 为 0），哨兵会误落在视口里，
  // 一进页面就白抓一页。等排版稳定再看一眼，屏幕够高时仍然会自动补满。
@@ -1735,27 +1841,6 @@ function renderPictureSite(){
   },true);
  }
  // 视频卡片悬停时静音播一下（首帧往往看不出是视频），移开就暂停回到开头，不占带宽太久。
- if(!grid.dataset.xhsAlbum){
-  grid.dataset.xhsAlbum='1';
-  grid.addEventListener('click',event=>{
-   const box=event.target.closest('[data-xhs-pick]');
-   if(!box)return;
-   event.stopPropagation();
-   const card=box.closest('.model-card');
-   const id=box.dataset.xhsPick;
-   if(!id)return;
-   if(box.checked)xhsPicked.add(id);else xhsPicked.delete(id);
-   card?.classList.toggle('is-picked',xhsPicked.has(id));
-  });
-  grid.addEventListener('dragstart',event=>{
-   const card=event.target.closest('.model-card[data-pid]');
-   if(!card||!xhsPicked)return;
-   const id=card.dataset.pid;
-   const ids=xhsPicked.has(id)?[...xhsPicked]:[id];
-   event.dataTransfer.setData('application/x-xhs-notes',JSON.stringify(ids));
-   event.dataTransfer.effectAllowed='copy';
-  });
- }
  if(!grid.dataset.videoHook){
   grid.dataset.videoHook='1';
   grid.addEventListener('mouseover',event=>{
@@ -1774,6 +1859,7 @@ function renderPictureSite(){
  // 不引入新的弹窗，关闭逻辑与本地文件预览共用。
  const dl=$('#picture-site-download');
  if(dl)dl.onclick=()=>{
+  if((isSocialMediaSite(ps.platform)||isMusicSite(ps.platform)))return downloadMediaPost(ps);
   const manager=downloadsUI();
   if(!manager?.enqueue){toast?.('后台服务未连接，无法下载图片。');return;}
   const uid=pictureSiteJobUid(ps.platform,ps.url);
@@ -1834,5 +1920,5 @@ async function bookmarkCurrentPicture(){
  toast?.(data.skipped?`资产库里已经有这个包：${data.title}`:`已记入资产库：${data.title}${data.imageCount?`（${data.imageCount} 张）`:''}`);
  await refreshAssets?.();
 }
-return {refreshCategories:renderLocalFilters,counts,renderStatus,renderGrid,placeFilters,preview,syncStickyOffset,refreshArtworkActions,setBoardDeck,bookmarkCurrentPicture};
+return {refreshCategories:renderLocalFilters,counts,renderStatus,renderGrid,placeFilters,preview,syncStickyOffset,refreshArtworkActions,setBoardDeck,bookmarkCurrentPicture,syncPictureMore:()=>{syncPictureMore();requestPictureMore();}};
 }

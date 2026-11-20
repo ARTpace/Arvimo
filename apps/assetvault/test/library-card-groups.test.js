@@ -2,7 +2,7 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {createCardGroups,groupRefKey,collectModelFolders} from '../src/library/card-groups.js';
 const item=key=>({kind:'asset',key,level:'item',label:key});
-test('整包模型按目录收纳，追加不重复，解散后不强行重建，不混入图片',()=>{
+test('整包模型按目录收纳，追加不重复，解散后扫描重新合成，不混入图片',()=>{
  const options={},root='J:/资产',folder='图片/纹理贴图/150 Ornament FBX Files';
  const files=Array.from({length:150},(_,i)=>({root,rel:`${folder}/A_${i}.FBX`,name:`A_${i}.FBX`,kind:'model'}));
  files.push({root,rel:`${folder}/preview.png`,name:'preview.png',kind:'image'});
@@ -14,7 +14,7 @@ test('整包模型按目录收纳，追加不重复，解散后不强行重建�
  assert.equal(collectModelFolders(options,[...files,extra]),true);assert.equal(options.cardGroups[0].children.length,151);
  const store=createCardGroups(options);store.ungroupMember('models',options.cardGroups[0].children[0]);
  collectModelFolders(options,[...files,extra]);assert.equal(options.cardGroups[0].children.length,150);
- store.remove('models');collectModelFolders(options,[...files,extra]);assert.equal(options.cardGroups.length,0);
+ store.remove('models');assert.equal(options.cardGroups.length,0);collectModelFolders(options,[...files,extra]);assert.equal(options.cardGroups.length,1);assert.equal(options.cardGroups[0].children.length,151);
 });
 test('已登记模型引用 UID，同目录散文件不重复，单模型不自动成集合',()=>{
  const options={},root='J:/资产',model={uid:'a',platform:'local',localRoot:root,localRel:'包/a.fbx',name:'a.fbx'};
@@ -81,4 +81,18 @@ test('自投递、错误层级不写入，重复加入幂等，归属变更不�
  store.drop(a,store.reference(second));
  assert.deepEqual(store.find(first.id).children,[item('b')]);
  store.drop(a,store.reference(second));assert.equal(store.find(second.id).children.length,3);
+});
+
+
+test('missing collection record is recovered despite completed import history',()=>{
+ const root='J:/assets',files=[1,2].map(i=>({root,rel:`models/A_${i}.FBX`,name:`A_${i}.FBX`,kind:'model'}));
+ const options={};collectModelFolders(options,files,[],{id:()=> 'original'});
+ options.cardGroups=[];
+ assert.equal(collectModelFolders(options,files),true);
+ assert.equal(options.cardGroups[0].id,'original');assert.equal(options.cardGroups[0].children.length,2);
+ createCardGroups(options).remove('original');
+ options.modelFolderImports['j:/assets/models'].dissolved=true; // Older persisted flags must not suppress rebuilding.
+ assert.equal(collectModelFolders(options,files),true);assert.equal(options.cardGroups.length,1);
+ assert.equal(options.cardGroups[0].children.length,2);
+ assert.equal(collectModelFolders(options,files),false);
 });

@@ -506,7 +506,7 @@ function collectionMedia(imgs,pkg,count=4){
      return `/api/image?url=${encodeURIComponent(raw||'')}&v=2${useThumb?'':'&full=1'}`;
     }};
     const shots=remote.map((item,i)=>({rel:String(i),name:item.title||`图片 ${i+1}`,type:'image',
-     url:item.url,thumb:item.thumb,pageUrl:item.pageUrl,author:item.author,width:item.width,height:item.height}));
+     url:item.url,thumb:item.thumb,pageUrl:item.pageUrl,author:item.author,authorUrl:item.authorUrl||pkg.authorUrl||'',width:item.width,height:item.height}));
     openGallery(previewPkg,shots);
     return;
    }
@@ -688,6 +688,14 @@ function showGalleryImage(index,{reveal=false}={}){
   if(isVideo){
    const src=galleryPkg?.videoUrl?.(item.rel)||'';
    if(src&&video.getAttribute('src')!==src){
+    const sources=galleryPkg?.videoUrls?.(item.rel)||[src];let attempt=0;
+    video.onerror=()=>{
+     if(video.hidden||galleryImages[galleryIndex]!==item)return;
+     const next=sources[++attempt];
+     if(next){video.src=next;video.load?.();video.play?.().catch(()=>{});return;}
+     const error=stage.querySelector('.local-gallery-error');
+     if(error){error.hidden=false;error.textContent='视频暂时无法播放，请重新打开笔记刷新视频地址，或在原网页查看。';}
+    };
     video.src=src;
     try{video.currentTime=0;}catch{/* 还没拿到 metadata 时赋值会抛 */ }
     // 点卡片本身就是用户手势，这里直接起播；被策略拦下也不影响原生 controls 手动播。
@@ -1372,7 +1380,8 @@ function unlockPageScroll(){document.documentElement.classList.remove('file-prev
   // 套 /api/image 代理会被「只支持图床地址」挡下来，本地素材点开预览就是一片黑。
   const imgUrl=(rel,useThumb)=>{const it=items[Number(rel)]||{};const raw=useThumb&&it.thumb?it.thumb:it.url;return /^\/(?!\/)/.test(String(raw||''))?raw:`/api/image?url=${encodeURIComponent(raw)}&v=2${useThumb?'':'&full=1'}`;};
   const thumbUrl=rel=>imgUrl(rel,true);
-  openGallery({title,category:'images',note,noteLoading,imageUrl:imgUrl,thumbUrl,videoUrl:rel=>`/api/video?url=${encodeURIComponent(items[Number(rel)].play||items[Number(rel)].url)}`,details:onChange},items,index);
+  const videoUrls=rel=>{const it=items[Number(rel)]||{};return [...new Set([it.play||it.url,...(it.alternates||[])].filter(Boolean))].map(url=>/^\/(?!\/)/.test(url)?url:`/api/video?url=${encodeURIComponent(url)}`);};
+  openGallery({title,category:'images',note,noteLoading,imageUrl:imgUrl,thumbUrl,videoUrl:rel=>videoUrls(rel)[0],videoUrls,details:onChange},items,index);
  }
  /** 右键菜单直接调动作，不再靠卡片上隐藏按钮的模拟点击。key = root|rel。 */
  function packageAction(key,action){

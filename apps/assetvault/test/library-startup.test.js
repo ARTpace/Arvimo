@@ -15,14 +15,15 @@ function boot(invoke,{interfaceStage=false,preRendered=false}={}){
  const screen={style:{},attachShadow:()=>({getElementById:get}),remove(){removed=true;}};
  if(preRendered)screen.shadowRoot={getElementById:get};
  const timers=[],frames=[],navigations=[];
+ const dataset={};
  vm.runInNewContext(source,{
-  document:{getElementById:id=>id==='startup-screen'?(interfaceStage?screen:null):get(id),documentElement:{dataset:{}}},window:{__TAURI__:{core:{invoke}},addEventListener:(name,fn)=>listeners.set(name,fn)},URL,
+  document:{getElementById:id=>id==='startup-screen'?(interfaceStage?screen:null):get(id),documentElement:{dataset}},window:{__TAURI__:{core:{invoke}},addEventListener:(name,fn)=>listeners.set(name,fn)},URL,
   DOMParser:class{parseFromString(){return {querySelector:selector=>selector==='style'?{textContent:'body{}'}:{outerHTML:'<main></main>'}};}},
   location:{pathname:'/waiting.html',replace:url=>navigations.push(url)},
   Date:{now:()=>now},setTimeout:fn=>timers.push(fn),requestAnimationFrame:fn=>frames.push(fn),
   fetch:()=>{if(preRendered)throw Error('预渲染启动界面不应再次请求模板');if(interfaceStage)return Promise.resolve({ok:true,text:async()=>'<main></main>'});throw Error('桌面加载页不应跨源请求后端');},
  });
- return {get,timers,frames,navigations,listeners,get removed(){return removed;},frame(time){now=time;frames.shift()?.();}};
+ return {get,timers,frames,navigations,listeners,dataset,get removed(){return removed;},frame(time){now=time;frames.shift()?.();}};
 }
 const flush=async()=>{for(let i=0;i<8;i++)await Promise.resolve();};
 
@@ -81,6 +82,23 @@ test('预渲染首页立即使用已有加载界面，不再次取模板或替�
  assert.equal(b.removed,false);
  b.listeners.get('assetvault:ui-ready')();
  b.frame(100);b.frame(600);
+ for(const timer of b.timers.splice(0))timer();
+ assert.equal(b.removed,true);
+});
+
+test('首页长时间等待时保留具体阶段，不被动画文案或通用超时提示覆盖',async()=>{
+ const b=boot(async()=>null,{interfaceStage:true,preRendered:true});
+ await flush();
+ assert.equal(b.get('msg').textContent,'正在加载界面脚本…');
+ b.dataset.startupStage='正在读取资产库与首批目录…';
+ b.listeners.get('assetvault:startup-stage')();
+ b.frame(10000);
+ for(const timer of b.timers.splice(0))timer();
+ assert.equal(b.get('msg').textContent,'正在读取资产库与首批目录…');
+ assert.match(b.get('tip').textContent,/此步骤耗时较长/);
+ assert.equal(b.removed,false);
+ b.listeners.get('assetvault:ui-ready')();
+ b.frame(10100);b.frame(10600);
  for(const timer of b.timers.splice(0))timer();
  assert.equal(b.removed,true);
 });

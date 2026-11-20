@@ -108,10 +108,12 @@ await fs.writeFile(path.join(output,'app.css'),assembleLibraryStyles());
  const html=await fs.readFile(path.join(root,'src/library/index.html'),'utf8');
  const dialog=html.match(/<dialog id="preview-dialog"[\s\S]*?<\/dialog>/)?.[0];
  if(!dialog)throw Error('Missing shared 3D viewer markup');
- await fs.writeFile(path.join(output,'model-preview.html'),`<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="app.css"><link rel="stylesheet" href="viewer.css"><style>html,body{margin:0;width:100%;height:100%;overflow:hidden}#preview-dialog[open]{position:fixed;inset:0;margin:0;width:100%;height:100%;max-width:none;max-height:none;padding:0;border:0;border-radius:0;display:block}#preview-dialog>.dialog-header,.model-details{display:none!important}#preview-dialog .preview-layout{display:block;height:100%}#preview-dialog .viewer-wrap{height:100%}.viewer-tools{flex-wrap:wrap;max-width:calc(100% - 16px)}</style>${dialog}<script type="module" src="model-preview.js"></script></html>`);
+ const cardCss=await fs.readFile(path.join(root,'src/library/model-preview.css'),'utf8');
+ await fs.writeFile(path.join(output,'model-preview.html'),`<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="app.css"><link rel="stylesheet" href="viewer.css"><style>html,body{margin:0;width:100%;height:100%;overflow:hidden}#preview-dialog[open]{position:fixed;inset:0;margin:0;width:100%;height:100%;max-width:none;max-height:none;padding:0;border:0;border-radius:0;display:block}#preview-dialog>.dialog-header,.model-details{display:none!important}#preview-dialog .preview-layout{display:block;height:100%}#preview-dialog .viewer-wrap{height:100%}.viewer-tools{flex-wrap:wrap;max-width:calc(100% - 16px)}${cardCss}</style>${dialog}<script type="module" src="model-preview.js"></script></html>`);
 }
 await esbuild.build({entryPoints:[path.join(root,'src/library/model-preview.js')],outfile:path.join(output,'model-preview.js'),bundle:true,format:'esm',platform:'browser',target:'chrome110',external:['./gltf-preview.js'],logLevel:'info'});
 await fs.appendFile(path.join(output,'app.css'),'\n'+await fs.readFile(path.join(root,'src/library/search-motion.css'),'utf8'));
+await fs.appendFile(path.join(output,'app.css'),'\n'+await fs.readFile(path.join(root,'src/library/search-island.css'),'utf8'));
 // 资源指纹：给 app.css / app.js 的引用带上内容 hash（?v=xxxxxxxx）。
 // Tauri 的 WebView2 会按 URL 做启发式缓存 —— 没有 stamp 时「改完样式、刷新还是旧界面」
 // 会反复出现（2026-11-13 排查外观设置时不生效，最后就是旧 CSS 一直在缓存里）。

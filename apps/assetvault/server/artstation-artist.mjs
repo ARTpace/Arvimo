@@ -123,6 +123,47 @@ export async function artstationArtist(input,{signal,open=openPublic}={}){
   };
 }
 
+const ACCOUNT_URLS = [
+  'https://www.artstation.com/api/v2/users/me.json',
+  'https://www.artstation.com/users/me.json',
+];
+
+/** 当前登录的 ArtStation 账号。两个地址都试过，没有登录态就明确要求先登录。 */
+export async function artstationAccount({ signal, open = openPublic } = {}) {
+  let lastStatus = 0;
+  for (const url of ACCOUNT_URLS) {
+    signal?.throwIfAborted();
+    const r = await open(url, { artstation: true, signal, timeout: 30000 });
+    lastStatus = r.status;
+    if (r.status < 200 || r.status >= 300) { try { r.stream.destroy(); } catch { /* 换下一个地址 */ } continue; }
+    let payload;
+    try { payload = JSON.parse(await readStreamText(r, 1024 * 1024)); }
+    catch { throw Error('请先登录 ArtStation，再查看点赞和关注'); }
+    const artist = normalizeArtist(payload?.user || payload);
+    if (artist) return artist;
+  }
+  throw Error(lastStatus === 401 || lastStatus === 403
+    ? '请先登录 ArtStation，再查看点赞和关注'
+    : '没有读到当前 ArtStation 账号，请先登录后再试');
+}
+
+/** 某用户关注的人。点进其中一位，就是去看他的作品列表。 */
+export async function artstationFollowing(username, { signal, open = openPublic, page = 1 } = {}) {
+  const name = String(username || '').trim();
+  if (!USERNAME_RE.test(name)) throw Error('请输入有效的 ArtStation 用户名');
+  const url = `https://www.artstation.com/users/${encodeURIComponent(name)}/following.json?page=${Math.max(1, Number(page) || 1)}`;
+  signal?.throwIfAborted();
+  const r = await open(url, { artstation: true, signal, timeout: 45000 });
+  if (r.status === 401 || r.status === 403) { try { r.stream.destroy(); } catch {} throw Error('请先登录 ArtStation，再查看关注的人'); }
+  if (r.status < 200 || r.status >= 300) { try { r.stream.destroy(); } catch {} throw Error(`ArtStation 关注列表返回 HTTP ${r.status}`); }
+  let payload;
+  try { payload = JSON.parse(await readStreamText(r, MAX_BODY)); }
+  catch { try { r.stream.destroy(); } catch {} throw Error('ArtStation 关注列表返回的不是有效 JSON'); }
+  const rows = Array.isArray(payload?.data) ? payload.data : Array.isArray(payload) ? payload : [];
+  const users = rows.map(normalizeArtist).filter(Boolean);
+  return { users, total: Number(payload?.total_count) || users.length, username: name };
+}
+
 /** 第一页额外取一次艺术家资料，让面板能显示头像与简介。失败不影响作品列表。 */
 export async function artstationArtistProfile(username,{signal,open=openPublic}={}){
   const name=String(username||'').trim();

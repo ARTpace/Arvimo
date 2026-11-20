@@ -82,6 +82,15 @@ test('不可搜索平台与空关键词都明确报错', async () => {
   await assert.rejects(() => search('unknown', {query: 'x'}), /不支持的采集平台/);
 });
 
+test('材质与 HDR 原生类型下推到支持的适配器，不再默认搜索模型',async()=>{
+ const calls=[];const fn=async input=>{calls.push(input);return {models:[]};};
+ const {search}=createCollectSearch({searchers:{freestylized:fn,polyhaven:fn,ambientcg:fn}});
+ await search('freestylized',{query:'wood',assetType:'textures'});
+ await search('polyhaven',{query:'sky',assetType:'hdris'});
+ await search('ambientcg',{query:'rock',assetType:'models'});
+ assert.deepEqual(calls.map(input=>input.type),['textures','hdris','3d-model,terrain']);
+});
+
 test('某个平台搜索抛错时错误向上抛，由执行器记失败而不是吞掉', async () => {
   const {search} = fixture({searchers: {sketchfab: async () => { throw Error('429 Too Many Requests'); }}});
   await assert.rejects(() => search('sketchfab', {query: 'chair'}), /429/);

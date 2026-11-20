@@ -36,6 +36,7 @@ export function uiElementSlot(model, { esc }) {
  * 同一个节点重复调用就只换内容，不重建。
  */
 const shadowCache = new WeakMap();
+const previewSizing = new WeakMap();
 
 export function renderInShadow(host, { html = '', css = '' } = {}) {
   if (!host) return null;
@@ -44,8 +45,32 @@ export function renderInShadow(host, { html = '', css = '' } = {}) {
     root = host.attachShadow({ mode: 'open' });
     shadowCache.set(host, root);
   }
-  // :host 要有尺寸，宿主给的是 1:1 的封面容器。css 里的 :root 必须换成 :host，否则变量失效。
-  root.innerHTML = `<style>:host{display:block;width:100%;height:100%;}html,body{margin:0;padding:0;}body{display:flex;align-items:center;justify-content:center;min-height:100%;font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;}${toShadowCss(css)}</style>${html}`;
+  previewSizing.get(host)?.disconnect();
+  // 使用独立设计画布缩放，不能让社区控件的固定宽高直接被卡片裁掉。
+  root.innerHTML = `<style>:host{display:block;width:100%;height:100%;}html,body{margin:0;padding:0;}body{display:flex;align-items:center;justify-content:center;min-height:100%;font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;}${toShadowCss(css)}</style><av-preview-stage data-preview-stage style="position:absolute!important;left:50%!important;top:50%!important;width:320px!important;height:320px!important;display:flex!important;align-items:center!important;justify-content:center!important;flex-wrap:nowrap!important;transform-origin:center!important;overflow:visible!important;box-sizing:border-box!important;margin:0!important;padding:0!important">${html}</av-preview-stage>`;
+  const stage=root.querySelector('[data-preview-stage]');
+  const fit=()=>{
+    const width=host.clientWidth,height=host.clientHeight;
+    if(!stage||!width||!height)return;
+    stage.style.transform='translate(-50%,-50%)';
+    const bounds=stage.getBoundingClientRect();
+    const cx=bounds.left+bounds.width/2,cy=bounds.top+bounds.height/2;
+    let extentX=160,extentY=160;
+    for(const child of stage.children){
+      const rect=child.getBoundingClientRect();
+      extentX=Math.max(extentX,Math.abs(rect.left-cx),Math.abs(rect.right-cx));
+      extentY=Math.max(extentY,Math.abs(rect.top-cy),Math.abs(rect.bottom-cy));
+    }
+    const scale=Math.min(1,Math.max(1,width-24)/(extentX*2),Math.max(1,height-24)/(extentY*2));
+    stage.style.transform=`translate(-50%,-50%) scale(${scale})`;
+  };
+  fit();
+  if(typeof ResizeObserver==='function'){
+    const observer=new ResizeObserver(fit);
+    observer.observe(host);
+    for(const child of stage.children)observer.observe(child);
+    previewSizing.set(host,observer);
+  }
   return root;
 }
 

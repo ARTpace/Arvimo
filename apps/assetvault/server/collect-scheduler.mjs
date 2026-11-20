@@ -28,6 +28,10 @@ export function createCollectScheduler({
         try {
           results.push({ruleId: rule.id, ok: true, run: await runner.run(rule.id)});
         } catch (error) {
+          // A manual run owns the same runner lock. Do not reschedule or record it as a failure.
+          if(error.code==='COLLECT_BUSY')continue;
+          try{await rules.recordRun?.(rule.id,{failed:1,added:0,warnings:[String(error.message||error)]});}
+          catch(writeError){onWarn(`[collect] 保存失败记录：${writeError.message}`);}
           results.push({ruleId: rule.id, ok: false, error: String(error?.message || '采集失败')});
           onWarn(`[collect] 规则「${rule.name}」执行失败：${error?.message || error}`);
         } finally {

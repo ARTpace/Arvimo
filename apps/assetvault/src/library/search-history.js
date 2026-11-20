@@ -107,12 +107,17 @@ export function createSearchHistory({$,icon,state,persist,toast,onPick,onTerm,so
   // 锚点是输入框那一段，比整块搜索卡片窄；分列排版要更宽，所以先抬到 720 再夹视口。
   const width=Math.min(MAX_WIDTH,Math.max(MIN_WIDTH,PREFERRED_WIDTH,rect.width),window.innerWidth-24);
   box.style.width=`${width}px`;
-  box.style.left=`${Math.max(12,Math.min(rect.left,window.innerWidth-width-12))}px`;
-  const below=window.innerHeight-rect.bottom-10,above=rect.top-10;
+  const island=input.closest('[data-search-layout=island]');
+  const slot=island?.querySelector('.search-island-slot')?.getBoundingClientRect();
+  const left=slot?slot.left+(slot.width-width)/2:rect.left;
+  box.style.left=`${Math.max(12,Math.min(left,window.innerWidth-width-12))}px`;
+  const islandTabs=island?.querySelector('#content-kind-tabs');
+  const bottom=Math.max(rect.bottom,islandTabs?.getBoundingClientRect().bottom||0);
+  const below=window.innerHeight-bottom-10,above=rect.top-10;
   const dropUp=below<Math.min(box.offsetHeight,200)&&above>below;
   box.style.maxHeight=`${Math.max(0,Math.min(MAX_HEIGHT,(dropUp?above:below)-8))}px`;
   box.dataset.side=dropUp?'up':'down';
-  box.style.top=`${dropUp?rect.top-8:rect.bottom+8}px`;
+  box.style.top=`${dropUp?rect.top-8:bottom+8}px`;
   box.style.transform=dropUp?'translateY(-100%)':'none';
  }
  function show(){

@@ -31,6 +31,31 @@ async function temp(t) {
   return dir;
 }
 
+test('千条库分页启动不读取完整有效目录；旧全量视图保留',async t=>{
+ const dir=await temp(t),queries=[];
+ const importer=async()=>({default:function(file,options){return new Database(file,{...options,verbose:sql=>queries.push(sql)});}});
+ const storage=createLibraryStorage(dir,downloads,{catalogSingleWriter:true,dbImporter:importer});
+ const models=Array.from({length:1000},(_,i)=>({uid:i.toString(16).padStart(32,'0'),name:'Asset '+i,thumbnail:'https://img.test/'+i+'.jpg'}));
+ await storage.save({[MAIN_STATE_KEY]:blob(models,[model(c,'回收站')])});
+ const full=await storage.load();queries.length=0;
+ const paged=await storage.load({catalogPaged:true});
+ assert.equal(paged.catalogTotal,1000);assert.equal(JSON.parse(paged.values[MAIN_STATE_KEY]).trashed.length,1);
+ assert.equal(queries.filter(sql=>/SELECT payload FROM assets WHERE state = 'active' ORDER BY/.test(sql)&&! /\bLIMIT\b/.test(sql)).length,0);
+ assert.equal((await storage.catalogPage(0,24)).items.length,24);
+ assert.ok(full.values[MAIN_STATE_KEY].length>paged.values[MAIN_STATE_KEY].length*5);
+ console.log('CATALOG_READ_PROOF '+JSON.stringify({rows:1000,fullBytes:Buffer.byteLength(full.values[MAIN_STATE_KEY]),pagedBytes:Buffer.byteLength(paged.values[MAIN_STATE_KEY])}));
+});
+
+test('分页仅为当前页补回缓存封面，不改变原始来源',async t=>{
+ const dir=await temp(t),storage=createLibraryStorage(dir,downloads,{catalogSingleWriter:true});
+ await storage.save({[MAIN_STATE_KEY]:blob([model(a,'缺封面')])});
+ const cache=path.join(dir,'http-cache','json');await fsp.mkdir(cache,{recursive:true});
+ await fsp.writeFile(path.join(cache,'f'.repeat(64)),JSON.stringify({models:[{uid:a,thumbnail:'https://img.test/restored.jpg'}]}));
+ const page=await storage.catalogPage(0,1);
+ assert.equal(page.items[0].thumbnail,'https://img.test/restored.jpg');
+ assert.equal(page.items[0].uid,a);assert.equal(page.total,1);
+});
+
 test('readCatalogPage 走 SQL 分页；readCatalogUids 只回 active', async t => {
   const dir = await temp(t);
   const conn = createLibraryDb({Database, file: path.join(dir, 'library.db')});

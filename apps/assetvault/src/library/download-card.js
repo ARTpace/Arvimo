@@ -14,6 +14,7 @@ export const sizeText=n=>!Number.isFinite(n)?'—':n<1024?n+' B':n<1048576?(n/10
 // The badge answers "what will land in my folder?" — content, model format and delivery in one line.
 export const formatBadge=t=>{
  const o=t.options||{};
+ if(t.kind==='media')return t.assetType==='audio'?'音频 · 原始文件':'视频 / 图集 · 原始媒体';
  const delivery=o.output==='folder'?'文件夹':'ZIP';
  if(t.kind==='artstation'){
   // A scene-less artwork never produces a mesh, so promising a GLB here would be a lie: what
@@ -46,10 +47,7 @@ export function createTaskCard({esc,icon,visitor=false}){
   return parts.join(' · ');
  };
  /** The card face while the task is live: label, bar, and the one number that changes. */
- const liveSection=(t,view,n)=>{
-  const line=t.state==='transferring'?writeLine(t):view.receiving?receivedLine(t,view,n):'';
-  return `<section class="job-progress is-live" aria-label="下载进度">${heading(view)}${bar(view)}${line?`<p class="network-facts">${line}</p>`:''}</section>`;
- };
+ const liveSection=(t,view)=>`<section class="job-progress is-live" aria-label="下载进度">${bar(view)}${view.percent!==null?`<span class="task-progress-percent">${view.percent}%</span>`:''}</section>`;
  /** Hints explain why a number is a partial view; they cannot be guessed from the bar alone. */
  const hints=(t,view,n)=>{
   const out=[];
@@ -65,43 +63,33 @@ export function createTaskCard({esc,icon,visitor=false}){
  const verifiedLine=t=>{
   const images=t.verification?.images||[];
   const textures=t.verification?.textures||[];
-  const what=textures.length?`已校验 ${textures.length} 张材质贴图与内容指纹`:images.length?`已校验 ${images.length} 张作品图片与内容指纹`:t.verification?.folder?'导出时已校验 GLB 网格与内容指纹':'初次保存时已校验 ZIP CRC + GLB 结构';
+  const what=t.kind==='media'?'已校验媒体清单、文件内容与来源':textures.length?`已校验 ${textures.length} 张材质贴图与内容指纹`:images.length?`已校验 ${images.length} 张作品图片与内容指纹`:t.verification?.folder?'导出时已校验 GLB 网格与内容指纹':'初次保存时已校验 ZIP CRC + GLB 结构';
   return `<p class="verified">${icon('shield')}${what} · ${t.verification?.entries||0} 个文件 · SHA-256 <span title="${esc(t.verification?.sha256)}">${esc((t.verification?.sha256||'').slice(0,16))}…</span></p>`;
  };
- const detailBody=(t,view,n)=>{
-  const parts=[`<p class="task-format-detail">${esc(formatBadge(t))}</p>`];
-  // A finished task keeps its final bar here, so "100%" is still one click away instead of always on screen.
-  if(TERMINAL.has(t.state))parts.push(`<section class="job-progress" aria-label="下载进度">${heading(view)}${bar(view)}</section>`);
-  parts.push(`<div class="progress-steps">${STEPS.map((name,i)=>`<span class="${i===view.step?'current':''}">${i+1} ${name}</span>`).join('')}</div>`);
-  if(n&&!ACTIVE.has(t.state))parts.push(`<p class="network-facts">${receivedLine(t,view,n)}</p>`);
-  if(ACTIVE.has(t.state))parts.push(...hints(t,view,n));
-  parts.push(pathLine(t));
-  if(t.state==='saved')parts.push(verifiedLine(t));
-  return parts.join('');
- };
+ const detailBody=(t,view,n)=>`<p class="task-format-detail">${esc(formatBadge(t))}</p>${pathLine(t)}${t.fbx?`<p class="task-warning">${esc(t.fbx.message)}${t.fbx.filePath?` · ${esc(t.fbx.filePath)}`:''}</p>`:''}${t.warning?`<p class="task-warning">${esc(t.warning)}</p>`:''}<div class="task-detail-log-head"><strong>最近日志</strong><button data-dm-action="log" data-id="${t.id}">${icon('download')}导出日志</button></div><pre>${esc((t.logs||[]).slice(-30).join('\n')||'暂无日志')}</pre>`;
  const actions=(t,{busy,done,canCancel})=>[
   // 图片包是边下边写的：第一张图落地后文件夹就已经存在，不必等任务结束才给入口。
   !visitor&&t.fileExists?`<button data-dm-action="reveal" data-id="${t.id}">${icon('folder')}文件夹</button>`:'',
-  done&&t.fileExists?`<button data-dm-action="download-local" data-id="${t.id}" title="保存到当前浏览器所在电脑；文件夹会打包为 ZIP（最大 2GB）">下载到本机</button>`:'',
-  canCancel?`<button data-dm-action="cancel" data-id="${t.id}">取消</button>`:'',
-  ['queued','retry_wait'].includes(t.state)?`<button data-dm-action="hold" data-id="${t.id}">暂停</button>`:'',
-  t.state==='held'?`<button data-dm-action="resume" data-id="${t.id}">继续</button>`:'',
-  TERMINAL.has(t.state)&&!done?`<button data-dm-action="retry" data-id="${t.id}">重试</button>`:'',
+  !visitor&&done&&t.fileExists&&t.verification?.folder&&t.verification?.glbs?.length?`<button data-dm-action="convert-fbx" data-id="${t.id}"${t.fbx?.state==='running'?' disabled':''}>${icon('cube')}${t.fbx?.state==='running'?'转换 FBX 中…':t.fbx?.state==='saved'?'重新转换 FBX':'转换 FBX'}</button>`:'',
+  canCancel?`<button data-dm-action="cancel" data-id="${t.id}">${icon('close')}取消</button>`:'',
+  ['queued','retry_wait'].includes(t.state)?`<button data-dm-action="hold" data-id="${t.id}">${icon('pause')}暂停</button>`:'',
+  t.state==='held'?`<button data-dm-action="resume" data-id="${t.id}">${icon('play')}继续</button>`:'',
+  TERMINAL.has(t.state)&&!done?`<button data-dm-action="retry" data-id="${t.id}">${icon('rotate')}重试</button>`:'',
   // 记录存在主机上，访客删了主机那边也没了 —— 同「清理记录」一起收掉，只留取消/暂停这类本机动作。
-  !visitor&&!busy&&!WAITING.has(t.state)?`<button data-dm-action="remove" data-id="${t.id}" title="只删除记录，不删除文件">移除</button>`:''
+  !visitor&&!busy&&!WAITING.has(t.state)?`<button data-dm-action="remove" data-id="${t.id}" title="只删除记录，不删除文件">${icon('trash')}移除</button>`:''
  ].join('');
- return (t,{selected,openDetails,openLog}={})=>{
+ return t=>{
   t={...t,warning:chineseError(t.warning)};
   const busy=ACTIVE.has(t.state),done=t.state==='saved';
   const canCancel=WAITING.has(t.state)||busy&&!['saving','cancelling'].includes(t.state);
   const elapsed=Math.max(0,((t.finishedAt||Date.now())-(t.startedAt||t.createdAt))/1000);
   const view=progressView(t),n=t.network;
-  const status=done&&!t.fileExists?'文件已移动或删除':STATE_LABELS[t.state]||t.state;
+  const status=done&&!t.fileExists?'文件已移动或删除':busy?view.label:STATE_LABELS[t.state]||t.state;
   const error=['failed','interrupted'].includes(t.state)||done&&!t.fileExists;
   // "尝试 1 次" is the norm; attempts only earn space on the face once a retry actually happened.
   const facts=[sizeText(t.bytes||t.totalBytes),...(t.attempts>1?[`尝试 ${t.attempts} 次`]:[]),`${Math.floor(elapsed)}s`].join(' · ');
   // A completed task is already stated by the status line; "已保存到本机…" repeats it word for word.
-  const message=done?'':`<p class="task-message">${esc(chineseError(t.message,{fallback:error}))}</p>`;
-  return `<article class="task ${busy?'task-running':''}" data-job="${t.id}"><div class="task-main"><label class="task-checkbox"><input type="checkbox" data-job-select="${t.id}" aria-label="选择任务 ${esc(t.name)}" ${selected?'checked':''}></label>${t.thumbnail?`<img class="task-image" src="/api/image?url=${encodeURIComponent(t.thumbnail)}" alt="" loading="lazy">`:`<div class="task-image task-cube">${icon('cube')}</div>`}<div class="task-summary"><h3>${esc(t.name)}<span class="job-format">${esc(formatBadge(t))}</span></h3><div class="task-status ${error?'error':''}">${busy?'<span class="spinner"></span>':''}${esc(status)} <span class="job-facts">${facts}</span></div>${message}${t.warning?`<p class="task-warning">${esc(t.warning)}</p>`:''}${busy?liveSection(t,view,n):''}</div><div class="task-actions">${actions(t,{busy,done,canCancel})}<button data-task-disclosure="details" aria-expanded="${!!openDetails}">详情</button><button data-task-disclosure="log" aria-expanded="${!!openLog}">日志</button></div></div><details class="task-details" data-kind="details" data-id="${t.id}" ${openDetails?'open':''}><summary>详情<span>${TERMINAL.has(t.state)?'保存位置 · 校验信息':'保存位置 · 进度明细'}</span></summary><div class="task-details-body">${detailBody(t,view,n)}</div></details><details class="task-log" data-kind="log" data-id="${t.id}" ${openLog?'open':''}><summary>任务日志 · ${t.logs.length} 条 · ${esc(t.author)} <span>${new Date(t.createdAt).toLocaleString()}</span></summary><div class="task-log-head"><button data-dm-action="log" data-id="${t.id}">导出日志</button><span>${esc(t.downloadDir)}</span></div><pre>${esc(t.logs.join('\n')||'任务尚未开始')}</pre></details></article>`;
+  const message=t.fbx?.state==='failed'?`<p class="task-message">${esc(t.fbx.message)}（GLB 已保留）</p>`:error?`<p class="task-message" title="${esc(chineseError(t.message,{fallback:true}))}">${esc(chineseError(t.message,{fallback:true}))}</p>`:'';
+  return `<article class="task ${busy?'task-running':''}" data-job="${t.id}"><div class="task-main">${t.thumbnail?`<img class="task-image" src="/api/image?url=${encodeURIComponent(t.thumbnail)}" alt="" loading="lazy">`:`<div class="task-image task-cube">${icon('cube')}</div>`}<div class="task-summary"><h3>${esc(t.name)}<span class="job-format">${esc(formatBadge(t))}</span></h3><div class="task-status ${error?'error':''}">${busy?'<span class="spinner"></span>':''}${esc(status)} <span class="job-facts">${facts}</span></div>${message}${busy?liveSection(t,view):''}</div><div class="task-actions">${actions(t,{busy,done,canCancel})}<button data-task-disclosure="details" data-id="${t.id}" aria-haspopup="dialog">${icon('list')}详情</button></div></div><template data-task-detail>${detailBody(t,view,n)}</template></article>`;
  };
 }

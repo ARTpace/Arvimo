@@ -1,0 +1,7 @@
+/* Canvas-only presentation of the shared viewer; all existing controls remain available. */
+:root{--av-field:#1c1c1a;--ui-panel:#252522;--ui-line-strong:#ffffff20;--ui-muted:#aaa99f}
+#preview-dialog .viewer-wrap{background:var(--av-field)}
+.viewer-tools{top:10px;right:10px;gap:4px;align-items:center}
+.viewer-tools .icon-button{width:30px;height:30px;border-radius:8px;background:#252522d9}
+.viewer-tools .icon-button svg{width:16px;height:16px}
+.viewer-tools .viewer-display{padding:2px;border-radius:9px}

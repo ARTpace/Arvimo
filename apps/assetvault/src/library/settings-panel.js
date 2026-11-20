@@ -28,7 +28,7 @@ const groups=[
   /* 导出与保存并入下方「通用」一页，不再单列。 */
   /* 平台模块独立成页：在线平台 / 图站的开关、登录态、配图能力与批量测试都是「这个资产库能连哪些外部站」，
      不再作为资产库的页内标签——那一栏已经装着导出与保存队列了。 */
-  ...(platformCard?[{id:'platforms',icon:'globe',label:'平台模块',description:'按需开启在线资产来源；开关改动即时保存，关闭只影响在线检索与解析',cards:[platformCard]}]:[]),
+  ...(platformCard?[{id:'platforms',icon:'globe',label:'平台模块',description:'按需开启在线资产来源；开关改动即时保存，关闭只影响在线检索与解析',hidePageHeading:true,cards:[platformCard]}]:[]),
   ...(aiCards.length?[{id:'ai',icon:'sparkle',label:'资产库 AI',description:'把翻译、打标签与语义检索接到你自己的模型服务上',cards:aiCards}]:[]),
   /* 软件连接独立成页：Unity / Unreal / Godot / Maya / 3ds Max / Houdini / Cinema 4D 的导入目录与接收脚本、
      Blender 桥接、后台浏览器，都是「把工作台接到外部软件」这一件事，不再挂在资产库的页内标签里。 */
@@ -188,7 +188,9 @@ const canvasEntrySections={hotkeys:'builtin.core-settings.hotkeys',plugins:'buil
   /* 一个分类只剩一页时收起子标签栏：单页页签只是噪音。 */
   subnav.hidden=groups.filter(group=>categoryOf(group.id)===category).length<2;
   content.dataset.page=active.id;
-  title.textContent=category==='hotkeys'?'快捷键':active.label;description.textContent=active.description;description.hidden=!active.description;
+  title.textContent=category==='hotkeys'?'快捷键':active.label;description.textContent=active.description;
+  // 平台页自己有 Tab + 分组两级导航，再摆「平台模块」大标题和说明纯属占地方，这里隐藏。
+  title.hidden=!!active.hidePageHeading;description.hidden=!active.description||!!active.hidePageHeading;
   pages.scrollTop=scrollPositions.get(active.id)||0;currentGroup=active;
   // 切分类的过渡：内容淡入并上移 6px，替代原来的硬切。
   active.page.classList.remove('is-in');void active.page.offsetWidth;active.page.classList.add('is-in');

@@ -8,6 +8,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import vm from 'node:vm';
 import os from 'node:os';
 import path from 'node:path';
 import Database from 'better-sqlite3';
@@ -43,6 +44,17 @@ test('trash / restore 的 model 可选，uid 以 op 为准；patch 仍禁止改 
 });
 
 // ------------------------------------------------------------------ 单卡删除路径守卫
+test('单卡删除能访问共享服务端函数，真实执行定点回收站写入',async()=>{
+ const src=fs.readFileSync(new URL('../src/library/app.js',import.meta.url),'utf8').replaceAll('\r\n','\n');
+ const start=src.indexOf('async function trashOnServer(uids){'),setup=src.indexOf('async function setup(){');
+ assert.ok(start>=0&&start<setup,'共享删除函数必须在模块作用域，不能藏在 setup 内');
+ const end=src.indexOf('async function deleteLibraryAsset(',start),calls=[];
+ const context=vm.createContext({state:{},withRemovalMotion:async(cards,run)=>run(),removalCards:()=>[],trashModels(){},persist(){},renderGrid(){},counts(){},toast(){},fetch:async(url,opt)=>calls.push({url,body:JSON.parse(opt.body)})});
+ vm.runInContext(src.slice(start,end)+'this.remove=removeAssetCard;',context);
+ await context.remove(a);
+ assert.deepEqual(calls,[{url:'/api/library/assets/mutate',body:{ops:[{op:'asset:trash',uid:a}]}}]);
+});
+
 test('单卡右键「移入回收站」必须同步到服务端，否则刷新后服务端目录会把记录合并回来', () => {
   const src = fs.readFileSync(new URL('../src/library/app.js', import.meta.url), 'utf8');
   const fn = src.match(/async function removeAssetCard\(uid\)\{([\s\S]*?)\n\}/);

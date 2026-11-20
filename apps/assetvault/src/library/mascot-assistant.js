@@ -80,6 +80,7 @@ export function createMascotAssistant({panel,canManageUpdates=false,idleAnimatio
   messages.clear('ambient-idle');scheduleIdle();
   switch(event.type){
    case 'bubble-visibility':bubble.hidden=!event.visible;break;
+   case 'clear-message':messages.clear(event.id);break;
    case 'expression':
    case 'motion':
    case 'effect':{

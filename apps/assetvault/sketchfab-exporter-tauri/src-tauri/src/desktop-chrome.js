@@ -5,6 +5,7 @@
   // 控制组宽度：3 个 32px 键 + 2 个 6px 间距 + 10px 右边距（box-sizing:border-box）。
   // .drag 的右边界与下面的兜底命中判定都引用它，改尺寸只改这一处。
   const W = 118;
+  const isCanvas = () => document.body?.dataset.route === 'canvas';
   const host = document.createElement('div');
   host.id = 'arvimo-window-chrome';
   // 作为 popover 提升进浏览器 top layer：模态 <dialog>.showModal() 也在 top layer,
@@ -17,11 +18,13 @@
   root.innerHTML = `<style>
     /* 整条 chrome 只从侧边栏右边缘开始（--arvimo-drag-left 由脚本实时同步）：
        以前它铺满窗口宽度，hover 后 44px 高会把侧边栏顶部的折叠键整块盖住、吃掉点击。 */
-    :host{position:fixed;top:0;right:0;left:var(--arvimo-drag-left,0px);margin:0;width:auto;height:7px;z-index:2147483647;color:#8893a3;font:13px system-ui;user-select:none;border:0!important;padding:0!important;background:transparent!important;overflow:visible!important}
-    :host(:hover),:host(:focus-within){height:44px}
-    .drag{position:absolute;top:0;left:0;right:${W}px;height:44px;background:transparent}
-    header{width:${W}px;height:44px;box-sizing:border-box;margin-left:auto;display:flex;align-items:center;justify-content:flex-end;gap:6px;padding-right:10px;background:transparent;opacity:0;transform:scale(.96);transform-origin:100% 50%;transition:opacity .2s ease-out,transform .2s cubic-bezier(.2,.8,.2,1);pointer-events:none}
-    :host(:hover) header,:host(:focus-within) header{opacity:1;transform:scale(1);pointer-events:auto}
+    :host{position:fixed;top:0;right:0;left:var(--arvimo-drag-left,0px);margin:0;width:auto;height:44px;z-index:2147483647;color:#8893a3;font:13px system-ui;user-select:none;border:0!important;padding:0!important;background:transparent!important;overflow:visible!important;pointer-events:none}
+    :host::after{content:'';position:fixed;inset:0;box-sizing:border-box;border:1px solid rgba(255,255,255,.22);border-radius:6px;pointer-events:none}
+    .drag{position:absolute;top:0;left:0;right:${W}px;height:44px;background:transparent;pointer-events:auto}
+    header{position:relative;width:${W}px;height:44px;box-sizing:border-box;margin-left:auto;display:flex;align-items:center;justify-content:flex-end;gap:6px;padding-right:10px;background:transparent;opacity:0;transition:opacity .2s ease-out;pointer-events:auto}
+    /* Keep the transparent hit area stationary and reachable from below. */
+    header::before{content:'';position:absolute;inset:0 0 -16px -12px;z-index:-1}
+    header:hover,header:focus-within{opacity:1}
     button{width:32px;height:32px;display:flex;align-items:center;justify-content:center;border:0;border-radius:8px;background:transparent!important;color:#8893a3;cursor:pointer;transition:background .18s ease,color .18s cubic-bezier(.2,.8,.2,1)}
     button:hover{color:#fff;background:rgba(255,255,255,.1)!important}
     button:active{background:rgba(255,255,255,.16)!important}
@@ -32,17 +35,25 @@
     @media(prefers-reduced-motion:reduce){header{transition:none}button{transition:none}}
   </style><div class="drag" aria-hidden="true"></div><header aria-label="窗口控制"><button data-action="minimize" aria-label="最小化" title="最小化"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><path d="M5 12h14"/></svg></button><button data-action="maximize" aria-label="最大化或还原" title="最大化 / 还原"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2" ry="2"/></svg></button><button class="close" data-action="close" aria-label="关闭窗口" title="关闭窗口"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button></header>`;
   const invoke = action => window.__TAURI__.core.invoke('desktop_window_action', {action}).catch(console.error);
-  // ponytail: 侧栏空白复用原生拖窗，交互控件和可拖分类保留自身行为。
+  // ponytail: 侧栏和顶部空白复用原生拖窗，不铺额外遮罩覆盖搜索和模式按钮。
   document.addEventListener('mousedown', event => {
     const target = event.target;
-    if (event.button !== 0 || !target?.closest?.('#sidebar') ||
-        target.closest('button,a,input,select,textarea,label,[role="button"],[contenteditable],[draggable="true"],#side-filters')) return;
+    // Shadow events retarget to host: native chrome already owns this gesture.
+    if(target===host||event.composedPath?.().includes(host))return;
+    if (event.button !== 0 || !target?.closest ||
+        target.closest('button,a,input,select,textarea,label,[role="button"],[role="combobox"],[role="tab"],[contenteditable],[draggable="true"],#side-filters,#search-panel,#history-pop,[data-picker-menu]')) return;
+    const inSidebar=!!target.closest('#sidebar');
+    const sticky=document.querySelector('.search-sticky');
+    const bounds=sticky?.getBoundingClientRect();
+    const inTop=!isCanvas()&&!!bounds&&!target.closest('dialog')&&event.clientX>=bounds.left&&event.clientX<=bounds.right&&event.clientY>=0&&event.clientY<=Math.min(bounds.bottom,140);
+    if(!inSidebar&&!inTop)return;
     event.preventDefault();
-    invoke('drag');
+    invoke(!inSidebar&&event.detail===2?'maximize':'drag');
   });
   root.querySelector('.drag').addEventListener('mousedown', event => {
-    if (event.button !== 0) return;
+    if (event.button !== 0 || isCanvas()) return;
     event.preventDefault();
+    event.stopPropagation();
     invoke(event.detail === 2 ? 'maximize' : 'drag');
   });
   root.querySelectorAll('button').forEach(button => button.addEventListener('click', event => {
@@ -61,11 +72,33 @@
   // 都由布局自己算（宽度过渡、transform 位移都算进 rect），这里只回填 CSS 变量，
   // 避免硬编码宽度导致折叠后仍挡住侧边栏顶部。
   const sidebar = document.getElementById('sidebar');
-  let dragLeft = 0;
+  const searchPanel = document.getElementById('search-panel');
+  const searchSticky = searchPanel?.closest('.search-sticky');
+  const dragArea = root.querySelector('.drag');
+  let dragLeft = 0, islandFrame = 0;
+  const syncIslandGap = () => {
+    // Canvas owns its whole viewport: a native overlay cannot distinguish future
+    // plugin widgets, cards or handles inside the iframe. Never intercept them.
+    dragArea.style.pointerEvents = isCanvas() ? 'none' : 'auto';
+    if (islandFrame) { window.cancelAnimationFrame(islandFrame); islandFrame = 0; }
+    const moving = searchSticky?.dataset.layoutMotion === 'true';
+    if (!searchPanel || searchPanel.hidden || (searchSticky?.dataset.searchLayout !== 'island' && !moving)) {
+      dragArea.style.clipPath = '';
+      return;
+    }
+    const rect = searchPanel.getBoundingClientRect();
+    const width = Math.max(0, window.innerWidth - dragLeft - W);
+    const left = Math.max(0, Math.min(width, rect.left - dragLeft));
+    const right = Math.max(left, Math.min(width, rect.right - dragLeft));
+    // Leave both sides draggable, but let pointer events through the island itself.
+    dragArea.style.clipPath = `polygon(0 0,${left}px 0,${left}px 100%,${right}px 100%,${right}px 0,100% 0,100% 100%,0 100%)`;
+    if (moving && !document.hidden && window.requestAnimationFrame) islandFrame = window.requestAnimationFrame(() => { islandFrame = 0; syncIslandGap(); });
+  };
   const syncDragLeft = () => {
     const right = sidebar ? sidebar.getBoundingClientRect().right : 0;
     dragLeft = Math.max(0, Math.round(right));
     host.style.setProperty('--arvimo-drag-left', `${dragLeft}px`);
+    syncIslandGap();
   };
   syncDragLeft();
   if (sidebar) {
@@ -77,6 +110,10 @@
   new MutationObserver(syncDragLeft).observe(document.documentElement, {attributes: true, attributeFilter: ['class']});
   if (document.body) new MutationObserver(syncDragLeft).observe(document.body, {attributes: true, attributeFilter: ['data-route']});
   window.addEventListener('resize', syncDragLeft);
+  if (searchPanel && typeof ResizeObserver === 'function') new ResizeObserver(syncIslandGap).observe(searchPanel);
+  if (searchSticky) new MutationObserver(syncIslandGap).observe(searchSticky, {attributes: true, attributeFilter: ['data-search-layout', 'data-layout-motion']});
+  if (searchPanel) new MutationObserver(syncIslandGap).observe(searchPanel, {attributes: true, attributeFilter: ['hidden']});
+  document.addEventListener('visibilitychange', syncIslandGap);
 
   // 把 chrome 放进 top layer，并在任意模态 dialog 打开后重新置顶：
   // top layer 里后进入的元素盖在先进入的之上，所以每次 showModal() 之后
@@ -97,7 +134,7 @@
   // 指针事件。此时若 mousedown 落在顶部拖动带、又处在 dialog 矩形之外（即 backdrop
   // 上），在捕获阶段直接补一次窗口动作。无弹窗时交给 chrome 自己处理，避免重复。
   document.addEventListener('mousedown', event => {
-    if (event.button !== 0 || event.clientY >= 44 || event.clientX >= window.innerWidth - W) return;
+    if (isCanvas() || event.button !== 0 || event.clientY >= 44 || event.clientX >= window.innerWidth - W) return;
     // 侧边栏上方那段顶部不属于拖动带（chrome 从侧边栏右边缘才开始），别把侧栏里的点击当成拖窗。
     if (event.clientX < dragLeft) return;
     const dialogs = Array.prototype.filter.call(document.querySelectorAll('dialog[open]'), d => d.open);

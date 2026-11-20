@@ -1,4 +1,6 @@
+import {isMusicSite} from './music-platforms.js';
 import {createLibraryVisibility} from './library-visibility.js';
+import {setupAiAssetHunt} from './ai-asset-hunt.js';
 import {libraryBackgroundTarget,libraryBackgroundItems} from './library-background-menu.js';
 import {bindLibraryShortcuts} from './library-shortcuts.js';
 import {prepareAlbumBoard,prepareAlbumReference,legacyAlbumMembers} from './album-board-import.js';
@@ -57,7 +59,7 @@ import {setupDropImport,isDropImporting} from './drop-import.js';
 import {openRelinkFile} from './relink-file.js';
 import {createRangeSelect} from './range-select.js';
 import {favoriteUid,favoriteTarget,favoriteSkipsCollect} from './favorite-targets.js';
-import {createDiscoveryFeed,resetDiscoveryFeeds,restorePictureSnapshot} from './discovery-feed.js';
+import {createDiscoveryFeed,resetDiscoveryFeeds,restorePictureSnapshot,cancelPictureRequests} from './discovery-feed.js';
 import {createImageDownloader} from './image-download.js';
 import {createBlenderBridgePanel} from './blender-bridge.js';
 import {createBrowserRuntimePanel} from './browser-runtime.js';
@@ -66,6 +68,8 @@ import {createSearchHistory} from './search-history.js';
 import {createMergedFilters,artstationCategory,feedPlan,joinQuery,kindAllows,kindType} from './merged-filters.js';
 import {fetchUiCode,uiSourceText} from './ui-element-preview.js';
 import {createFilterTrees} from './filter-tree.js';
+import {createFabCategoryTree} from './fab-category-tree.js';
+import {FAB_CATEGORY_GROUPS} from './fab-categories.js';
 import {esc} from './html-esc.js';
 import {filterLocalAssets,localAssetCategories,localAssetKind} from './local-filters.js';
 import {waitForInitialCategories} from './category-options.js';
@@ -92,6 +96,7 @@ import {createBackupPanel} from './backup-panel.js';
 import {createStorePanel} from './store-panel.js';
 import {createSemanticSearch} from './semantic-search.js';
 import {initSearchMotion} from './search-motion.js';
+import {initSearchIsland} from './search-island.js';
 import {createMascotAssistant} from './mascot-assistant.js';
 import {setupMascotDeveloper} from './mascot-developer.js';
 import {createAssistantDownloads} from './assistant-downloads.js';
@@ -103,6 +108,9 @@ import {setupSidebarCollapse} from './sidebar-collapse.js';
 import {setupFilterDrawer} from './filter-drawer.js';
 import {setupCardContextMenu,assetMenuItems,packageMenuItems,fileMenuItems,pictureMenuItems,sequenceMenuItems,groupMenuItems,copyText} from './card-context-menu.js';
 import {bindLocalSearch,createLocalQueryParser,createThemeBrainstorm,createTagSuggester} from './search-translation.js';
+import {bindImageReveal} from './image-reveal.js';
+import {bindSearchStatusBubble} from './search-status-bubble.js';
+bindImageReveal();
 import {bindImageSearch,toDataUrl} from './image-search.js';
 import {createAdvancedQuery} from './advanced-query.js';
 import {createLibraryEvents} from './library-events.js';
@@ -125,13 +133,23 @@ const brainstorm=createThemeBrainstorm();
 let settingsPanel;
 const fmt=n=>n==null?'—':Number(n)>=1000?`${(Number(n)/1000).toFixed(Number(n)>=10000?0:1)}k`:String(n);
 let storage;try{storage=window.localStorage;}catch{}
+const startupStarted=Date.now();
+function startupStage(label){
+ document.documentElement.dataset.startupStage=label;
+ document.documentElement.dataset.startupElapsed=String(Date.now()-startupStarted);
+ console.info(`[startup] ${Date.now()-startupStarted}ms ${label}`);
+ window.dispatchEvent(new Event('assetvault:startup-stage'));
+}
+startupStage('正在读取资产库与首批目录…');
 try{storage=await createPersistentStorage(storage,fetch,{catalogPaged:true});}catch(error){askNotice({title:'存储不可用',message:`${error.message}。暂时使用页面缓存，本次修改可能无法持久保存。`});}
 window.addEventListener('assetvault:storage-error',event=>toast(event.detail));
 // 先加载主机配置，再初始化任何在线平台；读取失败时禁止自动访问平台。
 let platformSettings;
+startupStage('正在读取平台配置…');
 try{const response=await fetch('/api/platforms',{cache:'no-store',signal:AbortSignal.timeout(12000)});if(!response.ok)throw Error('平台配置读取失败');platformSettings=await response.json();}
 catch(error){platformSettings=Object.fromEntries(PLATFORMS.filter(p=>p.id!==ALL).map(p=>[p.id,false]));askNotice({title:'在线平台已停用',message:`${error.message}，在线平台暂时停用，请重启后台后刷新。`});}
 const platformEnabled=id=>enabledPlatform(platformSettings,id);
+startupStage('正在恢复本地界面状态…');
 const feedEnabled=mode=>platformEnabled(platformForFeed(mode));
 const initial=loadLibrary(storage);
 const newFeed=()=>({rows:[],request:null,next:null,pending:[],pages:0,busy:false,token:0,controller:null,status:'',error:false,aborted:false,warnings:[],visited:new Set(),origin:''});
@@ -203,7 +221,7 @@ if(state.mode){
 }
 state.gallery=displayFor('discover')==='gallery';
 const queuePulse=new Map();
-let downloads,artstation,ambientcgUI,polyhavenUI,kenneyUI,freestylizedUI,polyforkUI,blenderBridge,browserRuntime,setupWizard,contentModes,searchHistory,filterTrees,mergedFilters,filterTimer,persistTimer,toastTimer,searchTimer,liveEvents;
+let downloads,artstation,ambientcgUI,polyhavenUI,kenneyUI,freestylizedUI,polyforkUI,blenderBridge,browserRuntime,setupWizard,contentModes,searchHistory,filterTrees,fabCategoryTree,mergedFilters,filterTimer,persistTimer,toastTimer,searchTimer,liveEvents;
 // 「本次会话里用户主动检索过」的痕迹。它只是 searchStillActive 的补充判据：
 // 首次打开页面时框本来就是空的，不能把「框为空」当成一次删除（详见 clearSearchIfEmptied）。
 let hadQuery=false;
@@ -212,7 +230,7 @@ let hadQuery=false;
 let resolveArtworkLink=async()=>{throw Error('ArtStation 识别器尚未就绪，请稍后重试。');};
 // 「发送到…」控件由「本地有没有文件」决定，卡片和预览面板共用这一个生成器。
 const sendControl=createSendMenu({icon,esc});
-const persistNow=()=>{clearTimeout(persistTimer);try{saveLibrary(storage,state);saveDiscovery(storage,{platform:state.platform,pageSize:state.pageSize,filters:discoveryFilters()});}catch{toast('浏览器存储空间不足，列表未保存；请先释放空间。');}};
+const persistNow=()=>{clearTimeout(persistTimer);try{saveLibrary(storage,state);saveDiscovery(storage,{platform:state.platform,pageSize:state.pageSize,filters:discoveryFilters()});return true;}catch{toast('浏览器存储空间不足，列表未保存；请先释放空间。');return false;}};
 const persist=()=>{clearTimeout(persistTimer);persistTimer=setTimeout(persistNow,200);};
 function discoveryFilters(){
  const value=id=>{const node=document.querySelector(id);return node?node.value:'';};
@@ -364,7 +382,7 @@ async function scanLibraryFiles(manual=false){
 // 阶段 4：高级检索激活时「加载更多」改走服务端按页取数，回调由 advanced-query.js 挂到 state 上。
 const paging=createLibraryPaging({$,state,onMore:()=>renderGrid(),onRemoteMore:()=>state.onRemoteMore?.(),icon});
 const libraryScope=()=>boardHub?.store.activeId?'board:'+boardHub.store.activeId:cardGroups?.scope()||(localFiles.albumFolderActive()?'folder:'+localFiles.albumFolderScope():'library');
-const view=createLibraryView({libraryScope,activeBoardId:()=>boardHub?.store.activeId,$,icon,esc,fmt,pageRows:rows=>paging.slice(rows,{scope:libraryScope(),local:localFiles.albumFolderActive()&&!state.search&&!boardHub?.store.activeId}),localTags:model=>tagsFor(state,model),localPackages:()=>localFiles.packages(),localEntries:()=>localFiles.entries(),openImageGallery:options=>localFiles.openImageGallery(options),state,onAddCustomCategory:createCustomCategory,onDeleteCustomCategory:deleteCustomCategory,onPickCustomCategory:pickCustomCategory,queuePulse,cardView,composite,filtered,activeModes,galleryActive,categories:CATEGORIES,describeArt:request=>artstation.describe(request),artstationUI:()=>artstation,downloadsUI:()=>downloads,filterTreesUI:()=>filterTrees,mergedFiltersUI:()=>mergedFilters,findModel,sendControl,isVisitor:visitor,imageDownload,gltfPreview,extraCards,toast,openPictureBoard:board=>feed.openPictureBoard(board),openPictureAuthor:(url,platform)=>feed.openPictureAuthor(url,platform),backToPictureBoards:()=>feed.backToPictureBoards(),reloadPictureSite:()=>feed.reloadPictureSite(),openPictureUrl:url=>feed.openPictureUrl(url),refreshAssets:()=>scanLibraryFiles(true),applyLocalType,notifyCategory:label=>assistant.notify({type:'category',label})});
+const view=createLibraryView({libraryScope,activeBoardId:()=>boardHub?.store.activeId,$,icon,esc,fmt,pageRows:rows=>paging.slice(rows,{scope:libraryScope(),local:localFiles.albumFolderActive()&&!state.search&&!boardHub?.store.activeId}),localTags:model=>tagsFor(state,model),localPackages:()=>localFiles.packages(),localEntries:()=>localFiles.entries(),openImageGallery:options=>localFiles.openImageGallery(options),state,onAddCustomCategory:createCustomCategory,onDeleteCustomCategory:deleteCustomCategory,onPickCustomCategory:pickCustomCategory,queuePulse,cardView,composite,filtered,activeModes,galleryActive,categories:CATEGORIES,describeArt:request=>artstation.describe(request),artstationUI:()=>artstation,downloadsUI:()=>downloads,filterTreesUI:()=>filterTrees,mergedFiltersUI:()=>mergedFilters,findModel,sendControl,isVisitor:visitor,imageDownload,gltfPreview,extraCards,toast,openPictureBoard:board=>feed.openPictureBoard(board),openPictureAuthor:(url,platform)=>feed.openPictureAuthor(url,platform),onFabSeller:name=>searchFabSeller(name),backToPictureBoards:()=>feed.backToPictureBoards(),reloadPictureSite:()=>feed.reloadPictureSite(),openPictureUrl:(url,platform)=>feed.openPictureUrl(url,platform),refreshAssets:()=>scanLibraryFiles(true),applyLocalType,notifyCategory:label=>assistant.notify({type:'category',label})});
 // 画板视图：Artflow 完整应用以 iframe 装载（见 artflow-embed.js）。
 // 这里只负责「资产 → 画布」的解析与工具条动作；画布上的选择、框选、吸附、编队、
 // 撤销、便签/文字/形状/绘制等全部由 Artflow 自己提供，交互行为与它独立运行时一致。
@@ -401,7 +419,13 @@ function resolveCanvasAsset(uid){
  const raw=model.thumbnail||model.thumb||'';
  return {src:thumbSrc(raw),kind:canvasKindOf(model),name:model.name||model.title||'未命名'};
 }
-async function enterCanvas(){
+let canvasEntry=null;
+function enterCanvas(){
+ if(canvasEntry)return canvasEntry;
+ canvasEntry=initializeCanvas().finally(()=>{canvasEntry=null;});
+ return canvasEntry;
+}
+async function initializeCanvas(){
  const host=$('#cv-host');
  if(!host)return;
  if(!boardCanvas){
@@ -443,9 +467,10 @@ async function runPoll(){
  pollRunning=true;pollTimer=null;
  try{
   if(document.hidden)return; // 隐藏页不扫，下一轮照常排期
-  const response=await fetch('/api/downloads',{cache:'no-store'});
-  if(!response.ok)return;
-  const snapshot=await response.json();
+  if(!downloads)return;
+  // 下载UI已按活跃任务4秒刷新；图片扫描只消费它的最新快照，不另开轮询请求。
+  if(!downloads.connected)return;
+  const snapshot=downloads;
   const live=(snapshot.jobs||[]).filter(job=>job.kind==='images'&&!['saved','failed','cancelled','interrupted'].includes(job.state)&&job.fileExists);
   const key=live.map(job=>job.id).join('|');
   if(!key){liveImageKey='';pollSteady=false;return;}
@@ -509,7 +534,7 @@ function preview(uid){
  similarAssets.show(findModel(uid));
 }
 // 发起检索也有自己的模块（discovery-feed.js）：翻页、关键词、粘贴链接三条入口共用同一段取流逻辑。
-const feed=createDiscoveryFeed({$,toast,state,persist,renderGrid,mergeModels,describeArt:request=>artstation.describe(request),activeModes,showsFeed,feedEnabled,adoptPlatform,searchHistoryUI:()=>searchHistory,resolveArtworkLink:url=>resolveArtworkLink(url),routeTo:route,readRequest:mode=>readRequest(mode),clearSearchTimer:()=>clearTimeout(searchTimer),feedError:feedErrorMessage,markQueryActive:()=>{hadQuery=true;}});
+const feed=createDiscoveryFeed({$,toast,state,persist,renderGrid,refreshPictureStatus:()=>view.syncPictureMore(),mergeModels,describeArt:request=>artstation.describe(request),activeModes,showsFeed,feedEnabled,adoptPlatform,searchHistoryUI:()=>searchHistory,resolveArtworkLink:url=>resolveArtworkLink(url),routeTo:route,readRequest:mode=>readRequest(mode),clearSearchTimer:()=>clearTimeout(searchTimer),feedError:feedErrorMessage,markQueryActive:()=>{hadQuery=true;}});
 const {requestFeed,startSearch:runSearch,submitLink}=feed;
 let searchMotionToken=0;
 let localSearch,assistant,imageSearch,semanticSearch;
@@ -519,7 +544,7 @@ async function startSearch(options){
  const token=++searchMotionToken,panel=$('#search-panel');
  updateRelatedTopics($('#asset-query').value.trim());
  panel?.dispatchEvent(new CustomEvent('search-motion-state',{detail:{busy:true}}));
- try{const result=await runSearch(options);if(token===searchMotionToken&&state.route==='discover'){
+ try{if(options?.record)await expandSearchQuery();const result=await runSearch(options);if(token===searchMotionToken&&state.route==='discover'){
   const ok=!activeModes().some(mode=>state.feeds[mode]?.error)&&!state.pictureSite?.error;
   panel?.dispatchEvent(new CustomEvent('search-motion-state',{detail:{busy:false,ok}}));
   if(ok&&$('#asset-query').value.trim()&&!state.pictureSite&&!composite().rows.length)assistant?.notify({type:'empty'});
@@ -548,6 +573,14 @@ function removalCards(payload){
  const uids=payload.uids?new Set(payload.uids):null;
  const key=payload.root+'|'+payload.rel;
  return [...document.querySelectorAll('#grid .model-card[data-uid],#grid [data-file],#grid [data-package]')].filter(node=>uids?uids.has(node.dataset.uid):payload.uid&&node.dataset.uid===payload.uid||payload.root&&(node.dataset.file===key||node.dataset.package===key));
+}
+/** 把回收站变更写进 DB，供单卡和批量删除共用；正常保存仍保留失败补发。 */
+async function trashOnServer(uids){
+ const list=(uids||[]).filter(Boolean);
+ if(!list.length)return;
+ try{
+  await fetch('/api/library/assets/mutate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ops:list.map(uid=>({op:'asset:trash',uid}))})});
+ }catch{}
 }
 async function removeAssetCard(uid){
  await withRemovalMotion(removalCards({uid}),async()=>{trashModels(state,[uid]);persist();renderGrid();counts();await trashOnServer([uid]);});
@@ -789,6 +822,7 @@ function route(name){
   imageSearch?.reset();
   $('#theme-results').hidden=true;
  }
+ if(leaving==='discover'&&name!==leaving)cancelPictureRequests(state);
  if(leaving&&leaving!==name)routeScroll.set(leaving,pageScroller().scrollTop);
  state.route=name;state.selected.clear();
  document.body.dataset.route=name;
@@ -814,6 +848,8 @@ $('#downloads-view').hidden=name!=='downloads';$('#search-panel').hidden=name===
   const preset=modePresetById(state.mode);
   if(preset?.linkOnly&&state.platform!=='link'){
    state.platform='link';state.source='search';renderPlatform();
+  }else if(preset?.platformKind==='audio'&&!isMusicSite(state.platform)){
+   state.platform=preset.defaultPlatform;state.source='search';renderPlatform();
   }else if(preset?.platformKind==='video'&&!isVideoSite(state.platform)){
    state.platform=preset.defaultPlatform||ALL;state.source='search';renderPlatform();
   }
@@ -822,13 +858,18 @@ $('#downloads-view').hidden=name!=='downloads';$('#search-panel').hidden=name===
  // 语义搜索开启时占位文案与按钮高亮都跟着路由变：切到发现页它不生效，样子就不该像开着。
  semanticSearch?.repaint?.();
  $('#asset-query').setAttribute('aria-label',name==='library'?'搜索本地资产':'搜索在线资产');
- $('#search-button').innerHTML=`${icon('search')} ${name==='library'?'搜索资产库':'搜索 / 解析'}`;
+ const searchLabel=name==='library'?'搜索资产库':'搜索 / 解析';
+ $('#search-button').innerHTML=`${icon('search')}<span class="search-button-label">${searchLabel}</span>`;
+ $('#search-button').setAttribute('aria-label',searchLabel);
  $('#search-clear').hidden=!$('#asset-query').value;
  $('#search-clear').classList.toggle('visible',!!$('#asset-query').value);
  $('#search-panel').classList.toggle('has-search-text',!!$('#asset-query').value);
  refreshTopicStrip();
  if(name==='downloads'){downloads?.render();downloads?.refresh();}
- else if(name==='library'&&leaving!==name&&localSearch)localSearch.search();
+ else if(name==='library'&&leaving!==name&&localSearch){
+  localSearch.search();
+  if(state.queryUids)void storage.flush?.().then(()=>{if(state.route==='library')return state.onRemoteRefresh?.();});
+ }
  else if(name!=='canvas')renderGrid();
  renderStatus();counts();
  // 只在真的换页时恢复：首次进入（leaving 与 name 相同）保持浏览器自己的行为，
@@ -897,6 +938,43 @@ function adoptPlatform(id){
  if(isPictureSite(next))state.modelOnly=false;         // 图站没有关键词检索流，别留着「只要 3D」的残留状态
  renderPlatform();
 }
+/** 只看某个 Fab 卖家（点资产作者触发）。
+ *  关键词 / 分类 / 类型要一起清掉：它们和 seller 是 AND 关系，留着就会把「这位卖家的全部作品」
+ *  缩成几条甚至 0 条 —— 点作者的本意是「看他还做了什么」。 */
+function searchFabSeller(raw){
+ const seller=String(raw||'').trim().slice(0,120);
+ if(!seller)return;
+ state.fabSeller=seller;
+ if($('#asset-query'))$('#asset-query').value='';
+ if($('#fab-cat-tree'))$('#fab-cat-tree').dataset.slug='';
+ if($('#fab-cat-value'))$('#fab-cat-value').value='';
+ if($('#fab-type'))$('#fab-type').value='';
+ syncFabSellerFilter();
+ toast?.(`只看卖家：${seller}`);
+ // 已经在 Fab 就原地重搜；不在 Fab 就交给 setPlatform —— 它负责清掉别的源、重绘平台区并
+ // 按当前筛选重新发一轮请求，自己手搓那套很容易留下「一半结果还是上一个平台」的网格。
+ if(state.platform==='fab')requestFeed('fab',readRequest('fab'));
+ else setPlatform('fab');
+}
+/** 清掉卖家筛选，回到所有人的搜索结果（筛选树的「卖家」分支上那个 ✕ 走这里）。 */
+function clearFabSeller(){
+ if(!state.fabSeller)return;
+ state.fabSeller='';
+ syncFabSellerFilter();
+ requestFeed('fab',readRequest('fab'));
+}
+/** 把当前卖家写进筛选树的「卖家」分支：隐藏 input 供请求取值，按钮本身是唯一的清除入口。 */
+function syncFabSellerFilter(){
+ const seller=String(state.fabSeller||'');
+ const input=$('#fab-seller-value');if(input)input.value=seller;
+ const clear=$('#fab-seller-clear');
+ if(clear){
+  clear.hidden=!seller;
+  clear.textContent=seller?`${seller} ✕`:'全部卖家';
+  clear.title=seller?`清除卖家筛选（当前只看 ${seller}）`:'当前没有卖家筛选';
+ }
+ filterTrees?.refresh();
+}
 /** 粘贴链接时把左侧平台下拉拨到对应站点。
  *  识别用的是 routeLink —— 和「粘链接直接解析」同一份规则，所以下拉显示的平台与真正处理
  *  这个链接的平台永远一致。只拨下拉，不触发检索、不跳页，用户仍按回车或「搜索 / 解析」决定下一步。 */
@@ -948,7 +1026,7 @@ function setPlatform(id,{autostart=true}={}){
  // 就在同一个 tick 里跑。不在这里立刻清掉 busy，刚被取消的源会被当成还在跑，于是这次切换
  // 一个检索都不发，界面停在「已停止检索」加一张空网格。
  activeModes().forEach(mode=>{const f=state.feeds[mode];if(f.controller){f.controller.abort();f.busy=false;}});
- state.platform=next;state.source='search';state.selected.clear();state.pictureSite=null;
+ state.platform=next;state.source='search';state.selected.clear();cancelPictureRequests(state);state.pictureSite=null;
  rememberPlatform(next);
  // modelOnly 由当前模式决定：手动在下拉里换站只是模式内的子选择，不该把模式冲掉。
  state.modelOnly=!!modePresetById(state.mode)?.modelOnly;
@@ -1000,7 +1078,7 @@ function applyModeTab(entry){
  if(state.route==='library'){
   // 分类图标只决定「看哪一类资产」，不该连带改卡片的展示方式：网格 / 瀑布流由用户自己选、
   // 记在 displayFor('library') 里。以前这里把 gallery 清成 false，点一下分类瀑布流就被打回网格（2026-11-14 用户反馈）。
-  state.modelOnly=false;state.pictureSite=null;
+  state.modelOnly=false;cancelPictureRequests(state);state.pictureSite=null;
   state.gallery=galleryAvailable(state)&&displayFor('library')==='gallery';
   applyLocalKind(preset);                             // 类型落到 #local-kind（或 state.contentKind）
   renderGrid();persist();
@@ -1011,7 +1089,7 @@ function applyModeTab(entry){
   *  这一模式没有可搜关键词的在线源，平台换成「链接解析」：粘视频页 / 文档页 / 直链就出卡片。
   *  关键词框里的旧词要清掉 —— 它不认关键词，留着只会让人以为「搜了却没结果」。 */
  if(preset.linkOnly){
-  state.gallery=displayFor('discover')==='gallery';state.pictureSite=null;
+  state.gallery=displayFor('discover')==='gallery';cancelPictureRequests(state);state.pictureSite=null;
   resetDiscoveryFeeds(state);                         // 上一模式的卡片不能留在「链接解析」这一面
   applyLocalKind(preset);                             // 资产库那一面仍按类型筛，切回库时生效
   $('#asset-query').value='';
@@ -1032,7 +1110,7 @@ function applyModeTab(entry){
  }
  setArtTypeForMode(preset);
  applyLocalKind(preset);
- state.pictureSite=null;
+ cancelPictureRequests(state);state.pictureSite=null;
  const pool=platformPoolFor(preset,{enabled:platformEnabled});
  const target=pickModePlatform(preset,state.modePlatforms[preset.id],pool);
  state.modePlatforms[preset.id]=target;
@@ -1054,7 +1132,7 @@ function exitContentMode(){
  const kind=$('#local-kind');if(kind)kind.value='';
  if(artTypeBeforeModel){const node=$('#art-type');if(node)node.value=artTypeBeforeModel;artTypeBeforeModel='';}
  if(state.route==='library'){renderGrid();persist();return;}
- state.pictureSite=null;state.gallery=displayFor('discover')==='gallery';
+ cancelPictureRequests(state);state.pictureSite=null;state.gallery=displayFor('discover')==='gallery';
  // 「链接解析」不是真平台、视频站也不在全量池里：退出模式要回到全量平台，
  // 否则下拉停在「只有视频模式才有意义」的站上，而它 feeds 为空，关键词检索连一路流都发不出去。
  if(state.platform==='link'||isVideoSite(state.platform)){state.platform=ALL;state.source='search';rememberPlatform(ALL);resetDiscoveryFeeds(state);}
@@ -1113,7 +1191,11 @@ function readCategory(){
  if(state.platform===ALL)return feedPlan({group:$('#online-category-group').value,leaf:$('#unified-category').value})?.sketchfab?.category||'';
  return $('#online-category').value;
 }
-function readSearch(){return searchParams({q:$('#asset-query').value,category:readCategory(),sort:$('#online-sort').value,downloadable:$('#online-downloadable').checked,animated:$('#online-animated').checked,staffpicked:$('#online-staffpicked').checked});}
+function readSearch(){return searchParams({q:state.expandedQuery||$('#asset-query').value,category:readCategory(),sort:$('#online-sort').value,downloadable:$('#online-downloadable').checked,animated:$('#online-animated').checked,staffpicked:$('#online-staffpicked').checked});}
+function expandRequest(request){
+ if(state.expandedQuery&&request&&'q' in request)request.q=String(state.expandedQuery).slice(0,200);
+ return request;
+}
 /** R4：选中的分类 A 站没有对应映射时，这一路本轮不检索。
  *  旧结果一并丢掉——留着会让人以为「这回搜出来的就是这些 A 站结果」；token 前进一位是为了让
  *  在途请求的收尾（它会把状态下成「已停止检索」）认输，不把我们这句话覆盖掉。
@@ -1129,14 +1211,16 @@ function skipFeed(mode,reason){
  const readRequest=mode=>{
   const picked=state.platform===ALL&&mergedFilters?.kinds?mergedFilters.kinds():[];
   const plan=state.platform===ALL?feedPlan({group:$('#online-category-group').value,leaf:$('#unified-category').value}):null;
-  const baseQ=$('#asset-query').value.trim();
+  const baseQ=(state.expandedQuery||$('#asset-query').value).trim();
   const refuse=(type,reason)=>{if(picked.length&&!kindAllows(picked,mode,type)){skipFeed(mode,reason||'当前范围不包含这个资产类型');return true;}return false;};
   // Polyfork 没有「题材映射表」这一层：它的 9 个 class 与统一树的题材不是一回事，
   // 所以「全部平台」下就按同一个关键词原样搜，不走 plan 的分类对齐。
   if(mode==='simready'){if(refuse())return null;return {q:baseQ.slice(0,200)};}
   if(mode==='polyfork')return {q:baseQ.slice(0,200),assetClass:'',sort:''};
   // Fab：默认只看免费（is_free 需配合 sort_by 才生效），用户可在筛选里取消「仅免费」看全部。
-  if(mode==='fab')return {q:baseQ.slice(0,200),free:$('#fab-free')?$('#fab-free').checked:true,sortBy:$('#fab-sort')?.value||'-createdAt'};
+  // seller 只在「点了某个作者」时有值：Fab 的 seller 参数是精确全名匹配（传简称直接 0 条），
+  // 所以这里原样透传卡片上的作者名，不做任何归一化。
+  if(mode==='fab')return {q:baseQ.slice(0,200),seller:String(state.fabSeller||'').slice(0,120),free:$('#fab-free')?$('#fab-free').checked:true,sortBy:$('#fab-sort')?.value||'-createdAt',listingType:$('#fab-type')?.value||'',category:$('#fab-cat-tree')?.dataset.slug||''};
   // UI 元素：类型与主题是站点自己的维度（按钮 / 加载动画 / 开关…，浅色 / 深色），
   // 与 3D 资产的统一题材树不是一回事，所以不走 plan 的分类对齐，按站点语义原样传。
   if(mode==='uiverse')return {q:baseQ.slice(0,200),type:$('#uiverse-type')?.value||'',theme:$('#uiverse-theme')?.value||''};
@@ -1145,7 +1229,7 @@ function skipFeed(mode,reason){
    if(!target){skipFeed(mode,'这个题材在该站没有对应分类');return null;}
    if(refuse(target.type))return null;
    if(mode==='search'){const request=readSearch();request.category=target.category;return request;}
-   if(mode==='art'){const request=artstation.read();request.category=target.category;return request;}
+   if(mode==='art'){const request=artstation.read();request.category=target.category;return expandRequest(request);}
    if(mode==='polyhaven')return {q:joinQuery(baseQ,target.q),type:target.type,category:target.category||''};
    if(mode==='ambientcg')return {q:joinQuery(baseQ,target.q),category:'',type:kindType(picked,'ambientcg')||(plan.polyhaven?.type==='hdris'?'hdri,hdri-element':'material')};
    if(mode==='freestylized')return {q:joinQuery(baseQ,target.q),type:target.type,category:'',sort:$('#online-sort').value};
@@ -1153,21 +1237,21 @@ function skipFeed(mode,reason){
    if(mode==='kenney')return {q:joinQuery(baseQ,target.q),category:'',series:''};
   }
   if(picked.length&&refuse(mode==='polyhaven'?kindType(picked,'polyhaven')||'models':mode==='freestylized'?kindType(picked,'freestylized'):undefined))return null;
-  if(mode==='ambientcg')return {...ambientcgUI.read(),...(state.platform===ALL?{type:kindType(picked,'ambientcg')||'material,substance,hdri,hdri-element,3d-model,terrain'}:{})};
+  if(mode==='ambientcg')return expandRequest({...ambientcgUI.read(),...(state.platform===ALL?{type:kindType(picked,'ambientcg')||'material,substance,hdri,hdri-element,3d-model,terrain'}:{})});
   if(mode==='polyhaven'){
    const type=kindType(picked,'polyhaven');
    if(picked.length&&!type){skipFeed(mode,'模型和材质、HDRI 请分开选范围');return null;}
-   return type?{q:baseQ.slice(0,200),type,category:''}:polyhavenUI.read();
+   return type?{q:baseQ.slice(0,200),type,category:''}:expandRequest(polyhavenUI.read());
   }
   if(mode==='polypizza')return {q:baseQ.slice(0,200),cc0:$('#polypizza-cc0').checked};
-  if(mode==='kenney')return kenneyUI.read();
-  if(mode==='polyfork')return polyforkUI.read();
+  if(mode==='kenney')return expandRequest(kenneyUI.read());
+  if(mode==='polyfork')return expandRequest(polyforkUI.read());
   if(mode==='freestylized'){
    const type=kindType(picked,'freestylized');
    if(picked.length&&!type){skipFeed(mode,'不同资产类型请分开选范围');return null;}
-   return type?{q:baseQ.slice(0,200),type,category:'',sort:$('#online-sort').value}:freestylizedUI.read();
+   return type?{q:baseQ.slice(0,200),type,category:'',sort:$('#online-sort').value}:expandRequest(freestylizedUI.read());
   }
-  const request=mode==='art'?artstation.read():readSearch();
+  const request=mode==='art'?expandRequest(artstation.read()):readSearch();
   if(mode==='art'&&state.platform===ALL){
    const categoryIds=artstationCategory({group:$('#online-category-group').value,leaf:$('#unified-category').value});
    if(categoryIds===null){skipFeed('art','这个题材在 ArtStation 没有对应分类');return null;}
@@ -1250,8 +1334,8 @@ function clearSearchIfEmptied(){
 /** 一个链接框：先按注册表判定平台，再交给对应通道（作品识别 / 网页解析）。
  *  入口只剩搜索框本身（粘贴链接直接回车），所以默认值也从搜索框读。 */
 
-function collect(ids,{quiet=false}={}){
- const result=collectModels(state.models,ids.map(findModel).filter(Boolean));state.models=result.models;persist();renderGrid();
+function collect(ids,{quiet=false,refresh=true}={}){
+ const result=collectModels(state.models,ids.map(findModel).filter(Boolean));state.models=result.models;persist();if(refresh)renderGrid();
  if(!quiet)toast(result.refused?`已加入 ${result.added} 个；模型库已达 ${LIBRARY_LIMIT} 个，请先整理。`:result.added?`已加入 ${result.added} 个模型`:'这些模型已在模型库中');
  return result;
 }
@@ -1282,12 +1366,29 @@ function toggleFavorite(uid){
   // 图站图片 / 模型平台：收藏同时把记录留在资产库里（既有语义）。本地素材包本来就在库里，
   // 跳过 collect，否则 state.models 里多出一份，反而会把磁盘索引画的那张素材包卡顶掉。
   if(!favoriteSkipsCollect(uid)){
-   const r=collect([uid],{quiet:true});
+   const r=collect([uid],{quiet:true,refresh:false});
    if(r.refused){toast('模型库已满，请先移除一些模型再收藏。');return;}
   }
   state.favorites.add(uid);
  }
- persist();renderGrid();
+ persistNow();
+ const saved=state.favorites.has(uid);
+ // 等目录写入完成后再刷新当前分页名单，不能让新收藏被旧 queryUids 排除。
+ void storage.flush?.().then(()=>{
+  if(state.route==='library'&&state.queryUids)return state.onRemoteRefresh?.();
+ });
+ document.querySelectorAll('[data-action="favorite"]').forEach(button=>{
+  if(button.dataset.uid!==uid)return;
+  button.classList.toggle('saved',saved);
+  button.classList.toggle('is-favorite',saved);
+  button.setAttribute('aria-pressed',String(saved));
+  button.setAttribute('aria-label',saved?'取消收藏':'收藏资产');
+  button.title=saved?'取消收藏':'收藏资产';
+  const label=button.querySelector('span');
+  if(label)label.textContent=saved?'已收藏':'收藏';
+ });
+ if(!saved&&(state.filter==='favorites'||state.route==='favorites'))renderGrid();
+ counts();
 }
 
 async function enqueueImmediate(picked,{force=false}={}){
@@ -1298,35 +1399,76 @@ async function enqueueImmediate(picked,{force=false}={}){
   if(kind==='polyhaven'&&picked.some(m=>m.assetType==='textures'||m.assetType==='hdris')&&!polyMaterial&&!polyHdri){toast('Poly Haven 的模型、材质和 HDRI 请分批下载。');return;}
   if(kind==='artstation'?picked.length>artstation.maxBatch:picked.length>50){toast(`每批最多 ${kind==='artstation'?artstation.maxBatch:50} 个${kind==='artstation'?' ArtStation 作品':'模型'}，请减少选择数量。`);return;}
   if(!picked.length){toast('未找到模型记录，请重新检索。');return;}
-  // 材质没有 FBX 转换这一说，Blender 缺席的提醒只对模型任务有意义。
   // UI 元素落的是代码文件，同样没有 GLB/FBX 这一说。
-  if(kind!=='ambientcg'&&!polyMaterial&&!polyHdri&&kind!=='polypizza'&&kind!=='kenney'&&kind!=='freestylized'&&kind!=='polyfork'&&kind!=='simready'&&kind!=='uielement'&&downloads?.blenderAvailable===false)toast('默认会导出 GLB + FBX；未检测到 Blender 时 FBX 转换会失败，请先安装 Blender 或设置 SFX_BLENDER。');
   state.selected.clear();
   for(const model of picked)queuePulse.set(model.uid,Date.now());
-  renderGrid();counts();
+  // 先让后台接受任务，再重绘卡片；界面刷新不能阻断入队请求。
   try{
    // 材质任务的选项：精度取自卡片下载键左边的选择（批量取第一张，服务端再校验一次），
    // 输出固定为解压文件夹——材质没有 GLB/FBX 选项，也不再给压缩包与文件夹的二选一。
    const materialResolution=/^[1248]K$/.test(picked[0]?.materialResolution||'')?picked[0].materialResolution:'2K';
    const ambientFormat=picked[0]?.sourceType==='substance'?'SBSAR':picked[0]?.materialFormat==='PNG'||picked[0]?.materialFormat==='SBSAR'?picked[0].materialFormat:'JPG';
-   const downloadOptions=kind==='simready'?{output:'folder',format:'usd'}:kind==='uielement'?{output:'folder'}:kind==='ambientcg'?{output:'folder',resolution:materialResolution,textureFormat:ambientFormat}:polyMaterial?{output:'folder',resolution:materialResolution,textureFormat:'JPG'}:polyHdri?{output:'folder',resolution:materialResolution,textureFormat:'HDR'}:kind==='freestylized'?{output:'folder',format:'glb',resolution:materialResolution}:kind==='polypizza'||kind==='kenney'||kind==='polyfork'?{output:'folder',format:'glb'}:{...state.options,output:'folder',format:'fbx',downloadTextures:true,pngOnly:true,fastZip:true};
+   const downloadOptions=kind==='simready'?{output:'folder',format:'usd'}:kind==='uielement'?{output:'folder'}:kind==='ambientcg'?{output:'folder',resolution:materialResolution,textureFormat:ambientFormat}:polyMaterial?{output:'folder',resolution:materialResolution,textureFormat:'JPG'}:polyHdri?{output:'folder',resolution:materialResolution,textureFormat:'HDR'}:kind==='freestylized'?{output:'folder',format:'glb',resolution:materialResolution}:kind==='polypizza'||kind==='kenney'||kind==='polyfork'?{output:'folder',format:'glb'}:{packMode:state.options.packMode,maxTextureEdge:state.options.maxTextureEdge,output:'folder',format:'glb',downloadTextures:true,pngOnly:true,fastZip:true};
   // kind 已在函数顶部由 jobKindOf(picked) 判定，覆盖 Poly Haven 等新平台，不再写死 sketchfab
   const result=await downloads.enqueue(picked,downloadOptions,force,undefined,kind);
   const libraryResult=collectModels(state.models,picked);state.models=libraryResult.models;persist();
   for(const model of picked)queuePulse.delete(model.uid);
   renderGrid();counts();
-  const noun=kind==='artstation'?' ArtStation 转换任务':kind==='uielement'?' UI 元素':polyHdri?' Poly Haven HDRI':polyMaterial?' Poly Haven 材质':kind==='polyhaven'?' Poly Haven 模型':kind==='ambientcg'?' ambientCG 材质':kind==='polypizza'?' Poly Pizza 模型':kind==='kenney'?' Kenney 资源包':kind==='polyfork'?' Polyfork 模型':kind==='freestylized'?' FreeStylized 资产':'后台任务';
+  const noun=kind==='artstation'?' ArtStation 转换任务':kind==='uielement'?' UI 元素':polyHdri?' Poly Haven HDRI':polyMaterial?' Poly Haven 材质':kind==='polyhaven'?' Poly Haven 模型':kind==='ambientcg'?' ambientCG 材质':kind==='polypizza'?' Poly Pizza 模型':kind==='kenney'?' Kenney 资源包':kind==='polyfork'?' Polyfork 模型':kind==='freestylized'?' FreeStylized 资产':kind==='civitai'?' Civitai 模型':'后台任务';
   // 这条消息是入队结果唯一的出口：先前会有一条「已识别某作品」的上下文提示，
   // 粘贴链接改成只出卡片、不自动入队之后，那个上下文已无处可挂，删掉免得留下死参数。
   const message=result.added.length?`已加入 ${result.added.length} 个${noun}${result.duplicates.length?`，跳过 ${result.duplicates.length} 个重复任务`:''}`:result.duplicates.length?'这些任务已在队列或已完成。':'没有任务加入';
   toast(libraryResult.refused?message+'；模型库已满，部分下载模型未自动入库':message);
  }catch(e){for(const model of picked)queuePulse.delete(model.uid);toast(e.message);renderGrid();counts();}
 }
-function requestDownload(ids){
- const picked=mergeModels([],ids.map(findModel).filter(Boolean)).map(m=>({...m}));
- if(visitor)return downloadToClient(picked);
- enqueueImmediate(picked);
+async function requestDownload(ids){
+ try{
+  const picked=mergeModels([],ids.map(findModel).filter(Boolean)).map(m=>({...m}));
+  if(visitor)return await downloadToClient(picked);
+  await enqueueImmediate(picked);
+ }catch(error){
+  console.error('[AssetVault download]',error);
+  toast('下载未提交：'+(error.message||String(error)));
+ }
 }
+/** Fab 批量入库：当前检索页里所有免费资产一次性 Add to library。
+ *  后端逐条记账（收费的会跳过），完成后刷新一次检索流让卡片带上最新状态。 */
+async function claimFabVisible(button){
+ const rows=(state.feeds.fab?.rows||[]).filter(row=>row.assetId&&row.isFree!==false);
+ const ids=[...new Set(rows.map(row=>row.assetId))];
+ if(!ids.length){toast('这一页没有可入库的免费资产');return;}
+ if(button.dataset.busy==='1')return;
+ const label=button.dataset.label||button.textContent;
+ button.dataset.busy='1';button.dataset.label=label;button.disabled=true;
+ const total=ids.length;let done=0,added=0,skipped=0;const failed=[];
+ button.textContent=`入库中 0/${total}`;
+ button.style.setProperty('--p','0%');
+ try{
+  // 分批提交：整页一次发出去时后端要跑几分钟，期间界面只能停在 0/N，看着像卡死。
+  // 每批 12 条，回来一批就刷新一次计数。结尾只剩 1 条时并进上一批
+  // （单条请求失败会整批 400，混批才能逐条记账）。
+  const chunks=[];
+  for(let i=0;i<ids.length;i+=12)chunks.push(ids.slice(i,i+12));
+  if(chunks.length>1&&chunks[chunks.length-1].length===1)chunks[chunks.length-2].push(...chunks.pop());
+  for(const batch of chunks){
+   const response=await fetch('/api/fab/claim',{method:'POST',headers:{'Content-Type':'application/json','X-SFX-Local':'1'},body:JSON.stringify({ids:batch})});
+   const data=await response.json().catch(()=>({}));
+   if(!response.ok)throw Error(data.error||`入库失败（HTTP ${response.status}）`);
+   added+=data.added||0;skipped+=data.skipped||0;
+   failed.push(...(data.results||[]).filter(row=>!row.ok));
+   done+=batch.length;
+   button.textContent=`入库中 ${done}/${total}`;
+   button.style.setProperty('--p',(done/total*100).toFixed(1)+'%');
+  }
+  const parts=[added?`入库 ${added} 个`:'没有新增'];
+  if(skipped)parts.push(`${skipped} 个已在库`);
+  if(failed.length)parts.push(`${failed.length} 个失败：${failed[0]?.message||''}`);
+  toast(parts.join('，'));
+  if(activeModes().includes('fab'))requestFeed('fab',readRequest('fab'));
+ }catch(error){toast(error.message||String(error));}
+ finally{button.dataset.busy='0';button.disabled=false;button.textContent=label;button.style.removeProperty('--p');}
+}
+
 /** 访客点下载是「存到我这台电脑」：主机已有文件就直接传过来（不重跑抓取流程），
  *  没有才排进主机队列，再由浏览器接收器把成品拉到本机指定目录。 */
 async function downloadToClient(models){
@@ -1523,6 +1665,7 @@ function deferNativeDrag(event,source){
 }
 
 async function setup(){
+ startupStage('正在初始化界面操作…');
  bindScrollPerformance();
  bindCardImageResidency($('#grid'));
  bindScrollbarInteraction();
@@ -1620,6 +1763,24 @@ syncSelectionUI=()=>{
  // 摘进隐藏盒子、再整片重画，标记在行里的节点会被丢掉。自己留一份引用，树建好后把它放回该行。
  const categoryGroup=$('#online-category-group');
  filterTrees=createFilterTrees({$,icon});                        // 筛选行改画成树状分类：字段是根分支，分类下面按主题分组
+ // Fab 分类树：类型 → 母类 → 子类 → 子子类合成一棵（类型不再单独占分支），默认全部折叠。
+ // 选中层写进 #fab-cat-tree 的 data-slug，请求参数直接读它；类型回写 #fab-type 当值容器，
+ // 角标显示「分类名」，只选了类型时显示类型名。
+ fabCategoryTree=createFabCategoryTree({mount:$('#fab-cat-tree'),groups:FAB_CATEGORY_GROUPS,
+  types:[...($('#fab-type')?.options||[])].map(option=>({value:option.value,label:option.textContent})),
+  onChange:picked=>{
+   const mount=$('#fab-cat-tree');
+   if(mount)mount.dataset.slug=picked?.category?.slug||'';
+   const typeSelect=$('#fab-type');
+   if(typeSelect&&typeSelect.value!==(picked?.type||''))typeSelect.value=picked?.type||'';
+   const input=$('#fab-cat-value');
+   if(input){
+    const label=picked?.category?.name||[...($('#fab-type')?.options||[])].find(option=>option.value===picked?.type)?.textContent||'';
+    if(input.value!==label){input.value=label;input.dispatchEvent(new Event('input',{bubbles:true}));}
+   }
+   if(activeModes().includes('fab'))requestFeed('fab',readRequest('fab'));
+  }});
+ fabCategoryTree.render();
  if(categoryGroup&&!categoryGroup.isConnected)$('#filters-sketchfab').append(categoryGroup);
  enhanceSelects('#search-panel select:not(.ftree-native), #filter-rows select:not(.ftree-native), #discovery-controls select:not(.ftree-native)');   // 原生下拉的系统弹出层改不了样式，这里统一换成自绘的；顶部功能栏的「每批条数」也在范围内，否则深色界面里会弹出浅色系统菜单；树里的控件另有显示层，跳过
  // 平台下拉的图钉：派发的 picker:pin 只操作置顶顺序，不碰当前选中的平台；重画选项后 picker 的
@@ -1773,13 +1934,14 @@ syncSelectionUI=()=>{
   }
  });
  initSearchMotion($('#search-panel'),{notify:assistant.notify});
+ initSearchIsland($('#search-panel'));
+ const disposeSearchStatus=bindSearchStatusBubble({notify:assistant.notify});
+ window.addEventListener('pagehide',disposeSearchStatus,{once:true});
  const disposeMascotDeveloper=setupMascotDeveloper({panel:$('#search-panel'),assistant,enabled:!visitor});
  window.addEventListener('pagehide',disposeMascotDeveloper,{once:true});
  window.addEventListener('pagehide',assistant.dispose,{once:true});
  $('#asset-search-form').addEventListener('submit',e=>{e.preventDefault();if(imageSearch?.submit())return;startSearch({record:true});});
- // 删字也算一次检索：只清空时才触发（见 clearSearchIfEmptied），
- // 否则每敲一个字都发请求，既吵又慢。
- $('#asset-query').addEventListener('input',clearSearchIfEmptied);
+ // 输入与清空只编辑草稿；回车或搜索按钮统一提交。
  $('#asset-query').addEventListener('input',refreshTopicStrip);
  // 粘链接就把左侧平台下拉拨过去（只拨下拉，不自动检索）。input 与 paste 都挂：
  // 部分浏览器 paste 之后的 input 会晚一帧，这里用 setTimeout 让值先落地，两条路径幂等。
@@ -1791,32 +1953,70 @@ syncSelectionUI=()=>{
  themeInput.title='多个搜索词用逗号分隔，例如：house, tree, cart；AI 可将主题拆解成搜索词';
  let themeToken=0;
  themeInput.addEventListener('input',()=>{themeToken++;});
- $('#theme-breakdown-btn').onclick=async()=>{
-  const theme=themeInput.value.trim();if(!theme){themeInput.focus();return;}
- const token=++themeToken,button=$('#theme-breakdown-btn');
- // 现在它是输入框内的一颗纯图标键：不能往里写「拆解中…」文字，否则 30px 的键会被撑开。
- // 加载态交给 .is-busy 的旋转动画 + title，拆解完把 title 换回来即可，图标节点始终不动。
- button.disabled=true;button.classList.add('is-busy');button.title='正在拆解主题…';
- themeResults.hidden=false;themeResults.innerHTML='<span class="theme-loading">正在拆解主题…</span>';
- const data=await brainstorm(theme);
- button.disabled=false;button.classList.remove('is-busy');button.title='AI 拆解：把搜索栏里的主题拆成多个搜索词';
-  if(token!==themeToken){themeResults.hidden=true;return;}
-  if(!data.brainstormed){themeResults.innerHTML=`<span class="theme-empty">${esc(data.reason||'未能拆解，请换个说法')}</span>`;return;}
-  const terms=[...new Set(data.terms.filter(t=>typeof t==='string').map(t=>t.trim()).filter(Boolean))].slice(0,8);
-  if(!terms.length){themeResults.textContent='未生成有效搜索词，请换个说法';return;}
-  themeInput.value=terms.join(', ');refreshTopicStrip();persist();
-  themeResults.innerHTML='<span>已填入搜索栏，点击搜索可同时检索；也可点击单个词：</span>'+terms.map(t=>`<button type="button" class="theme-chip" data-term="${esc(t)}">${esc(t)}</button>`).join('');
+ const BREAK_KEY='av-ai-breakdown';
+ let breakdownOn=false;
+ try{breakdownOn=localStorage.getItem(BREAK_KEY)==='1';}catch{}
+ const breakdownButton=$('#theme-breakdown-btn');
+ function paintBreakdown(){
+  breakdownButton.classList.toggle('is-on',breakdownOn);
+  breakdownButton.setAttribute('aria-pressed',breakdownOn?'true':'false');
+  breakdownButton.title=breakdownOn?'AI 拆解已开启：每次搜索都会连同原句一起检索拆出来的词':'AI 拆解：点开后，之后每次搜索都会自动拆词，并和原句一起检索';
+ }
+ paintBreakdown();
+ themeInput.addEventListener('input',()=>{state.expandedQuery='';});
+ breakdownButton.onclick=()=>{
+  breakdownOn=!breakdownOn;
+  try{localStorage.setItem(BREAK_KEY,breakdownOn?'1':'0');}catch{}
+  if(!breakdownOn)state.expandedQuery='';
+  paintBreakdown();
  };
+ async function expandSearchQuery(){
+  state.expandedQuery='';
+  if(!breakdownOn||state.route!=='discover')return;
+  const raw=themeInput.value.trim();
+  if(!raw||/^https?:\/\//i.test(raw))return;
+  const token=++themeToken;
+  breakdownButton.classList.add('is-busy');
+  const data=await brainstorm(raw);
+  breakdownButton.classList.remove('is-busy');
+  paintBreakdown();
+  if(token!==themeToken||!data.brainstormed)return;
+  const extra=[...new Set(data.terms.filter(t=>typeof t==='string').map(t=>t.trim()).filter(Boolean))].filter(t=>t.toLowerCase()!==raw.toLowerCase());
+  const terms=[raw,...extra].slice(0,8);
+  if(terms.length<2)return;
+  state.expandedQuery=terms.join(', ');
+  paintThemeChips(terms);
+ }
+ function paintThemeChips(terms){
+  if(!terms||terms.length<2){themeResults.hidden=true;themeResults.replaceChildren();return;}
+  themeResults.hidden=false;
+  themeResults.innerHTML='<span>本次连同原句一起检索：</span>'+terms.map(t=>`<span class="theme-chip" data-term="${esc(t)}"><button type="button" data-term="${esc(t)}">${esc(t)}</button><button type="button" data-drop-term aria-label="去掉 ${esc(t)}">×</button></span>`).join('');
+ }
 themeResults.addEventListener('click',event=>{
- const chip=event.target.closest('[data-term]');if(!chip)return;
+ const drop=event.target.closest('[data-drop-term]');
+ if(drop){
+  const term=drop.closest('[data-term]')?.dataset.term;
+  const next=(state.expandedQuery||'').split(/[,，;；\n]+/).map(item=>item.trim()).filter(item=>item&&item!==term);
+  state.expandedQuery=next.join(', ');
+  paintThemeChips(next);
+  startSearch({record:false});
+  return;
+ }
+ const chip=event.target.closest('button[data-term]');if(!chip)return;
  pickTerm(chip.dataset.term);
 });
   // 两个分类容器都要监听：统一树点叶子写 #online-category、点组头写 #online-category-group，改哪个都重搜。
   for(const id of ['online-category','unified-category','online-category-group','online-sort','online-downloadable','online-animated','online-staffpicked'])if($('#'+id))$('#'+id).onchange=()=>restartSearch();
   // Uiverse 的类型与主题：站点只认路径段过滤类型，所以这两个直接重发检索流。
   for(const id of ['uiverse-type','uiverse-theme'])if($('#'+id))$('#'+id).onchange=()=>{if(state.platform==='uiverse')requestFeed('uiverse',readRequest('uiverse'));};
-  // Fab：「仅免费」与排序改变后重发检索流（当前平台含 fab 才触发）。
+  // Fab：换产品类型会换掉整棵分类树（不同类型是不同的分类体系），旧选中一并清空；
+  // reset 内部会按新类型重发一次检索流，所以这里不用再补一次。
+  if($('#fab-type'))$('#fab-type').onchange=()=>fabCategoryTree.setType($('#fab-type').value);   // 外部改类型时同步树的选中态
   for(const id of ['fab-free','fab-sort'])if($('#'+id))$('#'+id).onchange=()=>{if(activeModes().includes('fab'))requestFeed('fab',readRequest('fab'));};
+  if($('#fab-seller-clear'))$('#fab-seller-clear').onclick=clearFabSeller;
+  // Fab 批量入库：把当前这页里所有免费资产一次性 Add to library（等于逐个点「获取」），
+  // 入库后下载不再因为「库里没有」失败。收费资产后端会跳过，不会产生订单。
+  if($('#fab-claim'))$('#fab-claim').onclick=()=>claimFabVisible($('#fab-claim'));
  $('#unified-sort').onchange=()=>{
   const next=$('#unified-sort').value;
   if(next==='name'){renderGrid();return;}
@@ -1832,7 +2032,7 @@ $('#search-platform').onchange=e=>{
  if(preset&&!preset.localOnly){state.modePlatforms[preset.id]=id;rememberModePlatform(storage,preset.id,id);}
  setPlatform(id);
 };
-$('#empty-explore').onclick=()=>{if(state.route!=='discover')route('discover');writeSearch({sort:'popular'});refreshTopicStrip();startSearch();};
+$('#empty-explore').onclick=()=>{const alternative=state.route==='discover'&&platformById(state.platform).searchAlternative;const keyword=$('#asset-query').value.trim();if(alternative&&keyword&&!/^https?:\/\//i.test(keyword))return feed.openPictureUrl(keyword,alternative);if(state.route!=='discover')route('discover');writeSearch({sort:'popular'});refreshTopicStrip();startSearch();};
  localSearch=bindLocalSearch({$,state,renderGrid,parse:parseLocal,inputSelector:'#asset-query',enabled:()=>state.route==='library',onState:detail=>{
   $('#search-panel').dispatchEvent(new CustomEvent('search-motion-state',{detail}));
   if(detail.ok&&state.route==='library'&&state.search.trim()&&!filtered().length&&!extraCards().length)assistant.notify({type:'empty'});
@@ -2214,14 +2414,6 @@ $('#load-more').onclick=()=>more({more:true});$('#load-all').onclick=()=>more({m
    toast(failed?`已删除 ${totalGone} 个，${failed} 个没删掉（可能不在可删除目录）`:`已删除 ${totalGone} 个资产${gone.length?'与本地文件':''}`);
   });
  }
- /** 把回收站变更写进 DB。失败不拦流程：下次任何一次正常保存都会再翻译出同一批 op。 */
- async function trashOnServer(uids){
-  const list=(uids||[]).filter(Boolean);
-  if(!list.length)return;
-  try{
-   await fetch('/api/library/assets/mutate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ops:list.map(uid=>({op:'asset:trash',uid}))})});
-  }catch{}
- }
  $('#delete-selected')?.addEventListener('click',()=>deleteSelectedCards());
  $('#delete-selected-files')?.addEventListener('click',()=>deleteSelectedCards({files:true}));
  bindLibraryShortcuts({enabled:()=>state.route==='library',getBindings:()=>state.options.libraryShortcuts||{},commands:{
@@ -2289,6 +2481,7 @@ settingsPanel=createSettingsPanel({$,libraryShortcuts:{getBindings:()=>state.opt
   // 画板中枢：右键/批量加入画板 + 智能收集规则面板 + 待合并队列合并。
   // 自建 DOM，不改 index.html；纯文件模式下画板路由 503，中枢只提示不崩。
   boardHub=createBoardHub({$,state,esc,icon,toast,storage,persistNow,renderGrid,controls:query.controls});
+  setupAiAssetHunt({hub:boardHub,state,esc,notify:toast,enabledPlatform:id=>platformSettings[id]!==false});
   // 画板卡片区挂在主网格上方：每帧 renderGrid 顺带重画它（路由切换 / 画板集合变化都要跟）。
   view.setBoardDeck(boardHub.deck);
   cardGroups=createCardGroupUI({state,localFiles,cardView,readKind:()=>state.contentKind||activeLocalKind(),findModel,esc,icon,persist:persistNow,render:()=>renderGrid(),toast,enabled:()=>!visitor&&!boardHub?.store.activeId});
@@ -2337,32 +2530,36 @@ settingsPanel=createSettingsPanel({$,libraryShortcuts:{getBindings:()=>state.opt
  async function commitSettings(){
   try{
    await downloads.saveSettings({concurrency:Number($('#backend-concurrency').value),retryLimit:Number($('#backend-retries').value)});
-   state.options={packMode:$('#pack-mode').value,maxTextureEdge:Number($('#texture-size').value),output:'folder',format:'fbx',downloadTextures:true,pngOnly:true,fastZip:true,scanLimit:Number($('#scan-limit').value),optionsVersion:3};
+   state.options={packMode:$('#pack-mode').value,maxTextureEdge:Number($('#texture-size').value),output:'folder',format:'glb',downloadTextures:true,pngOnly:true,fastZip:true,scanLimit:Number($('#scan-limit').value),optionsVersion:3};
    // 导出目标路径：逐个回写后端配置（空值表示清除）。
    for(const t of exportTargetsCache){if(t.kind!=='dir')continue;const inp=$(`[data-export-path="${t.id}"]`);if(!inp)continue;try{await fetch('/api/exports/configure',{method:'POST',headers:{'Content-Type':'application/json','X-SFX-Local':'1'},body:JSON.stringify({targetId:t.id,path:inp.value.trim()})});}catch{}}
    persist();
   }catch(error){toast(`设置没写进去：${error.message}`);throw error;}
  }
  $('#clear-library').onclick=async()=>{if(await askConfirm({title:'清空本地模型库',message:'清空本地模型库与收藏？在线结果、下载记录和已下载文件不会被删除。',confirmText:'清空',danger:true})){state.models=[];state.favorites.clear();state.selected.clear();persistNow();renderGrid();}};
- window.addEventListener('pagehide',persistNow);
+ window.addEventListener('pagehide',()=>{feed.savePictureSession();persistNow();});
   // 顶部那条状态栏（连接指示灯 + 头像）已撤掉，所以这里不再往元素里写状态：
  // 连上了就安静地做「首次进入自动检索」，连不上才出声（状态行 + 一条提示）。
  // Online categories, font loading and disk validation must not gate the local interface.
  Promise.allSettled([waitForInitialCategories(),artFilters]).then(()=>{
   filterTrees.refresh();mergedFilters?.refresh();renderPlatform();
  });
+ startupStage('正在绘制分类与首屏卡片…');
  filterTrees.refresh();mergedFilters?.refresh();renderPlatform();renderGrid();fillIcons();
  $('#search-panel').setAttribute('data-search-ready','');
+ startupStage('正在等待首屏布局…');
  await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
  syncStickyOffset();
  document.documentElement.dataset.uiReady='true';
+ startupStage('界面已就绪');
+ feed.restorePictureScroll();
  window.dispatchEvent(new Event('assetvault:ui-ready'));
  fetch('/api/health').then(r=>{if(!r.ok)throw Error();return r.json();}).then(async()=>{
   await Promise.allSettled([waitForInitialCategories(),artFilters]);
   if(!activeModes().length){
    // 图站没有检索流：刷新页面后仍停在这个平台时，也先铺一屏首页推荐，
    // 否则恢复出来的是一大片空白（用户 2026-11-03 反馈「选了平台却只有说明文字」）。
-   if(state.route==='discover'&&isPictureSite(state.platform)){if(!state.pictureSite)feed.openPictureHome?.(state.platform);}
+   if(state.route==='discover'&&isPictureSite(state.platform))feed.openPictureHome?.(state.platform);
    else if(state.route==='discover')$('#asset-query').placeholder='所有平台已关闭，可在设置 → 平台模块中开启';
    return;
   }

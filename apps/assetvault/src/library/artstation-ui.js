@@ -19,8 +19,13 @@ export function createArtstationUI({enabled=()=>true,$,icon,esc,toast,state,requ
 
 // 关键词由统一的搜索框提供（app.js 拥有那个表单），这里只负责 ArtStation 自己的
 // 分类/排序/精选，以及「识别单个作品地址」这条通道。
+//
+// 注意：`artist` 不属于控件现值，它是"按作者浏览"这一种独立模式的开关。放进 read() 会让
+// 主搜索框构造的每一份请求都带着它——服务端看到 artist 就分流到 /users/<name>/…，
+// 于是搜什么都是同一个作者的作品，等于困在作者页里出不来。所以只在 browseArtist 里
+// 显式附加，一旦用户改关键词/改筛选（走 read() 的另一条路）就自动回到普通搜索。
  function read(){
-  return {q:$('#asset-query').value.trim().slice(0,200),category:$('#art-category').value,sort:$('#art-sort').value,picked:$('#art-picked').checked,assetType:$('#art-type').value,artist:ui.artist||null};
+  return {q:$('#asset-query').value.trim().slice(0,200),category:$('#art-category').value,sort:$('#art-sort').value,picked:$('#art-picked').checked,assetType:$('#art-type').value};
  }
  function write(request={}){
   for(const [key,selector] of [['q','#asset-query'],['category','#art-category'],['sort','#art-sort'],['assetType','#art-type']])if(request[key]!==undefined)$(selector).value=request[key];
@@ -48,7 +53,38 @@ export function createArtstationUI({enabled=()=>true,$,icon,esc,toast,state,requ
    if(data.artist)toast(`@${data.artist.username} · ${data.artist.name}${data.artist.projects?` · ${data.artist.projects} 个作品`:''}`);
    else toast(`没找到艺术家 @${username}，仍会尝试列出作品`);
   }catch{}
-  return requestFeed('art',read());
+  // artist 只在这一条请求里显式带上；read() 本身不含它，所以下一次普通搜索自然退出浏览态。
+  return requestFeed('art',{...read(),artist:ui.artist});
+ }
+ async function currentAccount(){
+  const data=await api('/me');
+  const artist=data.artist;
+  if(!artist?.username)throw Error('没有读到当前 ArtStation 账号');
+  $('#art-artist').value=artist.username;
+  return artist;
+ }
+ /** 登录账号的点赞，等价于花瓣的「收藏画板」：先认出自己，再走已有的点赞列表。 */
+ async function browseMine(tab){
+  try{
+   await currentAccount();
+   return browseArtist(tab);
+  }catch(e){toast(e.message);}
+ }
+ /** 登录账号关注的人。点一个名字就去看他的作品。 */
+ async function showFollowing(){
+  const host=$('#art-following');
+  try{
+   const me=await currentAccount();
+   const data=await api(`/following?username=${encodeURIComponent(me.username)}`);
+   const users=Array.isArray(data.users)?data.users:[];
+   if(!host)return;
+   if(!users.length){host.hidden=true;host.innerHTML='';return toast('还没有关注任何人');}
+   host.hidden=false;
+   host.innerHTML=users.map(user=>`<button type="button" class="text-button" data-art-follow="${esc(user.username)}">${esc(user.name||user.username)}</button>`).join('');
+   host.querySelectorAll('[data-art-follow]').forEach(button=>{
+    button.onclick=()=>{$('#art-artist').value=button.dataset.artFollow;browseArtist('projects');};
+   });
+  }catch(e){if(host){host.hidden=true;host.innerHTML='';}toast(e.message);}
  }
 
  async function api(route,body){
@@ -123,8 +159,10 @@ function setup(){
  for(const id of ['art-category','art-sort','art-picked','art-type'])$('#'+id).onchange=()=>start();
  $('#art-reset-filters').onclick=()=>resetFilters();
  // 艺术家浏览：回车等同按"看作品"，与表单提交的直觉一致。
- $('#art-artist-projects').onclick=()=>browseArtist('projects');
+  $('#art-artist-projects').onclick=()=>browseArtist('projects');
  $('#art-artist-likes').onclick=()=>browseArtist('likes');
+ $('#art-my-likes').onclick=()=>browseMine('likes');
+ $('#art-my-following').onclick=()=>showFollowing();
  $('#art-artist').onkeydown=event=>{if(event.key==='Enter'){event.preventDefault();browseArtist('projects');}};
  return loadFilters();
 }

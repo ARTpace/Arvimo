@@ -1,3 +1,6 @@
+import {listPager} from './platform-driver.mjs';
+import {SHORT_VIDEO_RESOLVERS} from './short-videos.mjs';
+import {MUSIC_RESOLVERS} from './music-sites.mjs';
 // 图站抓取注册表（Picture Sites）。
 //
 // 与 image-sources.mjs 平行：image-sources 处理「1 个 3D 资产 → 它的图」，本注册表处理
@@ -17,7 +20,8 @@ import {noteUse, noteHarvest} from './cookie-warmer.mjs';
 import {browserProfileDir, cookieHeaderFor, hasCookiesFor} from './cookie-jar.mjs';
 import {tagList} from './tag-list.mjs';
 import {extractXhsState, parseXhsUrl, parseXhsNote, parseXhsUser, parseXhsFeed, detectXhsBlock, isXhsGuest} from './xhs-state.mjs';
-import {xhsBrowserCapture, xhsSigned, xhsBoards, forgetXhsBoards, xhsAddNotes} from './xhs-browser.mjs';
+import {xhsBrowserCapture, xhsSigned, xhsBoards, forgetXhsBoards, xhsAddNotes, xhsProbeWriteOps, xhsCollectionWrite, xhsFollowings} from './xhs-browser.mjs';
+import {registerCollectionPlatform, withCollectionCaps, collectionCommand} from './platform-collections.mjs';
 
 /** Pixiv 游客态 AJAX 需要的伪装头；缺 Referer 会被站点以 403 打回。 */
 const PIXIV_HEADERS = {
@@ -293,7 +297,7 @@ const resolveWallhaven = {
   label: 'Wallhaven 壁纸',
   client: 'wallhaven',
   search: true,
-  async resolve({ url }, { signal, maxItems = Infinity } = {}) {
+  async resolve({ url }, { signal, maxItems = Infinity, readJson = fetchJson, onProgress } = {}) {
     // 纯关键词 → 搜索词（Wallhaven 的 q 支持 `city night` 这种多词，也支持 @tag / id: 语法）。
     const raw = String(url || '').trim();
     let q = '';
@@ -305,42 +309,45 @@ const resolveWallhaven = {
     }
     const items = [];
     const seen = new Set();
-    for (let page = 1; page <= MAX_PAGES && items.length < maxItems; page++) {
-      const api = `https://wallhaven.cc/api/v1/search?q=${encodeURIComponent(q)}&page=${page}`;
-      let data;
-      try {
-        data = await fetchJson(api, { headers: { 'User-Agent': UA, Referer: 'https://wallhaven.cc/' }, signal });
-      } catch (e) {
-        if (page === 1) throw e;
-        break;
-      }
-      const arr = (data && data.data) || [];
-      if (!arr.length) break;
-      for (const it of arr) {
-        if (!it.path || seen.has(it.path)) continue;
-        seen.add(it.path);
-        // thumbs.small 约 30KB（原图常常 5MB+）；缩略图域名 th.wallhaven.cc 已在 CDN 白名单里。
-        items.push({
-          url: it.path,
-          thumb: (it.thumbs && (it.thumbs.small || it.thumbs.large)) || '',
-          title: q || 'Wallhaven',
-          width: Number(it.dimension_x) || 0,
-          height: Number(it.dimension_y) || 0,
-          // Wallhaven 不公开上传者，没有 author；it.url 是壁纸详情页（可看分辨率/标签/下载原图）。
-          pageUrl: it.url || (it.id ? `https://wallhaven.cc/w/${it.id}` : ''),
-          // 列表接口不回逐图标签（逐图标签要再打一次详情接口，48 张会被限流），但每图都带 `category`
-          // （general / anime / people）—— 这是现成的「分类 → 标签」来源；搜索词 q 是这批图的关联意图，
-          // 一并归一。两者都没有时（直链单图 + 非搜索）tags 为空数组，不影响其它字段。
-          tags: tagList([it.category, ...(q ? [q] : [])].filter(Boolean)),
-          // 同时留一份结构化分类：打标时「站点分类」和「作者标签」的权重不一样，
-          // 混在一个数组里就分不出哪个更可信了。
-          ...(it.category ? {category: String(it.category)} : {}),
-        });
-      }
-      if (items.length >= maxItems || !data.meta || !data.meta.next_page) break;
-    }
+    if (items.length < maxItems) await listPager({
+      initialState: 1, maxPages: MAX_PAGES, partialOnError: true,
+      fetchPage: page => readJson(`https://wallhaven.cc/api/v1/search?q=${encodeURIComponent(q)}&page=${page}`, {
+        headers: { 'User-Agent': UA, Referer: 'https://wallhaven.cc/' }, signal,
+      }),
+      consume(data) {
+        const arr = (data && data.data) || [];
+        if (!arr.length) return;
+        for (const it of arr) {
+          if (!it.path || seen.has(it.path)) continue;
+          seen.add(it.path);
+          // thumbs.small 约 30KB（原图常常 5MB+）；缩略图域名 th.wallhaven.cc 已在 CDN 白名单里。
+          items.push({
+            url: it.path,
+            thumb: (it.thumbs && (it.thumbs.small || it.thumbs.large)) || '',
+            title: q || 'Wallhaven',
+            width: Number(it.dimension_x) || 0,
+            height: Number(it.dimension_y) || 0,
+            // Wallhaven 不公开上传者，没有 author；it.url 是壁纸详情页（可看分辨率/标签/下载原图）。
+            pageUrl: it.url || (it.id ? `https://wallhaven.cc/w/${it.id}` : ''),
+            // 列表接口不回逐图标签（逐图标签要再打一次详情接口，48 张会被限流），但每图都带 `category`
+            // （general / anime / people）—— 这是现成的「分类 → 标签」来源；搜索词 q 是这批图的关联意图，
+            // 一并归一。两者都没有时（直链单图 + 非搜索）tags 为空数组，不影响其它字段。
+            tags: tagList([it.category, ...(q ? [q] : [])].filter(Boolean)),
+            // 同时留一份结构化分类：打标时「站点分类」和「作者标签」的权重不一样，
+            // 混在一个数组里就分不出哪个更可信了。
+            ...(it.category ? {category: String(it.category)} : {}),
+          });
+        }
+      },
+      onPage: () => onProgress?.(plan()),
+      isLimitReached: () => items.length >= maxItems,
+      nextState: (data, page) => data?.data?.length && (data.meta?.current_page != null && data.meta?.last_page != null
+        ? Number(data.meta.current_page) < Number(data.meta.last_page)
+        : data.meta?.next_page) ? page + 1 : null,
+    });
     if (!items.length) throw new Error(`Wallhaven 没有返回任何图片${q ? `（关键词「${q}」无结果，换个词试试）` : ''}`);
-    return { items, skipped: [], title: q || 'Wallhaven', author: 'Wallhaven', cover: items[0].url, source: raw, rendition: 'original' };
+    function plan() { return { items, skipped: [], title: q || 'Wallhaven', author: 'Wallhaven', cover: items[0].url, source: raw, rendition: 'original' }; }
+    return plan();
   },
 };
 
@@ -349,7 +356,7 @@ const resolveCivitai = {
   id: 'civitai',
   label: 'Civitai 图库',
   client: 'civitai',
-  async resolve({ url }, { signal, maxItems = Infinity } = {}) {
+  async resolve({ url }, { signal, maxItems = Infinity, readJson = fetchJson, onProgress } = {}) {
     let user = '';
     try {
       const u = new URL(String(url));
@@ -366,55 +373,54 @@ const resolveCivitai = {
       if (head === 'videos' || head === 'video') return resolveCivitaiVideo.resolve({ url: String(url) }, { signal, maxItems });
     } catch { /* 默认可不带用户名，抓公开流 */ }
     const items = [];
-    let cursor = null;
-    let page = 0;
-    do {
-      let api = `https://civitai.com/api/v1/images?limit=100${user ? `&username=${encodeURIComponent(user)}` : ''}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`;
-      let data;
-      try {
-        data = await fetchJson(api, { headers: { 'User-Agent': UA, Referer: 'https://civitai.com/' }, signal });
-      } catch (e) {
-        if (page === 0) throw e;
-        break;
-      }
-      const arr = (data && data.items) || [];
-      if (!arr.length) break;
-      for (const it of arr) {
-        if (!it.url) continue;
-        // Civitai 的图库里混着视频投稿（type=video，url 是 .mp4）。视频不当缩略图用，
-        // 前端拿 type 决定渲染 <video> 卡片，所以这里要带着类型往下传，不能当图片硬塞。
-        const isVideo = it.type === 'video' || /\.(mp4|webm|mov)$/i.test(String(it.url));
-        const title = (it.meta && it.meta.prompt) ? String(it.meta.prompt).slice(0, 60) : (user ? `Civitai · ${user}` : 'Civitai');
-        const who = String(it.username || user || '').trim();
-        // civitai 的图 URL 里 `original=true` 是原图档，换成 `width=450` 就是缩略图档（同一张图的服务端裁剪）。
-        // 视频没有海报图（.jpeg 变体一样回 mp4），只给一档更小的播放源：450 宽转码，卡片与预览都用它。
-        const small = String(it.url).replace('/original=true/', '/width=450/');
-        // Civitai 没有独立的 tags 接口档，但图片对象自带三类可当标签用的信息：
-        //   · it.tags            —— 提示词里提炼的标签（1girl / blue_hair …），最像「标签」
-        //   · modelVersions[].model.type  —— 资源类型（LoRA / Checkpoint / Embedding …），是现成的分类
-        //   · modelVersions[].model.name  —— 具体模型名，关联信息也算标签
-        // 全部丢给 tagList 归一（去重 / 压空白 / 截断），缺哪类都不影响其它类。
-        const modelTags = (it.modelVersions || [])
-          .flatMap((mv) => { const m = mv && mv.model; return m ? [m.type, m.name].filter(Boolean) : []; });
-        const tags = tagList([...(Array.isArray(it.tags) ? it.tags : []), ...modelTags]);
-        items.push({
-          url: it.url,
-          thumb: isVideo ? '' : (small !== it.url ? small : ''),
-          play: isVideo ? (small !== it.url ? small : '') : '',
-          ...(isVideo ? { type: 'video' } : {}),
-          title, width: Number(it.width) || 0, height: Number(it.height) || 0,
-          author: who,
-          // civitai 的 resolve 支持 /user/{username} 这种地址，所以作者可点。
-          authorUrl: who ? `https://civitai.com/user/${encodeURIComponent(who)}` : '',
-          pageUrl: it.id ? `https://civitai.com/images/${it.id}` : '',
-          tags,
-        });
-      }
-      cursor = (data && data.metadata && data.metadata.nextCursor) || null;
-      page++;
-    } while (cursor && page < MAX_PAGES && items.length < maxItems);
+    await listPager({
+      initialState: null, maxPages: MAX_PAGES, partialOnError: true,
+      fetchPage: cursor => {
+        const api = `https://civitai.com/api/v1/images?limit=100${user ? `&username=${encodeURIComponent(user)}` : ''}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`;
+        return readJson(api, { headers: { 'User-Agent': UA, Referer: 'https://civitai.com/' }, signal });
+      },
+      consume(data) {
+        const arr = (data && data.items) || [];
+        if (!arr.length) return;
+        for (const it of arr) {
+          if (!it.url) continue;
+          // Civitai 的图库里混着视频投稿（type=video，url 是 .mp4）。视频不当缩略图用，
+          // 前端拿 type 决定渲染 <video> 卡片，所以这里要带着类型往下传，不能当图片硬塞。
+          const isVideo = it.type === 'video' || /\.(mp4|webm|mov)$/i.test(String(it.url));
+          const title = (it.meta && it.meta.prompt) ? String(it.meta.prompt).slice(0, 60) : (user ? `Civitai · ${user}` : 'Civitai');
+          const who = String(it.username || user || '').trim();
+          // civitai 的图 URL 里 `original=true` 是原图档，换成 `width=450` 就是缩略图档（同一张图的服务端裁剪）。
+          // 视频没有海报图（.jpeg 变体一样回 mp4），只给一档更小的播放源：450 宽转码，卡片与预览都用它。
+          const small = String(it.url).replace('/original=true/', '/width=450/');
+          // Civitai 没有独立的 tags 接口档，但图片对象自带三类可当标签用的信息：
+          //   · it.tags            —— 提示词里提炼的标签（1girl / blue_hair …），最像「标签」
+          //   · modelVersions[].model.type  —— 资源类型（LoRA / Checkpoint / Embedding …），是现成的分类
+          //   · modelVersions[].model.name  —— 具体模型名，关联信息也算标签
+          // 全部丢给 tagList 归一（去重 / 压空白 / 截断），缺哪类都不影响其它类。
+          const modelTags = (it.modelVersions || [])
+            .flatMap((mv) => { const m = mv && mv.model; return m ? [m.type, m.name].filter(Boolean) : []; });
+          const tags = tagList([...(Array.isArray(it.tags) ? it.tags : []), ...modelTags]);
+          items.push({
+            url: it.url,
+            thumb: isVideo ? '' : (small !== it.url ? small : ''),
+            play: isVideo ? (small !== it.url ? small : '') : '',
+            ...(isVideo ? { type: 'video' } : {}),
+            title, width: Number(it.width) || 0, height: Number(it.height) || 0,
+            author: who,
+            // civitai 的 resolve 支持 /user/{username} 这种地址，所以作者可点。
+            authorUrl: who ? `https://civitai.com/user/${encodeURIComponent(who)}` : '',
+            pageUrl: it.id ? `https://civitai.com/images/${it.id}` : '',
+            tags,
+          });
+        }
+      },
+      onPage: () => onProgress?.(plan()),
+      isLimitReached: () => items.length >= maxItems,
+      nextState: data => (data?.items?.length && data.metadata?.nextCursor) || null,
+    });
     if (!items.length) throw new Error('Civitai 没有返回任何图片，可能该用户无公开作品');
-    return { items, skipped: [], title: user ? `Civitai · ${user}` : 'Civitai', author: user || 'Civitai', cover: items[0].url, source: String(url), rendition: 'original' };
+    function plan() { return { items, skipped: [], title: user ? `Civitai · ${user}` : 'Civitai', author: user || 'Civitai', cover: items[0].url, source: String(url), rendition: 'original' }; }
+    return plan();
   },
 };
 
@@ -592,7 +598,7 @@ const resolveZcool = {
         items, skipped: [],
         title: String(work.name || '站酷作品'),
         author: author || '站酷',
-        cover: items[0].url,
+        cover: items[0]?.thumb||items[0]?.url||'',
         source: raw,
         rendition: 'original',
       };
@@ -747,7 +753,7 @@ const HUABAN_BOT_UA = 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.googl
 /** 这些一级路径不是用户名：画板 / 单图 / 搜索等都是站点自己的功能页。 */
 const HUABAN_RESERVED = new Set([
   'boards', 'pins', 'search', 'explore', 'categories', 'topics', 'download', 'app',
-  'about', 'login', 'signup', 'help', 'terms', 'privacy', 'u', 'user', 'users',
+  'about', 'login', 'signup', 'help', 'terms', 'privacy', 'u', 'user', 'users', 'me',
 ]);
 
 /** 画板对象 → 前端卡片需要的最小字段（cover 用第一张图拼直链）。
@@ -766,6 +772,25 @@ function huabanBoardCard(board) {
     url: `https://huaban.com/boards/${id}`,
     description: String(board?.description || ''),
   };
+}
+
+/** 单张 pin（huaban.com/pins/数字）→ pin 对象。
+ *  api 上没有这个端点（/v3/pins/{id} 实测 405 / 404），只能读一次网页：
+ *  爬虫 UA 走服务端渲染分支，__NEXT_DATA__ 里的 pageProps.pin 带着 user（username/urlname）与 file。 */
+async function huabanPin(pinId, { signal } = {}) {
+  const res = await readPublic(`https://huaban.com/pins/${encodeURIComponent(pinId)}`, {
+    headers: { 'User-Agent': HUABAN_BOT_UA, Accept: 'text/html,application/xhtml+xml' },
+    signal,
+    maxBytes: 6 * 1024 * 1024,
+  });
+  const html = res.body.toString('utf8');
+  const raw = /<script id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/.exec(html);
+  if (!raw) throw new Error(`花瓣没有返回可解析的单图数据（收到 ${html.length} 字节，站点风控或页面结构已变）`);
+  let data;
+  try { data = JSON.parse(raw[1]); } catch { throw new Error('花瓣单图页数据结构已变化，无法解析'); }
+  const pin = data?.props?.pageProps?.pin;
+  if (!pin || !pin.file) throw new Error('这张花瓣图的页面里没有图片数据（可能已删除或设为私密）');
+  return pin;
 }
 
 /** urlname → 用户对象。只读一次网页，失败时给明确原因，不静默降级。 */
@@ -792,29 +817,117 @@ async function huabanProfile(urlname, { signal } = {}) {
   return { user: page.serversideUser, boards: Array.isArray(page.serversideBoards) ? page.serversideBoards : [] };
 }
 
+/** 当前登录账号。没带花瓣登录态时接口回「用户不存在」。 */
+async function huabanMe({ headers, signal, readJson }) {
+  const data = await readJson('https://api.huaban.com/v3/users/me', { headers, signal });
+  const user = data?.user?.urlname ? data.user : data;
+  if (!user?.urlname || data?.err) throw new Error('请先登录花瓣，再查看收藏画板和关注的人');
+  return user;
+}
+
+/** 关注的人做成画板墙卡片：点进去就是这个人的主页（已有的画板列表）。 */
+function huabanUserCard(user) {
+  const urlname = String(user?.urlname || '');
+  const avatar = user?.avatar?.key ? huabanImageUrl(user.avatar) : null;
+  return {
+    id: String(user?.user_id || urlname),
+    title: String(user?.username || urlname || '花瓣用户'),
+    count: Number(user?.board_count) || 0,
+    unit: '个画板',
+    cover: avatar,
+    thumb: avatar ? `${avatar}_fw236` : null,
+    url: urlname ? `https://huaban.com/user/${urlname}` : '',
+  };
+}
+
+/**
+ * 登录用户的两个关系列表，对应花瓣个人页「关注」里的画板 / 用户。
+ * kind: boards → /{urlname}/following/boards ；following → /{urlname}/following
+ */
+async function huabanMine(kind, { signal, readJson }) {
+  const headers = { 'User-Agent': UA, Accept: 'application/json', Referer: 'https://huaban.com/' };
+  const me = await huabanMe({ headers, signal, readJson });
+  const urlname = encodeURIComponent(me.urlname);
+  const boards = [];
+  const seen = new Set();
+  if (kind === 'boards') {
+    let page = 1;
+    for (; page <= 20; page++) {
+      const data = await readJson(`https://api.huaban.com/v3/${urlname}/following/boards?per_page=100&page=${page}`, { headers, signal });
+      if (data?.err) throw new Error(`花瓣接口返回错误：${data.msg || data.err}`);
+      const list = Array.isArray(data?.boards) ? data.boards : [];
+      if (!list.length) break;
+      for (const board of list) {
+        const card = huabanBoardCard(board);
+        if (!card.id || seen.has(card.id)) continue;
+        seen.add(card.id);
+        boards.push(card);
+      }
+      if (list.length < 100) break;
+    }
+    return {
+      mode: 'boards', boards, items: [], skipped: [],
+      title: '花瓣 · 收藏画板', author: String(me.username || me.urlname),
+      cover: boards[0]?.cover || null, source: 'https://huaban.com/me/boards', rendition: 'original',
+      user: { id: String(me.user_id || ''), name: String(me.username || ''), urlname: me.urlname },
+    };
+  }
+  let cursor = '';
+  for (let page = 0; page < 20; page++) {
+    const data = await readJson(`https://api.huaban.com/v3/${urlname}/following?limit=100${cursor ? `&max=${cursor}` : ''}`, { headers, signal });
+    if (data?.err) throw new Error(`花瓣接口返回错误：${data.msg || data.err}`);
+    const list = Array.isArray(data?.users) ? data.users : [];
+    if (!list.length) break;
+    for (const person of list) {
+      const card = huabanUserCard(person);
+      if (!card.url || seen.has(card.id)) continue;
+      seen.add(card.id);
+      boards.push(card);
+    }
+    const next = String(list.at(-1)?.seq || '');
+    if (!next || next === cursor || list.length < 100) break;
+    cursor = next;
+  }
+  return {
+    mode: 'boards', boards, items: [], skipped: [],
+    title: '花瓣 · 关注的人', author: String(me.username || me.urlname),
+    cover: boards[0]?.cover || null, source: 'https://huaban.com/me/following', rendition: 'original',
+    user: { id: String(me.user_id || ''), name: String(me.username || ''), urlname: me.urlname },
+  };
+}
+
 /** 该用户的全部画板。分页游标是上一页最后一块的 seq（limit 上限 100，page 参数无效）。 */
-async function huabanBoards(userId, { headers, signal, pageCap = 20 } = {}) {
+async function huabanBoards(userId, { headers, signal, pageCap = 20, readJson = fetchJson } = {}) {
   const out = [];
   const seen = new Set();
-  let cursor = '';
-  for (let page = 0; page < pageCap; page++) {
-    const api = `https://api.huaban.com/v3/users/${encodeURIComponent(userId)}/boards?limit=100${cursor ? `&max=${cursor}` : ''}`;
-    const data = await fetchJson(api, { headers, signal });
-    if (data && data.err) throw new Error(`花瓣接口返回错误：${data.msg || data.err}`);
-    const list = Array.isArray(data?.boards) ? data.boards : [];
-    if (!list.length) break;
-    let added = 0;
-    for (const board of list) {
-      const card = huabanBoardCard(board);
-      if (!card.id || seen.has(card.id)) continue;
-      seen.add(card.id);
-      out.push(card);
-      added++;
-    }
-    const lastSeq = String(list[list.length - 1]?.seq || '');
-    if (!added || !lastSeq || lastSeq === cursor || list.length < 100) break;
-    cursor = lastSeq;
-  }
+  let added = 0;
+  await listPager({
+    initialState: '', maxPages: pageCap,
+    async fetchPage(cursor) {
+      const api = `https://api.huaban.com/v3/users/${encodeURIComponent(userId)}/boards?limit=100${cursor ? `&max=${cursor}` : ''}`;
+      const data = await readJson(api, { headers, signal });
+      if (data && data.err) throw new Error(`花瓣接口返回错误：${data.msg || data.err}`);
+      return data;
+    },
+    consume(data) {
+      const list = Array.isArray(data?.boards) ? data.boards : [];
+      added = 0;
+      if (!list.length) return;
+      for (const board of list) {
+        const card = huabanBoardCard(board);
+        if (!card.id || seen.has(card.id)) continue;
+        seen.add(card.id);
+        out.push(card);
+        added++;
+      }
+    },
+    isLimitReached: () => false,
+    nextState(data, cursor) {
+      const list = Array.isArray(data?.boards) ? data.boards : [];
+      const lastSeq = String(list.at(-1)?.seq || '');
+      return added && lastSeq && lastSeq !== cursor && list.length >= 100 ? lastSeq : null;
+    },
+  });
   return out;
 }
 
@@ -823,7 +936,7 @@ const resolveHuaban = {
   label: '花瓣 Huaban',
   client: 'huaban',
   search: true,                                 // 支持纯关键词输入（等价于 /search?q=）
-  async resolve({ url }, { signal, maxItems = Infinity } = {}) {
+  async resolve({ url }, { signal, maxItems = Infinity, readJson = fetchJson, readProfile = huabanProfile, onProgress } = {}) {
     // 纯关键词（不是网址）等价于搜索页：前端把用户打的词直接丢进来，这里统一补成搜索 URL，
     // 免得每个调用点都要知道「这个站的搜索地址长什么样」。
     const input = String(url || '').trim();
@@ -831,6 +944,43 @@ const resolveHuaban = {
       ? input
       : `https://huaban.com/search?q=${encodeURIComponent(input)}`;
     const boardId = (target.match(/huaban\.com\/boards\/(\d+)/i) || [])[1];
+    // 单张 pin（/pins/数字）：卡片上的「查看原网页」给的就是这个地址，以前它会一路掉进
+    // 下面「请粘作者主页 / 画板 / 搜索页」的报错里 —— 自己给的链接自己不认。
+    const pinId = boardId ? '' : (target.match(/huaban\.com\/pins\/(\d+)/i) || [])[1];
+    if (pinId) {
+      const pin = await huabanPin(pinId, { signal });
+      const sources = huabanImageCandidates(pin.file);
+      if (!sources?.url) throw new Error('这张花瓣图没有可下载的图片地址');
+      const u = pin.user || null;
+      const author = String(u?.username || '').trim();
+      const authorUrl = u?.urlname
+        ? `https://huaban.com/user/${u.urlname}`
+        : u?.user_id ? `https://huaban.com/user/${u.user_id}` : '';
+      const boardTitle = String(pin.board?.title || '').trim();
+      const hashtags = (String(pin.raw_text || '').match(/(?:^|\s)#([^\s#@]+)/g) || []).map((t) => t.trim().replace(/^#/, ''));
+      let sourceHost = '';
+      try { sourceHost = new URL(String(pin.link || '')).hostname.replace(/^www\./, ''); } catch { /* 没有外链 */ }
+      const item = {
+        url: sources.url,
+        thumb: sources.thumb,
+        title: String(pin.raw_text || boardTitle || '花瓣').slice(0, 80),
+        width: Number(pin.file.width) || 0,
+        height: Number(pin.file.height) || 0,
+        author,
+        authorUrl,
+        pageUrl: `https://huaban.com/pins/${pinId}`,
+        sourceUrl: String(pin.link || '').trim(),
+        tags: tagList([boardTitle, sourceHost, ...hashtags].filter(Boolean)),
+        ...(boardTitle ? { board: boardTitle } : {}),
+        ...(hashtags.length ? { hashtags } : {}),
+        ...(sourceHost ? { sourceHost } : {}),
+      };
+      return {
+        items: [item], skipped: [],
+        title: item.title, author: author || '花瓣', authorUrl,
+        cover: item.url, source: target, rendition: 'original',
+      };
+    }
     let q = '';
     if (!boardId) {
       try { q = new URL(target).searchParams.get('q') || ''; } catch { /* 交给下面的报错 */ }
@@ -838,6 +988,11 @@ const resolveHuaban = {
     // 作者主页：/用户名、/u/数字、/用户名/boards 都归到「画板列表」这一层。
     // 这一层只返回画板卡片（不展开成几百张图），点某块画板再走一次解析取它的图片。
     if (!boardId && !q) {
+      let mine = '';
+      try { mine = new URL(target).pathname.split('/').filter(Boolean).slice(0, 2).join('/'); } catch { /* 非法 URL 走下面的报错 */ }
+      if (mine === 'me/boards' || mine === 'me/following') {
+        return huabanMine(mine === 'me/boards' ? 'boards' : 'following', { signal, readJson });
+      }
       // /u/数字、/user/数字、/user/用户名、/用户名 四种写法都归到「画板列表」这一层。
       let userRef = (target.match(/huaban\.com\/(?:u|user|users)\/([\w.-]+)/i) || [])[1] || '';
       if (!userRef) {
@@ -852,12 +1007,12 @@ const resolveHuaban = {
       let user = null;
       let userId = userRef;
       if (/^\d+$/.test(userRef)) {
-        try { const info = await fetchJson(`https://api.huaban.com/v3/users/${userRef}`, { headers, signal }); if (info && !info.err) user = info; } catch { /* 名字拿不到不影响画板列表 */ }
+        try { const info = await readJson(`https://api.huaban.com/v3/users/${userRef}`, { headers, signal }); if (info && !info.err) user = info; } catch { /* 名字拿不到不影响画板列表 */ }
       } else {
-        user = (await huabanProfile(userRef, { signal })).user;
+        user = (await readProfile(userRef, { signal })).user;
         userId = String(user.user_id);
       }
-      const boards = (await huabanBoards(userId, { headers, signal })).filter((board) => board.count > 0 || board.cover);
+      const boards = (await huabanBoards(userId, { headers, signal, readJson })).filter((board) => board.count > 0 || board.cover);
       if (!boards.length) throw new Error('这个花瓣用户没有公开画板（或画板都是空的）');
       const author = String(user?.username || '').trim();
       return {
@@ -886,84 +1041,113 @@ const resolveHuaban = {
       : (isSearch ? 3 : 40);                    // 下载走全量：搜索约 300 张上限，画板给 40 页（868 张≈9 页）
     const items = [];
     const seen = new Set();                     // 搜索翻页会有重叠，按图片地址去重
-    let cursor = '';
+    let added = 0;
     let boardTitle = boardId ? '' : q;
     let boardAuthor = '';
     let boardAuthorUrl = '';
-    for (let page = 0; page < pageLimit; page++) {
-      const api = boardId
-        ? `https://api.huaban.com/v3/boards/${boardId}/pins?limit=100${cursor ? `&max=${cursor}` : ''}`
-        : `https://api.huaban.com/v3/search/pins?q=${encodeURIComponent(q)}&per_page=100&page=${page + 1}`;
-      const data = await fetchJson(api, { headers, signal });
-      if (data && data.err) throw new Error(`花瓣接口返回错误：${data.msg || data.err}（画板可能需要登录或已删除）`);
-      const list = Array.isArray(data?.pins) ? data.pins : [];
-      if (!list.length) break;
-      if (page === 0 && data.board) {
-        if (data.board.title) boardTitle = data.board.title;
-        // 画板响应里带 board.user（user_id / username / urlname）—— 画板里的图都是这个作者，
-        // 一次就能给全部 items 填上作者名与主页，不用逐张去查。
-        const bu = data.board.user;
-        if (bu && bu.user_id) {
-          boardAuthor = String(bu.username || '').trim();
-          boardAuthorUrl = bu.urlname ? `https://huaban.com/user/${bu.urlname}` : `https://huaban.com/user/${bu.user_id}`;
+    await listPager({
+      initialState: { page: 0, cursor: '' }, maxPages: pageLimit,
+      async fetchPage({ page, cursor }) {
+        const api = boardId
+          ? `https://api.huaban.com/v3/boards/${boardId}/pins?limit=100${cursor ? `&max=${cursor}` : ''}`
+          : `https://api.huaban.com/v3/search/pins?q=${encodeURIComponent(q)}&per_page=100&page=${page + 1}`;
+        const data = await readJson(api, { headers, signal });
+        if (data && data.err) throw new Error(`花瓣接口返回错误：${data.msg || data.err}（画板可能需要登录或已删除）`);
+        return data;
+      },
+      consume(data, { page }) {
+        const list = Array.isArray(data?.pins) ? data.pins : [];
+        added = 0;
+        if (!list.length) return;
+        if (page === 0 && data.board) {
+          if (data.board.title) boardTitle = data.board.title;
+          // 画板响应里带 board.user（user_id / username / urlname）—— 画板里的图都是这个作者，
+          // 一次就能给全部 items 填上作者名与主页，不用逐张去查。
+          const bu = data.board.user;
+          if (bu && bu.user_id) {
+            boardAuthor = String(bu.username || '').trim();
+            boardAuthorUrl = bu.urlname ? `https://huaban.com/user/${bu.urlname}` : `https://huaban.com/user/${bu.user_id}`;
+          }
         }
-      }
-      let added = 0;
-      for (const pin of list) {
-        const file = pin && pin.file;
-        if (!file || (file.type && !/^image\//.test(String(file.type)))) continue;
-        const image = huabanImageUrl(file);
-        if (!image || seen.has(image)) continue;
-        seen.add(image);
-        // 首选签名原图，裸路径与缩放档按顺序兜底：花瓣抓得急会限流（HTTP 567），
-        // 老图片的原图也可能只剩缩放档可用 —— 一条地址一旦取不到，这张图就永远缺一块。
-        const sources = huabanImageCandidates(file);
-        // 花瓣没有 tags 接口，但「分类 / 关联信息」能当标签的不少：
-        //   · boardTitle        —— 画板名（明确的主题分类，如「UI 灵感」）
-        //   · raw_text 里的 #话题 —— 作者自己打的标签
-        //   · link 的域名        —— 图片出处（instagram / 个人站…），算关联来源
-        const hashtags = String(pin.raw_text || '').match(/(?:^|\s)#([^\s#@]+)/g) || [];
-        const rawTagText = hashtags.map((t) => t.trim().replace(/^#/, ''));
-        const sourceHost = (() => { try { return new URL(String(pin.link || '')).hostname.replace(/^www\./, ''); } catch { return ''; } })();
-        const tags = tagList([boardTitle, sourceHost, ...rawTagText].filter(Boolean));
-        items.push({
-          url: sources.url,
-          // 缩略图变体：CDN 认 `_fw480`（原图 1.7MB → 173KB），图片墙几十张才不会一次拉几百 MB。
-          // 只用于预览，下载与放大仍走上面的原图 url。
-          thumb: sources.thumb,
-          title: String(pin.raw_text || boardTitle || '花瓣').slice(0, 80),
-          width: Number(file.width) || 0,
-          height: Number(file.height) || 0,
-          // 搜索结果的每张图可能来自不同作者，所以逐张用 pin.user_id 拼主页；
-          // 画板层已有作者名，直接复用（名字拿不到就留空，前端回退到整批作者）。
-          author: boardAuthor,
-          authorUrl: boardAuthorUrl || (pin.user_id ? `https://huaban.com/user/${pin.user_id}` : ''),
-          pageUrl: pin.pin_id ? `https://huaban.com/pins/${pin.pin_id}` : '',
-          sourceUrl: String(pin.link || '').trim(),
-          tags,
-          // 与 tags 同一批信息，但保留原始形态：画板名是用户自己分的类，最接近人工标签；
-          // 打标提示词要用「画板 + 话题 + 出处」，混进 tags 数组后就分不清哪个是哪个了。
-          ...(boardTitle ? {board: boardTitle} : {}),
-          ...(rawTagText.length ? {hashtags: rawTagText} : {}),
-          ...(sourceHost ? {sourceHost} : {}),
-        });
-        added++;
-        if (items.length >= maxItems) break;
-      }
-      if (items.length >= maxItems) break;
-      if (!added) break;                        // 整页都是非图片 / 整页都是已抓过的，别再往后翻了
-      if (isSearch) continue;                   // 搜索靠页码推进，翻不动时上面的 !added 会收手
-      const last = list[list.length - 1];
-      const next = String(last?.pin_id || '');
-      if (!next || next === cursor || list.length < perPage) break;
-      cursor = next;
-    }
+        for (const pin of list) {
+          const file = pin && pin.file;
+          if (!file || (file.type && !/^image\//.test(String(file.type)))) continue;
+          const pinUser = pin.user || null;
+          const pinAuthor = String(pinUser?.username || '').trim();
+          const pinAuthorUrl = pinUser?.urlname
+            ? `https://huaban.com/user/${pinUser.urlname}`
+            : pinUser?.user_id ? `https://huaban.com/user/${pinUser.user_id}` : '';
+          const image = huabanImageUrl(file);
+          if (!image || seen.has(image)) continue;
+          seen.add(image);
+          // 首选签名原图，裸路径与缩放档按顺序兜底：花瓣抓得急会限流（HTTP 567），
+          // 老图片的原图也可能只剩缩放档可用 —— 一条地址一旦取不到，这张图就永远缺一块。
+          const sources = huabanImageCandidates(file);
+          // 花瓣没有 tags 接口，但「分类 / 关联信息」能当标签的不少：
+          //   · boardTitle        —— 画板名（明确的主题分类，如「UI 灵感」）
+          //   · raw_text 里的 #话题 —— 作者自己打的标签
+          //   · link 的域名        —— 图片出处（instagram / 个人站…），算关联来源
+          const hashtags = String(pin.raw_text || '').match(/(?:^|\s)#([^\s#@]+)/g) || [];
+          const rawTagText = hashtags.map((t) => t.trim().replace(/^#/, ''));
+          const sourceHost = (() => { try { return new URL(String(pin.link || '')).hostname.replace(/^www\./, ''); } catch { return ''; } })();
+          const tags = tagList([boardTitle, sourceHost, ...rawTagText].filter(Boolean));
+          items.push({
+            url: sources.url,
+            // 缩略图变体：CDN 认 `_fw480`（原图 1.7MB → 173KB），图片墙几十张才不会一次拉几百 MB。
+            // 只用于预览，下载与放大仍走上面的原图 url。
+            thumb: sources.thumb,
+            title: String(pin.raw_text || boardTitle || '花瓣').slice(0, 80),
+            width: Number(file.width) || 0,
+            height: Number(file.height) || 0,
+            // 每张 pin 自带完整 user（user_id / username / urlname），所以逐张给作者名与主页：
+            // 搜索结果的图来自不同作者，只靠 board.user 那一层会全是空的。
+            // 主页用 urlname（huaban.com/user/cxgood）而不是数字 id —— 数字 id 虽然能解析出画板，
+            // 但地址栏里不是用户认识的那个链接，复制出去也没法直接用。
+            author: pinAuthor || boardAuthor,
+            authorUrl: pinAuthorUrl || boardAuthorUrl,
+            pageUrl: pin.pin_id ? `https://huaban.com/pins/${pin.pin_id}` : '',
+            sourceUrl: String(pin.link || '').trim(),
+            tags,
+            // 与 tags 同一批信息，但保留原始形态：画板名是用户自己分的类，最接近人工标签；
+            // 打标提示词要用「画板 + 话题 + 出处」，混进 tags 数组后就分不清哪个是哪个了。
+            ...(boardTitle ? {board: boardTitle} : {}),
+            ...(rawTagText.length ? {hashtags: rawTagText} : {}),
+            ...(sourceHost ? {sourceHost} : {}),
+          });
+          added++;
+          if (items.length >= maxItems) break;
+        }
+      },
+      onPage: () => onProgress?.(plan()),
+      isLimitReached: () => items.length >= maxItems,
+      nextState(data, { page, cursor }) {
+        if (!added) return null;
+        if (isSearch) return { page: page + 1, cursor };
+        const list = Array.isArray(data?.pins) ? data.pins : [];
+        const next = String(list.at(-1)?.pin_id || '');
+        return next && next !== cursor && list.length >= perPage ? { page: page + 1, cursor: next } : null;
+      },
+    });
     if (!items.length) {
       throw new Error(isSearch
         ? `花瓣没有搜到「${q}」的图片（换个关键词试试，或直接在花瓣网页确认有结果）`
         : '花瓣这个画板里没有可抓取的图片（可能是空的私有画板）');
     }
-    return { items, skipped: [], title: boardTitle || '花瓣', author: boardAuthor || '花瓣', authorUrl: boardAuthorUrl, cover: items[0].url, source: target, rendition: 'original' };
+    // 一批图只记一个作者：画板本来就是一个人的，搜索则可能混着几十个作者 —— 那种情况顶层留空，
+    // 每张图自己的 author/authorUrl 仍然完整（info.json 的 images[] 会逐张记下来）。
+    function plan() {
+      const urls = [...new Set(items.map((item) => item.authorUrl || '').filter(Boolean))];
+      const soleUrl = urls.length === 1 ? urls[0] : '';
+      const soleAuthor = soleUrl ? String(items.find((item) => item.authorUrl === soleUrl)?.author || '') : '';
+      return {
+        items, skipped: [],
+        title: boardTitle || '花瓣',
+        author: boardAuthor || soleAuthor || '花瓣',
+        authorUrl: boardAuthorUrl || soleUrl,
+        cover: items[0].url, source: target, rendition: 'original',
+      };
+    }
+    return plan();
   },
 };
 
@@ -1009,7 +1193,7 @@ const resolvePexels = {
   label: 'Pexels 摄影图库',
   client: 'pexels',
   search: true,
-  async resolve({ url }, { signal, maxItems = Infinity } = {}) {
+  async resolve({ url }, { signal, maxItems = Infinity, readJson = pexelsJson, onProgress } = {}) {
     const raw = String(url || '').trim();
     let keyword = raw && !/^https?:\/\//i.test(raw) ? raw : '';
     let userId = '';
@@ -1031,7 +1215,7 @@ const resolvePexels = {
 
     // 单张作品
     if (photoId) {
-      const j = await pexelsJson(`/photos/${photoId}`, signal);
+      const j = await readJson(`/photos/${photoId}`, signal);
       const it = j && j.data && j.data.attributes;
       if (!it) throw new Error('Pexels 没有返回这张作品（链接里的作品号可能不对）');
       return { items: [pexelsItem(it)], skipped: [], title: it.alt || `Pexels #${photoId}`, author: pexelsItem(it).author || 'Pexels', cover: pexelsItem(it).url, source: raw, rendition: 'original' };
@@ -1047,36 +1231,40 @@ const resolvePexels = {
     const base = keyword
       ? `/search/photos?query=${encodeURIComponent(keyword)}&per_page=80`
       : `/users/${userId}/photos?per_page=80`;
-    for (let page = 1; page <= MAX_PAGES && items.length < maxItems; page++) {
-      let j;
-      try {
-        j = await pexelsJson(`${base}&page=${page}`, signal);
-      } catch (e) {
-        if (page === 1) throw e;
-        break;
-      }
-      const list = (j && j.data) || [];
-      if (!list.length) break;
-      total = Number(j.pagination && j.pagination.total_results) || total;
-      for (const row of list) {
-        const a = row.attributes || {};
-        // 摄影师接口会混进 status:'rejected' 的非公开作品，别让它们进图片墙。
-        if (a.status && a.status !== 'approved') continue;
-        if (!a.id || seen.has(a.id)) continue;
-        seen.add(a.id);
-        items.push(pexelsItem(a));
-        if (items.length >= maxItems) break;
-      }
-      const pages = Number(j.pagination && j.pagination.total_pages) || 1;
-      if (page >= pages || page * 80 >= total) break;
-    }
+    // Unlike Civitai's do/while, a zero limit must not issue the first request.
+    if (items.length < maxItems) await listPager({
+      initialState: 1, maxPages: MAX_PAGES, partialOnError: true,
+      fetchPage: page => readJson(`${base}&page=${page}`, signal),
+      consume(j) {
+        const list = (j && j.data) || [];
+        if (!list.length) return;
+        total = Number(j.pagination && j.pagination.total_results) || total;
+        for (const row of list) {
+          const a = row.attributes || {};
+          // 摄影师接口会混进 status:'rejected' 的非公开作品，别让它们进图片墙。
+          if (a.status && a.status !== 'approved') continue;
+          if (!a.id || seen.has(a.id)) continue;
+          seen.add(a.id);
+          items.push(pexelsItem(a));
+          if (items.length >= maxItems) break;
+        }
+      },
+      onPage: () => onProgress?.(plan()),
+      isLimitReached: () => items.length >= maxItems,
+      nextState(j, page) {
+        if (!j?.data?.length) return null;
+        const pages = Number(j.pagination && j.pagination.total_pages) || 1;
+        return page >= pages || page * 80 >= total ? null : page + 1;
+      },
+    });
     if (!items.length) throw new Error(keyword ? `Pexels 没有搜到「${keyword}」的图片` : '这个 Pexels 摄影师主页没有公开作品');
-    return {
+    function plan() { return {
       items, skipped: [],
       title: keyword ? `Pexels · ${keyword}` : `Pexels · ${items[0].author || userId}`,
       author: keyword ? 'Pexels' : (items[0].author || 'Pexels'),
-      cover: items[0].url, source: raw, rendition: 'original',
-    };
+      cover: items[0]?.thumb||items[0]?.url||'', source: raw, rendition: 'original',
+    }; }
+    return plan();
   },
 };
 
@@ -1547,7 +1735,7 @@ const resolveFlickr = {
   label: 'Flickr 摄影社区',
   client: 'flickr',
   search: true,
-  async resolve({ url }, { signal, maxItems = Infinity } = {}) {
+  async resolve({ url }, { signal, maxItems = Infinity, callApi = flickrCall, onProgress } = {}) {
     const raw = String(url || '').trim();
     const keyword = raw && !/^https?:\/\//i.test(raw) ? raw : '';
     let mode = keyword ? 'search' : 'user';
@@ -1590,14 +1778,14 @@ const resolveFlickr = {
     }
 
     if (mode === 'photo') {
-      const sizes = await flickrCall('flickr.photos.getSizes', { photo_id: photoId }, signal);
+      const sizes = await callApi('flickr.photos.getSizes', { photo_id: photoId }, signal);
       const arr = (sizes.sizes && sizes.sizes.size) || [];
       if (!arr.length) throw new Error('Flickr 没有返回这张作品的尺寸信息');
       const pick = (label) => arr.find((s) => s.label === label);
       const best = pick('Original') || pick('Large 2048') || pick('Large 1600') || pick('Large') || arr[arr.length - 1];
       const thumb = pick('Medium 640') || pick('Small 320') || best;
       let info = null;
-      try { info = (await flickrCall('flickr.photos.getInfo', { photo_id: photoId }, signal)).photo; } catch { /* 没权限就只要图 */ }
+      try { info = (await callApi('flickr.photos.getInfo', { photo_id: photoId }, signal)).photo; } catch { /* 没权限就只要图 */ }
       const it = {
         url: best.source,
         thumb: thumb.source,
@@ -1626,7 +1814,7 @@ const resolveFlickr = {
         tries.push(slug);
         for (const home of [`https://www.flickr.com/photos/${slug}/`, `https://www.flickr.com/people/${slug}/`]) {
           try {
-            const found = await flickrCall('flickr.urls.lookupUser', { url: home }, signal);
+            const found = await callApi('flickr.urls.lookupUser', { url: home }, signal);
             nsid = (found.user && found.user.id) || '';
             if (nsid) break;
           } catch { /* 换下一个形态继续试 */ }
@@ -1635,7 +1823,7 @@ const resolveFlickr = {
       }
       if (!nsid) {
         try {
-          const found = await flickrCall('flickr.people.findByUsername', { username: user }, signal);
+          const found = await callApi('flickr.people.findByUsername', { username: user }, signal);
           nsid = (found.user && found.user.nsid) || '';
         } catch (e) {
           if (mode === 'set') nsid = '';      // 相册接口只需要相册 id，作者查不到也能继续
@@ -1648,48 +1836,56 @@ const resolveFlickr = {
     const items = [];
     const seen = new Set();
     const perPage = 100;
-    for (let page = 1; items.length < maxItems; page++) {
-      const params = { per_page: String(perPage), page: String(page), extras: FLICKR_EXTRAS, safe_search: '1' };
-      let method;
-      if (mode === 'search') { method = 'flickr.photos.search'; params.text = keyword; params.sort = 'relevance'; }
-      else if (mode === 'tagsearch') { method = 'flickr.photos.search'; params.tags = tagFilter; params.tag_mode = 'any'; params.sort = 'interestingness-desc'; }
-      else if (mode === 'explore') {
-        // 首页推荐：Flickr 的「有趣照片」公开流（无需用户身份），sort 就是站方算法。
-        // 它不认 safe_search 参数，带上会被接口判成非法参数，所以这里删掉。
-        method = 'flickr.interestingness.getList';
-        delete params.safe_search;
-      }
-      else if (mode === 'set') { method = 'flickr.photosets.getPhotos'; params.photoset_id = setId; }
-      else { method = 'flickr.people.getPhotos'; params.user_id = nsid; }
-      let j;
-      try {
-        j = await flickrCall(method, params, signal);
-      } catch (e) {
-        if (page === 1) {
-          if (mode === 'set') throw new Error(`这个相册取不到图（${setId}）：${e.message}；确认相册 id 正确且是公开相册`);
+    if (items.length < maxItems) await listPager({
+      initialState: 1, maxPages: Infinity, partialOnError: true,
+      async fetchPage(page) {
+        const params = { per_page: String(perPage), page: String(page), extras: FLICKR_EXTRAS, safe_search: '1' };
+        let method;
+        if (mode === 'search') { method = 'flickr.photos.search'; params.text = keyword; params.sort = 'relevance'; }
+        else if (mode === 'tagsearch') { method = 'flickr.photos.search'; params.tags = tagFilter; params.tag_mode = 'any'; params.sort = 'interestingness-desc'; }
+        else if (mode === 'explore') {
+          // 首页推荐：Flickr 的「有趣照片」公开流（无需用户身份），sort 就是站方算法。
+          // 它不认 safe_search 参数，带上会被接口判成非法参数，所以这里删掉。
+          method = 'flickr.interestingness.getList';
+          delete params.safe_search;
+        }
+        else if (mode === 'set') { method = 'flickr.photosets.getPhotos'; params.photoset_id = setId; }
+        else { method = 'flickr.people.getPhotos'; params.user_id = nsid; }
+        try {
+          return await callApi(method, params, signal);
+        } catch (e) {
+          if (page === 1 && mode === 'set') throw new Error(`这个相册取不到图（${setId}）：${e.message}；确认相册 id 正确且是公开相册`);
           throw e;
         }
-        break;
-      }
-      const box = j.photos || j.photoset || {};
-      const list = box.photo || [];
-      if (!list.length) break;
-      for (const p of list) {
-        if (!p.id || seen.has(p.id)) continue;
-        seen.add(p.id);
-        items.push(flickrItem(p, user));
-        if (items.length >= maxItems) break;
-      }
-      const pages = Number(box.pages) || 1;
-      if (page >= pages || list.length < perPage) break;
-    }
+      },
+      consume(j) {
+        const box = j.photos || j.photoset || {};
+        const list = box.photo || [];
+        if (!list.length) return;
+        for (const p of list) {
+          if (!p.id || seen.has(p.id)) continue;
+          seen.add(p.id);
+          items.push(flickrItem(p, user));
+          if (items.length >= maxItems) break;
+        }
+      },
+      onPage: () => onProgress?.(plan()),
+      isLimitReached: () => items.length >= maxItems,
+      nextState(j, page) {
+        const box = j.photos || j.photoset || {};
+        const list = box.photo || [];
+        const pages = Number(box.pages) || 1;
+        return !list.length || page >= pages || list.length < perPage ? null : page + 1;
+      },
+    });
     if (!items.length) throw new Error(mode === 'search' ? `Flickr 没有搜到「${keyword}」的图片` : mode === 'tagsearch' ? `Flickr 没有找到「${tagFilter}」分类的作品` : mode === 'explore' ? 'Flickr 首页推荐流暂时取不到（接口可能限流），稍后再试或直接粘作品页链接' : '这个 Flickr 页面没有公开作品');
-    return {
+    function plan() { return {
       items, skipped: [],
       title: mode === 'search' ? `Flickr · ${keyword}` : mode === 'tagsearch' ? `Flickr · ${tagFilter.replace(/,/g, ' / ')}` : mode === 'explore' ? 'Flickr · 探索推荐' : `Flickr · ${user || nsid}`,
       author: mode === 'search' || mode === 'tagsearch' || mode === 'explore' ? 'Flickr' : (items[0].author || user || 'Flickr'),
-      cover: items[0].url, source: raw, rendition: 'original',
-    };
+      cover: items[0]?.thumb||items[0]?.url||'', source: raw, rendition: 'original',
+    }; }
+    return plan();
   },
 };
 
@@ -1807,33 +2003,40 @@ function is500pxHome(raw) {
 /** 500px 首页流（编辑精选 / 最新上架）：翻 cursor，一页 24 张；未登录只发 600/1024 两档预览。
  *  editorsChoices 的 node 是 {resource: Photo}，freshResources 的 node 直接是 Photo —— 用 unwrap
  *  归一，两个流共用同一套翻页。最新上架流支持原站筛选：filter 来自 URL query（分类/器材/仅推荐）。 */
-async function pxHomeFeed({ signal, maxItems, raw, fresh = false, filter = {} }) {
+async function pxHomeFeed({ signal, maxItems, raw, fresh = false, filter = {}, queryPhoto = pxGqlPhoto, onProgress }) {
   const items = [];
   const seen = new Set();
-  let after = null;
   const query = fresh ? PX_FRESH_QUERY : PX_EDITORS_QUERY;
   const op = fresh ? 'freshResources' : 'editorsChoices';
   const label = fresh ? '最新上架' : '编辑精选';
   const unwrap = node => (fresh ? node : node && node.resource);
   // editorsChoices 只支持 categories；equipments / qualityEnabled 是 freshResources 专属。
   const vars = fresh ? filter : { categories: filter.categories };
-  for (let page = 0; page < MAX_PAGES && items.length < maxItems; page++) {
-    const data = await pxGqlPhoto(query, { first: 24, after, ...vars }, op, signal);
-    const edges = (data && data[op] && data[op].edges) || [];
-    if (!edges.length) break;
-    for (const e of edges) {
-      const p = unwrap(e && e.node);
-      if (!p || !p.id || seen.has(p.id)) continue;
-      seen.add(p.id);
-      items.push(pxItem(p));
-      if (items.length >= maxItems) break;
-    }
-    const cursor = edges[edges.length - 1].cursor;
-    if (!cursor || cursor === after) break;
-    after = cursor;
-  }
+  if (items.length < maxItems) await listPager({
+    initialState: null, maxPages: MAX_PAGES,
+    fetchPage: after => queryPhoto(query, { first: 24, after, ...vars }, op, signal),
+    consume(data) {
+      const edges = (data && data[op] && data[op].edges) || [];
+      if (!edges.length) return;
+      for (const e of edges) {
+        const p = unwrap(e && e.node);
+        if (!p || !p.id || seen.has(p.id)) continue;
+        seen.add(p.id);
+        items.push(pxItem(p));
+        if (items.length >= maxItems) break;
+      }
+    },
+    onPage: () => onProgress?.(plan()),
+    isLimitReached: () => items.length >= maxItems,
+    nextState(data, after) {
+      const edges = data?.[op]?.edges || [];
+      const cursor = edges.at(-1)?.cursor;
+      return cursor && cursor !== after ? cursor : null;
+    },
+  });
   if (!items.length) throw new Error(`500px ${label}暂时没有返回图片（接口可能改版）`);
-  return { items, skipped: [], title: `500px · ${label}`, author: '500px', cover: items[0].url, source: raw, rendition: 'original' };
+  function plan() { return { items, skipped: [], title: `500px · ${label}`, author: '500px', cover: items[0].url, source: raw, rendition: 'original' }; }
+  return plan();
 }
 const pxEditorsChoice = args => pxHomeFeed(args);
 /** 签名地址里带着 /photo/{legacyId}/，作品页地址可以从中还原（GraphQL 的 Photo 上没有 legacyId 字段）。 */
@@ -1885,7 +2088,7 @@ const resolve500px = {
   id: '500px',
   label: '500px 摄影社区',
   client: '500px',
-  async resolve({ url }, { signal, maxItems = Infinity } = {}) {
+  async resolve({ url }, { signal, maxItems = Infinity, queryPhoto = pxGqlPhoto, queryUser = pxGql, onProgress } = {}) {
     const raw = String(url || '').trim();
     if (raw && !/^https?:\/\//i.test(raw)) {
       throw new Error('500px 的关键词搜索接口没有公开（GraphQL 只有 getUser / pageResources），请粘摄影师主页或作品页链接');
@@ -1896,7 +2099,7 @@ const resolve500px = {
       const u = new URL(raw || 'https://500px.com/');
       const fresh = /\/fresh\/?$/i.test(u.pathname);
       const f = pxFreshFilter(raw);
-      return pxHomeFeed({ signal, maxItems, raw: raw || 'https://500px.com/', fresh, filter: f });
+      return pxHomeFeed({ signal, maxItems, raw: raw || 'https://500px.com/', fresh, filter: f, queryPhoto, onProgress });
     }
     const { photoId, username } = parse500pxUrl(raw);
     if (photoId) {
@@ -1904,14 +2107,14 @@ const resolve500px = {
       const operation = numeric ? 'getPhotoByLegacyId' : 'getPhotoById';
       const key = numeric ? 'legacyId' : 'id';
       const query = `query ${operation}($${key}: ${numeric ? 'String!' : 'ID!'}) { ${operation}(${key}: $${key}) { ${PX_PHOTO_FIELDS} } }`;
-      const data = await pxGqlPhoto(query, { [key]: photoId }, operation, signal);
+      const data = await queryPhoto(query, { [key]: photoId }, operation, signal);
       const node = data && data[operation];
       if (!node || !node.id) throw new Error('500px 没有返回这张作品（可能已删除或仅自己可见）');
       const it = pxItem(node);
       return { items: [it], skipped: [], title: it.title, author: it.author || '500px', cover: it.url, source: raw, rendition: 'original' };
     }
 
-    const userData = await pxGql({
+    const userData = await queryUser({
       operationName: 'getUserProfile',
       query: 'query getUserProfile($username: String!) { getUser(username: $username) { id username displayName } }',
       variables: { username },
@@ -1922,32 +2125,41 @@ const resolve500px = {
 
     const items = [];
     const seen = new Set();
-    let cursor = null;
-    for (let page = 0; page < 20 && items.length < maxItems; page++) {
-      const query = `query pageResources($userId: ID!, $first: Int!, $after: String) {
-        pageResources(userId: $userId, first: $first, after: $after, resourceTypes: [PHOTO], sort: CREATED_AT_DESC) {
-          totalCount
-          pageInfo { hasNextPage endCursor }
-          edges { node { ... on Photo { ${PX_PHOTO_FIELDS} } } }
+    if (items.length < maxItems) await listPager({
+      initialState: null, maxPages: 20,
+      fetchPage(cursor) {
+        const query = `query pageResources($userId: ID!, $first: Int!, $after: String) {
+          pageResources(userId: $userId, first: $first, after: $after, resourceTypes: [PHOTO], sort: CREATED_AT_DESC) {
+            totalCount
+            pageInfo { hasNextPage endCursor }
+            edges { node { ... on Photo { ${PX_PHOTO_FIELDS} } } }
+          }
+        }`;
+        return queryPhoto(query, { userId: user.id, first: 50, after: cursor }, 'pageResources', signal);
+      },
+      consume(data) {
+        const pr = data && data.pageResources;
+        const edges = (pr && pr.edges) || [];
+        if (!edges.length) return;
+        for (const e of edges) {
+          const node = e && e.node;
+          if (!node || !node.id || seen.has(node.id)) continue;
+          seen.add(node.id);
+          items.push(pxItem(node, ownerName));
+          if (items.length >= maxItems) break;
         }
-      }`;
-      const data = await pxGqlPhoto(query, { userId: user.id, first: 50, after: cursor }, 'pageResources', signal);
-      const pr = data && data.pageResources;
-      const edges = (pr && pr.edges) || [];
-      if (!edges.length) break;
-      for (const e of edges) {
-        const node = e && e.node;
-        if (!node || !node.id || seen.has(node.id)) continue;
-        seen.add(node.id);
-        items.push(pxItem(node, ownerName));
-        if (items.length >= maxItems) break;
-      }
-      const info = pr.pageInfo || {};
-      if (!info.hasNextPage || !info.endCursor || info.endCursor === cursor) break;
-      cursor = info.endCursor;
-    }
+      },
+      onPage: () => onProgress?.(plan()),
+      isLimitReached: () => items.length >= maxItems,
+      nextState(data, cursor) {
+        const pr = data?.pageResources;
+        const info = pr?.pageInfo || {};
+        return pr?.edges?.length && info.hasNextPage && info.endCursor && info.endCursor !== cursor ? info.endCursor : null;
+      },
+    });
     if (!items.length) throw new Error('这个 500px 摄影师主页没有公开作品');
-    return { items, skipped: [], title: `500px · ${ownerName}`, author: ownerName, authorUrl: `https://500px.com/${username}`, cover: items[0].url, source: raw, rendition: 'original' };
+    function plan() { return { items, skipped: [], title: `500px · ${ownerName}`, author: ownerName, authorUrl: `https://500px.com/${username}`, cover: items[0].url, source: raw, rendition: 'original' }; }
+    return plan();
   },
 };
 
@@ -2028,6 +2240,7 @@ function xhsListResult(cards, { title, author = '小红书', authorUrl = '', sou
     authorUrl: note.authorId ? `${XHS_ORIGIN}/user/profile/${note.authorId}` : authorUrl,
     // 带 xsecToken 才能从封面点进详情，否则打开是「内容不存在」（搜索/推荐通道都给得出）。
     pid: note.noteId,
+    noteType:note.type||'normal',
     pageUrl: `${XHS_ORIGIN}/explore/${note.noteId}${note.xsecToken ? `?xsec_token=${encodeURIComponent(note.xsecToken)}&xsec_source=${xsecSource}` : ''}`,
     width: 0,
     height: 0,
@@ -2048,7 +2261,7 @@ function xhsListResult(cards, { title, author = '小红书', authorUrl = '', sou
 function xhsNoteResult(note, pageUrl, limit) {
   const total = note.images.length;
   const authorUrl = note.authorId ? `${XHS_ORIGIN}/user/profile/${note.authorId}` : '';
-  const items = note.images.slice(0, limit).map((image, index) => ({
+  const items = note.images.slice(0, Math.max(0,limit-(note.videoUrl?1:0))).map((image, index) => ({
     url: image.url,
     thumb: image.url,
     // 多图同属一篇笔记：pageUrl 相同，只有 key 能区分，交给 collect-search 做身份键。
@@ -2063,9 +2276,9 @@ function xhsNoteResult(note, pageUrl, limit) {
     description: note.desc,
   }));
   if (note.videoUrl && items.length < limit) {
-    items.push({
+    items.unshift({
       url: note.videoUrl,
-      thumb: note.images[0].url,
+      thumb: note.images[0]?.url||'',
       key: `${note.noteId}:video`,
       title: `${note.title || '小红书笔记'} (视频)`,
       author: note.author,
@@ -2075,7 +2288,13 @@ function xhsNoteResult(note, pageUrl, limit) {
       height: 0,
       tags: note.tags,
       mediaType: 'video',
+      type: 'video',
+      alternates: note.videoAlternates||[],
     });
+  }
+  for(const [index,image] of note.images.entries())if(image.liveVideoUrl&&items.length<limit){
+    const pairId=`${note.noteId}:live:${index}`,picture=items[index+(note.videoUrl?1:0)];if(picture)picture.pairId=pairId;
+    items.push({url:image.liveVideoUrl,alternates:image.liveVideoAlternates||[],thumb:image.url,type:'video',pairId,title:note.title||'实况图',author:note.author,authorUrl,pageUrl,tags:note.tags});
   }
   return {
     items,
@@ -2083,7 +2302,7 @@ function xhsNoteResult(note, pageUrl, limit) {
     title: note.title || '小红书笔记',
     author: note.author || '小红书',
     authorUrl,
-    cover: items[0].url,
+    cover: items[0]?.thumb||items[0]?.url||'',
     source: pageUrl,
     rendition: 'original',
   };
@@ -2096,14 +2315,14 @@ async function xhsNote(info, { signal, limit }) {
   // 把总时间拖过图站窗口的等待上限，点开预览就只会拿到空列表。
   const viaBrowser = await xhsBrowserCapture({ url: target, kind: 'note', noteId: info.noteId, apiMatch: /\/api\/sns\/web\// })
     .catch(() => null);
-  if (viaBrowser?.note?.images?.length) return xhsNoteResult(viaBrowser.note, target, limit);
+  if (viaBrowser?.note && (viaBrowser.note.images?.length || viaBrowser.note.videoUrl)) return xhsNoteResult(viaBrowser.note, target, limit);
   if (viaBrowser?.notes?.length) {
     // 浏览器只刮到卡片（详情页没渲染出笔记，例如需要人机验证）：至少把封面给出来，别让结果区空着。
-    return xhsListResult(viaBrowser.notes.slice(0, limit), { title: viaBrowser.notes[0].title || '小红书笔记', source: target, xsecSource: 'pc_note' });
+    return {...xhsListResult(viaBrowser.notes.slice(0, limit), { title: viaBrowser.notes[0].title || '小红书笔记', source: target, xsecSource: 'pc_note' }),partial:true};
   }
   const { state, block } = await xhsPage(target, { signal });
   const note = state ? parseXhsNote(state, info.noteId) : null;
-  if (note && note.images.length) return xhsNoteResult(note, target, limit);
+  if (note && (note.images.length || note.videoUrl)) return xhsNoteResult(note, target, limit);
   const hard = xhsBlockError(block, target);
   if (hard) throw hard;
   throw new Error(`这篇小红书笔记没解析到图片（可能是纯文字笔记、已删除，或链接缺 xsec_token）。如果它在浏览器里能正常打开，点小红书的「登录」再过一次验证：${target}`);
@@ -2111,6 +2330,15 @@ async function xhsNote(info, { signal, limit }) {
 
 /** 博主主页首屏：每条笔记取封面（想看某篇的全图，粘那篇笔记的链接）。 */
 async function xhsProfile(info, { signal, limit }) {
+  const content=new URLSearchParams(info.query||'').get('av_content');
+  if(content==='images'||content==='all'){
+    const query=new URLSearchParams(info.query);query.delete('av_content');
+    const target=`${XHS_ORIGIN}/user/profile/${info.userId}?${query}`;
+    const result=await xhsBrowserCapture({url:target,kind:'profile',cardLimit:Math.min(limit,200),apiMatch:/user_posted|user_post/});
+    const notes=content==='images'?result.notes.filter(note=>note.type==='normal'):result.notes;
+    if(!notes.length)throw Error('该关注用户当前加载的作品中没有读到图文笔记');
+    return xhsListResult(notes.slice(0,limit),{title:`小红书 · ${result.profile?.nickname||notes[0].author||'关注用户'} · ${content==='all'?'作品':'图文'}`,source:target,author:notes[0].author,xsecSource:'pc_user'});
+  }
   const target = `${XHS_ORIGIN}/user/profile/${info.userId}${info.query || ''}`;
   const { state, block } = await xhsPage(target, { signal });
   const profile = state ? parseXhsUser(state) : null;
@@ -2175,8 +2403,14 @@ async function xhsAlbums() {
 
 async function xhsCollect({ limit } = {}) {
   const target = `${XHS_ORIGIN}/user/collect`;
-  const { boards } = await xhsAlbums();
-  return {
+  let boards;
+  try{({boards}=await xhsAlbums());}
+  catch(error){
+    // 专辑接口变化不应挡住网页仍能读取的收藏笔记，避免再调用同一失败接口。
+    if(/登录已失效/.test(error.message||''))throw error;
+    return xhsCollectNotes({limit,includeAlbums:false});
+  }
+  return withCollectionCaps({
     mode: 'boards',
     items: [],
     boards: [
@@ -2188,15 +2422,16 @@ async function xhsCollect({ limit } = {}) {
     authorUrl: target,
     source: target,
     cover: boards[0]?.thumb || '',
-  };
+  }, 'xiaohongshu');
 }
 
-async function xhsCollectNotes({ limit } = {}) {
+async function xhsCollectNotes({ limit, includeAlbums = true } = {}) {
   const target = `${XHS_ORIGIN}/user/collect?tab=note`;
   const { notes, payload } = await xhsBrowserCapture({ url: target, kind: 'collect', apiMatch: /\/api\/sns\/web\/.*(collect|faved|user_posted|user\/notes)/, cardLimit: limit });
-  if (payload?.login || !notes.length) throw new Error('没有读到收藏笔记。先点「登录」，确认这个账号里有收藏。');
-  const albums = await xhsAlbums().catch(() => ({ boards: [] }));
-  return { ...xhsListResult(notes.slice(0, limit), { title: '小红书 · 全部收藏笔记', author: '我的收藏', authorUrl: target, source: target, xsecSource: 'pc_user' }), albums: albums.boards };
+  if (payload?.login) throw new Error('小红书登录已失效，请重新扫码登录');
+  if(!notes.length)throw Error('已进入收藏页，但未读取到收藏笔记，请确认网页收藏标签有内容');
+  const albums = includeAlbums ? await xhsAlbums().catch(() => ({ boards: [] })) : {boards:[]};
+  return withCollectionCaps({ ...xhsListResult(notes.slice(0, limit), { title: '小红书 · 全部收藏笔记', author: '我的收藏', authorUrl: target, source: target, xsecSource: 'pc_user' }), albums: albums.boards }, 'xiaohongshu');
 }
 
 async function xhsBoard(info, { limit } = {}) {
@@ -2206,10 +2441,10 @@ async function xhsBoard(info, { limit } = {}) {
   const albums = await xhsAlbums().catch(() => ({ boards: [] }));
   const current = albums.boards.find((board) => board.id === info.boardId);
   if (!cards.length) throw new Error('这个专辑里没有可显示的笔记。');
-  return { ...xhsListResult(cards.slice(0, limit), { title: `小红书专辑 · ${current?.title || '专辑'}`, author: current?.title || '专辑', authorUrl: `${XHS_ORIGIN}/board/${info.boardId}`, source: `${XHS_ORIGIN}/board/${info.boardId}`, xsecSource: 'pc_user' }), albums: albums.boards, boardId: info.boardId };
+  return withCollectionCaps({ ...xhsListResult(cards.slice(0, limit), { title: `小红书专辑 · ${current?.title || '专辑'}`, author: current?.title || '专辑', authorUrl: `${XHS_ORIGIN}/board/${info.boardId}`, source: `${XHS_ORIGIN}/board/${info.boardId}`, xsecSource: 'pc_user' }), albums: albums.boards, boardId: info.boardId }, 'xiaohongshu');
 }
 
-export async function xhsAlbumCommand({ action, name, noteId, noteIds, boardId } = {}) {
+export async function xhsAlbumCommand({ action, name, noteId, noteIds, boardId, signature } = {}) {
   if (action === 'create') {
     const title = String(name || '').trim().slice(0, 20);
     if (!title) throw new Error('先写专辑名称');
@@ -2224,22 +2459,66 @@ export async function xhsAlbumCommand({ action, name, noteId, noteIds, boardId }
     if (!result.ok) throw new Error(result.failed?.[0] || '没有放进专辑');
     return result;
   }
+  if (action === 'rename') {
+    const title = String(name || '').trim().slice(0, 20);
+    if (!title || !boardId) throw new Error('缺少专辑或新名称');
+    return xhsCollectionWrite({ action, boardId, name: title, signature });
+  }
+  if (action === 'remove') {
+    if (!boardId) throw new Error('缺少专辑');
+    return xhsCollectionWrite({ action, boardId, signature });
+  }
+  if (action === 'removeItem') {
+    const ids = [...new Set([].concat(noteIds || [], noteId || []).map(item => String(item || '')).filter(Boolean))];
+    if (!ids.length) throw new Error('缺少笔记');
+    const results = [];
+    for (const id of ids) results.push(await xhsCollectionWrite({ action, noteId: id, boardId, signature }));
+    return { ok: results.length };
+  }
   throw new Error('不支持的专辑操作');
 }
 
-async function xhsHome({ limit } = {}) {
+// 注册到通用收藏夹契约：小红书是第一个实现，也是新平台接入的参考范本。
+// 静态 ops 只列已验证的 create/add；rename/remove/removeItem 由 probeOps 运行时探测，
+// 探测到真实接口才下发能力位，绝不因为写死而给用户一个点了没反应的按钮。
+registerCollectionPlatform({
+  id: 'xiaohongshu',
+  label: '小红书',
+  homeUrl: 'https://www.xiaohongshu.com/explore',
+  collectUrl: 'https://www.xiaohongshu.com/user/collect',
+  collectDetect: /\/user\/collect/,
+  ops: ['create', 'add'],
+  defaultItemOps: ['add', 'removeItem'],
+  async probeOps() {
+    const live = await xhsProbeWriteOps();
+    const opSet = new Set(['create', 'add']); // 已验证的固定能力
+    const signatures = {};
+    for (const item of live || []) {
+      opSet.add(item.action);
+      signatures[item.action] = item.signature;
+    }
+    return { ops: [...opSet], signatures };
+  },
+  mutate: (input) => xhsAlbumCommand(input),
+});
+
+/** 统一收藏夹写操作入口（泛化 /api/xhs/album，供通用端点转发）。 */
+export const pictureCollectionCommand = collectionCommand;
+
+async function xhsHome({ limit,refresh=false } = {}) {
   const target = `${XHS_ORIGIN}/explore`;
-  const { notes } = await xhsBrowserCapture({ url: target, kind: 'home', apiMatch: /\/api\/sns\/web\/.*(homefeed|recommend|feed)/, cardLimit: 60 });
+  const count=Math.min(Math.max(limit||24,1),5000);
+  const { notes,hasMore,warning } = await xhsBrowserCapture({ url: target, kind: 'home', apiMatch: /\/api\/sns\/web\/.*(homefeed|recommend|feed)/, cardLimit:count,refresh });
   if (!notes.length) {
     throw new Error(`小红书的首页推荐没拿到内容（${target}）：可能是需要登录，或页面结构有变化。点「登录」过一次验证后再试`);
   }
-  return xhsListResult(notes.slice(0, limit), {
+  return {...xhsListResult(notes.slice(0, count), {
     title: '小红书 · 首页推荐',
     author: '小红书',
     authorUrl: target,
     source: target,
     xsecSource: 'pc_home',
-  });
+  }),truncated:notes.length>count||hasMore!==false,warning,personalPaging:1};
 }
 
 /** 短链 xhslink.com/xxx → 真实页面。跟随后的页面本身就是笔记页时不再请求第二次。 */
@@ -2248,7 +2527,7 @@ async function xhsHome({ limit } = {}) {
 async function xhsShortlink(shortUrl, { signal, limit }) {
   const { html, state } = await xhsPage(shortUrl, { signal });
   const direct = state ? parseXhsNote(state) : null;
-  if (direct && direct.images.length) return xhsNoteResult(direct, shortUrl, limit);
+  if (direct && (direct.images.length || direct.videoUrl)) return xhsNoteResult(direct, shortUrl, limit);
 
   // 没跟到笔记页：从 canonical / og:url 反查真实地址（短链页常是跳转壳）。
   const canonical = html.match(/<link[^>]+rel=["']canonical["'][^>]+href=["']([^"']+)["']/i)
@@ -2302,7 +2581,15 @@ const resolveXiaohongshu = {
   client: 'xiaohongshu',
   // 能搜，但搜索必须登录态；未登录时 resolver 会明确要求点「登录」。
   search: true,
-  async resolve({ url }, { signal, maxItems = Infinity } = {}) {
+  async resolve(input, options) {
+    // 所有小红书结果统一挂收藏夹能力位：推荐页/搜索/主页/单篇笔记都要能切到「我的收藏」。
+    // 之前只挂在三个收藏 resolver 上，导致默认落地页（推荐流）没有能力位、切换按键消失。
+    // 注意用 this.resolveXhsAny：对象方法名不会提升为独立标识符，直接写 resolveXhsAny 会 ReferenceError。
+    const result=await this.resolveXhsAny(input, options);
+    // 关注用户借用画板卡片显示，但不是可重命名、删除的收藏专辑。
+    return parseXhsUrl(input.url).type==='following'?result:withCollectionCaps(result, 'xiaohongshu');
+  },
+  async resolveXhsAny({ url }, { signal, maxItems = Infinity, refresh=false } = {}) {
     const raw = String(url || '').trim();
     const limit = Math.min(200, maxItems);
     // 纯关键词（不是链接、也不是裸 noteId）→ 站内搜索。
@@ -2316,7 +2603,23 @@ const resolveXiaohongshu = {
     if (info.type === 'shortlink') return xhsShortlink(raw, { signal, limit });
     if (info.type === 'note') return xhsNote(info, { signal, limit });
     if (info.type === 'profile') return xhsProfile(info, { signal, limit });
-    if (info.type === 'home') return xhsHome({ limit });
+    if (info.type === 'home') return xhsHome({ limit,refresh });
+    if(info.type==='following'){
+      const count=Math.min(5000,maxItems),result=await xhsFollowings({limit:count+1,refresh});
+      return {mode:'boards',items:[],boards:result.users.slice(0,count).map(user=>({id:user.id,title:user.name,thumb:user.avatar,url:`${XHS_ORIGIN}/user/profile/${user.id}?av_content=all${user.token?'&xsec_token='+encodeURIComponent(user.token)+'&xsec_source=pc_followed':''}`})),
+        title:'小红书 · 关注用户（当前加载）',source:raw,total:0,truncated:result.users.length>count||result.hasMore,
+        warning:result.warning,personalPaging:1};
+    }
+    if (info.type === 'likes' || info.type === 'history') {
+      const label=info.type==='history'?'浏览':'赞过';
+      const target=`${XHS_ORIGIN}/user/${info.type}`;
+      const count=Math.min(5000,maxItems);
+      const result=await xhsBrowserCapture({url:target,kind:info.type,cardLimit:count+1,refresh,apiMatch:info.type==='history'?/\/api\/sns\/web\/.*(?:history|view_history|browse|footprint|recent)/:/\/api\/sns\/web\/.*(?:like|liked)/});
+      if(result.payload?.login)throw Error('请先登录小红书，再读取我的'+label);
+      if(!result.notes.length)throw Error(info.type==='history'?'没有读到浏览记录':'没有读到赞过的笔记，请确认网页个人主页的「点赞」里有内容');
+      return {...xhsListResult(result.notes.slice(0,count),{title:'小红书 · 我的'+label,author:'我的'+label,source:target,xsecSource:'pc_user'}),
+        truncated:result.notes.length>count||result.hasMore===true,warning:result.warning,personalPaging:1,order:'liked-desc'};
+    }
     if (info.type === 'collect') return info.notes ? xhsCollectNotes({ limit }) : xhsCollect({ limit });
     if (info.type === 'board') return xhsBoard(info, { limit });
     throw new Error('没认出这是小红书的哪种链接。支持：笔记（/explore/…）、短链（xhslink.com/…）、博主主页（/user/profile/…）');
@@ -2327,6 +2630,13 @@ const resolveXiaohongshu = {
 // 用户点「登录」就把这个地址开在一个可见窗口里，登录/过验证完 cookie 自动入库。
 // 不需要登录的站不列在这里，前端就不显示登录按钮。
 export const PICTURE_LOGIN_URLS = Object.freeze({
+  douyin:'https://www.douyin.com/',
+  kuaishou:'https://www.kuaishou.com/',
+  bilibili:'https://www.bilibili.com/',
+  weibo:'https://weibo.com/',
+  netease:'https://music.163.com/',
+  kuwo:'https://www.kuwo.cn/',
+  qishui:'https://music.douyin.com/',
   // 3D 平台：菜单里每个平台右侧的「登录」图标就查这张表（GET /api/browser/logins）。
   // 没登记的站 = 免登录站，菜单里不出登录图标，别让用户点了才发现没入口。
   sketchfab: 'https://sketchfab.com/login',
@@ -2348,6 +2658,8 @@ export const PICTURE_LOGIN_URLS = Object.freeze({
 });
 
 export const PICTURE_SITES = Object.freeze({
+  ...MUSIC_RESOLVERS,
+  ...SHORT_VIDEO_RESOLVERS,
   pixiv: {
     id: 'pixiv',
     label: 'Pixiv 插画',
@@ -2408,7 +2720,7 @@ export const PICTURE_SITES = Object.freeze({
 });
 
 /** 视频站 id 清单：平台池、设置页分组、前端模式推导都读这一份，别各处再抄一遍。 */
-export const VIDEO_SITE_IDS = Object.freeze(['pexels-video', 'coverr', 'civitai-video', 'pixabay-video']);
+export const VIDEO_SITE_IDS = Object.freeze(['pexels-video', 'coverr', 'civitai-video', 'pixabay-video',...Object.keys(SHORT_VIDEO_RESOLVERS)]);
 
 /** 图站 CDN 主机 → 预览代理需要的 Referer（防 hotlink 403）。 */
 const PICTURE_CDN_HOSTS = [
@@ -2434,12 +2746,48 @@ const PICTURE_CDN_HOSTS = [
   // 小红书的图走 xhscdn（原图 sns-img-*、视频 sns-video-*），CDN 本身不校验 referer，
   // 但预览代理要认得出这是「图站 CDN」才放行。
   { re: /(?:^|\.)xhscdn\.com$/i, referer: 'https://www.xiaohongshu.com/' },
+  { re: /(?:^|\.)(?:douyinpic|douyinvod|douyin|douyincdn|byteimg|ibytedtos|bytedance|snssdk|amemv)\.com$/i, referer: 'https://www.douyin.com/' },
+  { re: /(?:^|\.)(?:kwimgs|yximgs|ksapisrv|kwaicdn|kwaivod)\.com$/i, referer: 'https://www.kuaishou.com/' },
+  { re: /(?:^|\.)(?:bilivideo|bilibili|hdslb)\.(?:com|cn)$/i, referer: 'https://www.bilibili.com/' },
+  { re: /(?:^|\.)(?:weibocdn|sinaimg|weibo)\.(?:com|cn)$/i, referer: 'https://weibo.com/' },
+  { re: /(?:^|\.)(?:music\.126\.net|music\.163\.com)$/i, referer:'https://music.163.com/' },
+  { re: /(?:^|\.)(?:kuwo\.cn|sycdn\.kuwo\.cn)$/i, referer:'https://www.kuwo.cn/' },
+  { re: /(?:^|\.)(?:douyinstatic|bytecdn|byteoversea|douyinaudio)\.com$/i, referer:'https://music.douyin.com/' },
 ];
 export const isPictureCdnHost = (host) => PICTURE_CDN_HOSTS.some((h) => h.re.test(host));
 export const pictureRefererForHost = (host) => {
   const h = PICTURE_CDN_HOSTS.find((x) => x.re.test(host));
   return h ? h.referer : null;
 };
+
+/** 卡片缩略图「CDN 直出」规则表：给卡片用缩略图时，让 CDN 直接返回小图，
+ *  省掉 /api/image 把整张原图下载回来再本地 sharp 缩到 384 的网络开销。
+ *
+ *  背景：多数图站在 resolver 层就给了缩略图变体（花瓣 _fw236 / flickr url_z / pexels medium…），
+ *  原生就小，不需要这里再处理。只有「thumb === 原图地址」的平台才需要加规则 —— 目前是小红书。
+ *
+ *  新平台接入：若该平台卡片 thumb 是裸原图、且它的 CDN 支持 URL 参数缩放，在这里加一条：
+ *    { re: /cdn 主机正则/, to: (u) => u.href + '?缩放参数' }
+ *  to 返回空串表示这条规则不适用（如地址已带签名参数，改参数会破坏签名）。
+ *  规则只作用于卡片缩略图请求；缓存 key 不变、原图兜底不变，改这里不影响下载/预览原图。 */
+const CARD_THUMB_RULES = [
+  {
+    re: /(?:^|\.)xhscdn\.com$/i,
+    // 腾讯云万象 imageView2：w/384 直出缩略图（实测 171KB→33KB）。
+    // 带 query 的地址（sign/t 签名、已带 imageView2）绝不追加，否则签名失效 403。
+    to: (u) => (u.search ? '' : `${u.href}?imageView2/2/w/384/format/webp/q/80`),
+  },
+];
+/** 卡片缩略图回源地址：命中 CDN 直出规则返回小图地址，否则返回空串（调用方用原图）。 */
+export function cardThumbUrl(raw) {
+  let u;
+  try { u = new URL(String(raw || '')); } catch { return ''; }
+  if (!/^https?:$/i.test(u.protocol)) return '';
+  const rule = CARD_THUMB_RULES.find((item) => item.re.test(u.hostname));
+  return rule ? rule.to(u) || '' : '';
+}
+
+export const PICTURE_PROGRESS_SITES = Object.freeze(['wallhaven', 'civitai', 'huaban', 'pexels', 'flickr', '500px', 'pinterest']);
 
 /** 统一入口：图站名 -> 抓取结果（与 collectImageAssets 同构）。 */
 export async function collectPictureAssets(site, { url } = {}, options = {}) {
@@ -2449,19 +2797,29 @@ export async function collectPictureAssets(site, { url } = {}, options = {}) {
   // 下载走 runImageJob 不传这个值，仍然抓整站全量。
   const raw = Number(options.maxItems);
   const maxItems = Number.isFinite(raw) && raw > 0 ? raw : Infinity;
-  const result = await source.resolve({ url }, { ...options, maxItems });
+  let emitted = 0;
+  const onProgress = options.onProgress ? plan => {
+    const items = (plan.items || []).slice(emitted);
+    emitted = (plan.items || []).length;
+    options.onProgress({
+      ...plan, items, source: url, platform: source.id, client: source.client, label: source.label,
+      title: plan.title || source.label, author: plan.author || plan.items?.[0]?.author || '',
+      cover: plan.cover || plan.items?.[0]?.thumb || plan.items?.[0]?.url || '',
+    });
+  } : undefined;
+  const result = await source.resolve({ url }, { ...options, maxItems, onProgress });
   const all = Array.isArray(result.items) ? result.items : [];
   // 两级解析（mode:'boards'）：这一层给的是「画板卡片」而不是图片，条目数与截断都按画板算。
   // 前端据此渲染画板墙，点某块画板再发一次解析请求取它的图片，下载仍只发生在图片层。
   if (Array.isArray(result.boards)) {
-    return { ...result, items: all, boards: result.boards, total: result.boards.length, truncated: false, platform: source.id, client: source.client, label: source.label };
+    return { ...result, items: all, boards: result.boards, total:result.total??result.boards.length, truncated:result.truncated===true, platform: source.id, client: source.client, label: source.label };
   }
   const items = maxItems === Infinity ? all : all.slice(0, maxItems);
   return {
     ...result,
     items,
     total: all.length,
-    truncated: maxItems !== Infinity && all.length >= maxItems,
+    truncated: typeof result.truncated==='boolean'?result.truncated:maxItems !== Infinity && all.length >= maxItems,
     platform: source.id,
     // resolver 显式改了 client 时以它为准（如 yandere 回退到 Konachan 图床，Referer 要跟着换）；
     // 其余站点 result 里没有 client，行为不变。

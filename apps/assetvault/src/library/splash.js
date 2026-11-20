@@ -23,6 +23,10 @@
   const interfaceStage = !!startupScreen;
   const MIN_MS = interfaceStage || desktop ? 0 : 650;
   const RAMP_MS = 1400;   // 第一段自然爬升的时间常数
+  // 服务就绪时的落点：waiting.html 冲到 88% 再跳页，主界面的 startup-screen 从 88% 接着走到 100%。
+  // 两段共用同一个数，跨页跳转时才不会出现「进度倒退」。
+  const RESUME = 88;
+  const RUSH_MS = 380;    // 就绪后从当前值冲到 RESUME 的时长
   const BURST_MS = 420;   // 最后冲满的时长
   const HOLD_MS = 180;    // 等完成弹跳与粒子动画展示后进入界面。
 
@@ -44,8 +48,9 @@
 
   const t0 = Date.now();
   let shown = 0, line = -1, phase = 'loading', burstAt = 0, burstFrom = 0, warm = false, last = t0;
+  let rushAt = 0, rushFrom = 0;
   let home = '/';
-  let shownPct=-1,lastSpark=0;
+  let shownPct=-1,lastSpark=0,painted=0;
 
   function sparksAt(container,x,y,count){
     if(reduced||!container)return;
@@ -65,6 +70,9 @@
   }
 
   function paint(v) {
+    // 单调保护：任何分支算出的值都不许比上一步小，进度条在视觉上只会往前走。
+    if (v < painted) v = painted;
+    painted = v;
     fill.style.width = v + '%';
     runner.style.left = v + '%';
     const rounded=Math.round(v),p=Math.min(1,v/100);
@@ -77,11 +85,11 @@
     for (let i = 0; i < LINES.length; i++) if (v >= LINES[i][0]) next = i;
     if (next >= 0 && next !== line) {
       line = next;
-      const text = interfaceStage ? '正在准备分类、配置与界面布局…' : LINES[next][1];
+      const text = interfaceStage ? '正在加载界面脚本…' : LINES[next][1];
       msg.classList.add('swap');
       setTimeout(() => {
         if (phase !== 'loading') return;
-        msg.textContent = desktop && !warm ? '正在启动本地模型库服务…' : text;
+        msg.textContent = desktop && !warm ? '正在启动本地模型库服务…' : interfaceStage ? document.documentElement.dataset.startupStage || text : text;
         msg.classList.remove('swap');
         msg.classList.remove('unswap');void msg.offsetWidth;msg.classList.add('unswap');
       }, 220);
@@ -100,7 +108,11 @@
     Promise.race([
       Promise.all([health, tasks]),
       new Promise(resolve => setTimeout(resolve, 4000)),
-    ]).then(() => { phase='done';goHome(); });
+    ]).then(() => {
+      // 同样先冲线再进界面，保持两段进度首尾相接。
+      if (phase === 'loading') { phase = 'rush'; rushAt = Date.now(); rushFrom = shown; }
+      else { phase='done';goHome(); }
+    });
   }
 
   async function waitForBackend() {
@@ -115,9 +127,16 @@
           throw new Error('本地服务地址无效，请重新启动 Arvimo。');
         }
         home = target.href;
-        msg.textContent = '本地服务已就绪，正在准备界面…';
-        tip.textContent = '马上就好…';
-        phase='done';goHome();
+        // 不直接跳：先把它冲到 RESUME，主界面的启动屏再从 RESUME 接着走到 100%。
+        // 只认第一次就绪（rush 期间 200ms 轮询还会再回来，重复起冲会把冲线无限延长）。
+        if (phase === 'loading') {
+          msg.textContent = '本地服务已就绪，正在准备界面…';
+          phase = 'rush';
+          rushAt = Date.now();
+          rushFrom = shown;
+        } else if (phase === 'done') {
+          goHome();
+        }
         return;
       }
       setTimeout(waitForBackend, 200);
@@ -135,10 +154,19 @@
     const dt = Math.max(0, now - last);
     last = now;
     if (phase === 'loading') {
-      const goal = interfaceStage ? 70 + 22 * (1 - Math.exp(-(now - t0) / RAMP_MS)) : Math.min(68, 68 * (1 - Math.exp(-(now - t0) / RAMP_MS)));
+      // 停在 RESUME 之前一点：剩下的那截留给「就绪 → 跳页」的冲线，跳页后由主界面接着走完。
+      const goal = interfaceStage
+        ? RESUME + 8 * (1 - Math.exp(-(now - t0) / RAMP_MS))
+        : (RESUME - 8) * (1 - Math.exp(-(now - t0) / RAMP_MS));
       // 按时间插值而不是按帧插值：标签页被切到后台帧率掉到 1fps 时进度也不会落后。
       shown += (goal - shown) * (1 - Math.exp(-dt / 130));
       if (now - t0 >= MIN_MS && warm) { phase = 'burst'; burstAt = now; burstFrom = shown; }
+    } else if (phase === 'rush') {
+      // 服务真的就绪了才走到这里：把「等待」变成可见的一小段冲线，再跳页，
+      // 免得像以前那样停在 30%~60% 就跳走 —— 那才是「进度不像真的」的根源。
+      const k = Math.min(1, (now - rushAt) / RUSH_MS);
+      shown = rushFrom + (RESUME - rushFrom) * (1 - Math.pow(1 - k, 3));
+      if (k >= 1) { paint(RESUME); phase = 'done'; goHome(); return; }
     } else {
       const k = Math.min(1, (now - burstAt) / BURST_MS);
       shown = burstFrom + (100 - burstFrom) * (1 - Math.pow(1 - k, 3));
@@ -186,8 +214,11 @@
   }
 
   if (interfaceStage) {
-    shown=70;paint(shown);
-    msg.textContent='正在准备分类、配置与界面布局…';
+    // 从 waiting.html 停下的位置接着走（同一个 RESUME），这样跳页后进度条只会往前，不会回退。
+    shown=RESUME;paint(shown);
+    const showStage=()=>{if(phase==='loading'&&!warm){msg.classList.remove('swap');msg.textContent=document.documentElement.dataset.startupStage||'正在加载界面脚本…';}};
+    showStage();
+    window.addEventListener('assetvault:startup-stage',showStage);
     tip.textContent='';
     warm=!!document.documentElement.dataset.uiReady;
     window.addEventListener('assetvault:ui-ready',()=>{warm=true;},{once:true});
@@ -195,11 +226,12 @@
       phase='done';msg.classList.remove('swap');msg.textContent='界面初始化失败';tip.textContent=`${event.detail}；请刷新页面重试`;
     },{once:true});
     setTimeout(()=>{
-      if(!warm){msg.textContent='界面准备时间较长';tip.textContent='请检查本地服务，或刷新页面重试';}
+      if(!warm&&phase==='loading'){showStage();tip.textContent='此步骤耗时较长，尚未完成；启动日志已记录当前阶段';}
     },20000);
   } else if (desktop) {
+    // 进度条下方那行已经写明「正在启动本地模型库服务…」，这里不再补一句同义的等待提示：
+    // 重复两行既占地方又让人以为卡住了。tip 只留给真正的错误信息（固定占位，不撑布局）。
     msg.textContent = '正在启动本地模型库服务…';
-    tip.textContent = '正在唤醒本地服务，模型库准备好后会自动打开…';
     waitForBackend();
   } else warmup();
   requestAnimationFrame(frame);

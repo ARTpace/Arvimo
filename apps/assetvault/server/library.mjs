@@ -6,6 +6,7 @@ import {createResourceUsage} from './resource-usage.mjs';
 import {FORMATS} from '../src/library/format-registry.js';
 import {createPlatformSettings,platformForPath} from './platform-settings.mjs';
 import {createAuth} from './auth.mjs';
+import {isExportWorkerRequest} from './export-worker.mjs';
 import http from 'node:http';
 import {createHash} from 'node:crypto';
 import {chineseError} from '../src/library/error-message.js';
@@ -18,6 +19,7 @@ import {createCollectRules} from './collect-rules.mjs';
 import {createCollectPending} from './collect-pending.mjs';
 import {createCollectGuard} from './collect-guard.mjs';
 import {createCollectRunner} from './collect-runner.mjs';
+import {COLLECT_PLATFORMS} from './collect-search.mjs';
 import {createCollectScheduler} from './collect-scheduler.mjs';
 import {createCollectApi} from './collect-api.mjs';
 import {createCollectSearch} from './collect-search.mjs';
@@ -44,7 +46,7 @@ import {listArchiveEntries,extractArchiveEntry} from './archive.mjs';
 import {scanLibraryPackages,catalogUidsForRemovedPaths} from './local-assets.mjs';
 import {writePictureBoardCard,isBoardUid} from './picture-board.mjs';
 import {assetFolder} from './asset-folders.mjs';
-import {pictureWindow} from './picture-index.mjs';
+import {pictureWindow,forgetPictureIndex} from './picture-index.mjs';
 import {cachedScan, invalidateScanCache} from './scan-cache.mjs';
 import {registerPackage,patchPackageMeta} from './asset-meta.mjs';
 import {findFfmpeg,probeMedia,transcodePlan,streamMp4} from './video-transcode.mjs';
@@ -64,29 +66,32 @@ import { execFile, spawn } from 'node:child_process';
 import { scanPage, searchPage } from './catalog.mjs';
 import { resolveArtstationModel, mviewerInfo } from './artstation.mjs';
 import { artstationSearch, artstationFilterOptions } from './artstation-search.mjs';
-import { artstationArtist, artstationArtistProfile } from './artstation-artist.mjs';
+import { artstationArtist, artstationArtistProfile, artstationAccount, artstationFollowing } from './artstation-artist.mjs';
 import {polyhavenSearch,polyhavenCategories} from './polyhaven.mjs';
 import {simreadySearch,simreadyPreview,isSimreadyFileUrl} from './simready.mjs';
 import {polypizzaSearch} from './polypizza.mjs';
 import {kenneySearch,kenneyCategories} from './kenney.mjs';
 import {freestylizedSearch,freestylizedCategories,freestylizedType} from './freestylized.mjs';
 import {polyforkSearch,polyforkCategories,polyforkParams,polyforkVariant,polyforkGenerator,patchGeneratorSource} from './polyfork.mjs';
+import {civitaiSearch,civitaiResolve} from './civitai.mjs';
 import {createPolyforkZh} from './polyfork-zh.mjs';
 import {freestylizedPreview,freestylizedPreviewFile} from './freestylized-preview.mjs';
 import {createSubstanceBridge} from './substance-engine.mjs';
 import {ambientcgSearch,ambientcgViewer,ambientcgCategories} from './ambientcg.mjs';
-import {fabSearch as fabSearchFn,fabDetail,fabExchangeCode,fabRefresh,fabLoadSession,fabSaveSession} from './fab.mjs';
+import {fabSearch as fabSearchFn,fabDetail,fabExchangeCode,fabRefresh,fabLoadSession,fabSaveSession,fabAcceptEula,fabClaim,fabClaimMany} from './fab.mjs';
 import { curlImpersonateInfo } from './curl-impersonate.mjs';
 import {browserStatus,startBrowserInstallJob,browserInstallJob} from './browser-runtime.mjs';
 // 登录态：可见浏览器窗口 → CDP 导出 cookie → 存进 jar → 之后所有纯 HTTP 请求自动带上。
-import {startLogin,loginStatus,closeLogin,syncCookies,sessionStatus,capturePage,harvestCookies,releaseProfile,shutdownBrowser as shutdownBrowserSession} from './browser-session.mjs';
+import {startLogin,loginStatus,closeLogin,syncCookies,sessionStatus,capturePage,harvestCookies,releaseProfile,shutdownBrowser as shutdownBrowserSession,pendingEula,resumeLoginAfterEula} from './browser-session.mjs';
 import {cookieStats,clearCookies,cookieHeaderFor,browserProfileDir,loginStateFor} from './cookie-jar.mjs';
 import {warmStatus,warmHost} from './cookie-warmer.mjs';
 import {renderDom} from './headless-dom.mjs';
 import {dependencyReport,updateSetup,setBlenderPath,applyBlenderOverride} from './setup.mjs';
 import { coverLadder, artstationRenditionUrl, ARTSTATION_COVER_RENDITIONS } from './artstation-cdn.mjs';
 import { openPublic, validateUrl, isSketchfabHost, isArtstationHost } from './public-http.mjs';
-import { collectPictureAssets, isPictureSite, isPictureCdnHost, pictureRefererForHost, pictureUrlCandidates, canonicalPictureUrl, PICTURE_SITES, PICTURE_LOGIN_URLS, xhsAlbumCommand } from './picture-sites.mjs';
+import { PICTURE_PROGRESS_SITES, collectPictureAssets, isPictureSite, isPictureCdnHost, pictureRefererForHost, pictureUrlCandidates, canonicalPictureUrl, cardThumbUrl, PICTURE_SITES, PICTURE_LOGIN_URLS, xhsAlbumCommand, pictureCollectionCommand } from './picture-sites.mjs';
+import { probeCollectionOps, collectionCaps, isCollectionPlatform } from './platform-collections.mjs';
+import {isMusicSite} from '../src/library/music-platforms.js';
 import { resolveUiverse, searchUiverse, fetchUiverseCodeOnly, uiverseSearch } from './uiverse.mjs';
 import { isUiSite } from '../src/library/platforms.js';
 import {collectImageAssets} from './image-sources.mjs';
@@ -311,7 +316,8 @@ async function firstAvailable(candidates,request){
   }
   throw lastError||Error('缺少可用的图片地址');
 }
-export function createLibraryServer({scan=scanPage,search=searchPage,open=openPublic,staticRoot=process.env.SFX_STATIC_ROOT||path.join(root,'dist/library'),downloads=null,libraryDbImporter=null,boardCollect=collectPictureAssets,pictureCollect=(platform,args,options)=>(platform==='artstation'?collectImageAssets:collectPictureAssets)(platform,args,options),artstation={},artsearch=artstationSearch,artfilters=artstationFilterOptions,artartist=artstationArtist,artprofile=artstationArtistProfile,polyhaven=polyhavenSearch,polyhavenCats=polyhavenCategories,simready=simreadySearch,polypizza=polypizzaSearch,kenney=kenneySearch,kenneyCats=kenneyCategories,freestylized=freestylizedSearch,freestylizedCats=freestylizedCategories,polyfork=polyforkSearch,polyforkCats=polyforkCategories,polyforkP=polyforkParams,polyforkV=polyforkVariant,polyforkGen=polyforkGenerator,ambientcg=ambientcgSearch,ambientcgPreview=ambientcgViewer,ambientcgCats=ambientcgCategories,fab=fabSearchFn,cacheDir=null,archiveRoot=null,lanSharing=null,platformSettingsFile=null,collect=true,backup=true,auth=null,onRestart=null}={}) {
+const defaultPictureCollect=(platform,args,options)=>(platform==='artstation'?collectImageAssets:collectPictureAssets)(platform,args,options);
+export function createLibraryServer({scan=scanPage,search=searchPage,open=openPublic,staticRoot=process.env.SFX_STATIC_ROOT||path.join(root,'dist/library'),downloads=null,libraryDbImporter=null,boardCollect=collectPictureAssets,pictureCollect=defaultPictureCollect,artstation={},artsearch=artstationSearch,artfilters=artstationFilterOptions,artartist=artstationArtist,artprofile=artstationArtistProfile,polyhaven=polyhavenSearch,polyhavenCats=polyhavenCategories,simready=simreadySearch,polypizza=polypizzaSearch,kenney=kenneySearch,kenneyCats=kenneyCategories,freestylized=freestylizedSearch,freestylizedCats=freestylizedCategories,polyfork=polyforkSearch,polyforkCats=polyforkCategories,polyforkP=polyforkParams,polyforkV=polyforkVariant,polyforkGen=polyforkGenerator,ambientcg=ambientcgSearch,ambientcgPreview=ambientcgViewer,ambientcgCats=ambientcgCategories,fab=fabSearchFn,cacheDir=null,archiveRoot=null,lanSharing=null,platformSettingsFile=null,collect=true,backup=true,auth=null,onRestart=null}={}) {
   // cacheDir：把响应缓存指到别处（测试与脚本传临时目录），免得夹具写进应用数据目录的真缓存。
   // 一个进程同时只会跑一个服务端实例，所以这里直接换掉模块级那一份。
   if(cacheDir)httpCache=createResponseCache(cacheDir);
@@ -324,12 +330,16 @@ export function createLibraryServer({scan=scanPage,search=searchPage,open=openPu
   for(const folder of importRoots.list())allowLocalRoot(folder);
   // 图片回源策略只留一份：/api/image 代理和「拖出到外部软件前的原图落盘」都走它，
   // 免得 CDN 阶梯 / Referer / cookie 规则在两条链路里慢慢长成两套。
-  const imageRequest=(wanted,host,{signal,useLadder=true}={})=>{
+  const imageRequest=(wanted,host,{signal,useLadder=true,fallbackUrl=null}={})=>{
     // 图床换域名后，已收藏/已下载的老卡片里存的还是旧主机地址（如花瓣的 hbimg.huaban.com）；
     // 抓得急时现役主机也会限流（HTTP 567），这时只能退到边缘缓存的缩放档。
     // 这一串「先要哪个、再要哪个」由 picture-sites.mjs 的 pictureUrlCandidates 统一给，别在这里另猜一套。
     const ladder=useLadder?coverLadder(wanted):[wanted];
-    const candidates=[...new Set([...pictureUrlCandidates(wanted),...ladder])];
+    const primary=[...pictureUrlCandidates(wanted),...ladder];
+    // fallbackUrl：xhscdn 缩略参数在个别子域失效（403/404）时退回原图，避免缩略图直接裂掉。
+    const candidates=fallbackUrl
+      ?[...new Set([...primary,...pictureUrlCandidates(fallbackUrl),...(useLadder?coverLadder(fallbackUrl):[fallbackUrl])])]
+      :[...new Set(primary)];
     return firstAvailable(candidates,
       candidate=>open(candidate,{artstation:isArtstationHost(host),signal,timeout:45000,
         ...(isPictureCdnHost(host)?{headers:{Referer:pictureRefererForHost(host)}}:{})}));
@@ -491,10 +501,11 @@ export function createLibraryServer({scan=scanPage,search=searchPage,open=openPu
   const collectRules=createCollectRules({file:path.join(collectDir,'collect-rules.json')});
   const collectPendingStore=createCollectPending({file:path.join(collectDir,'collect-pending.json')});
   const collectGuard=createCollectGuard();
-  const collectSearch=createCollectSearch({open});
-  const collectRunner=createCollectRunner({rules:collectRules,pending:collectPendingStore,guard:collectGuard,storage:libraryStorage,search:collectSearch.search,onWarn:message=>console.warn(`[AssetVault] ${message}`)});
+  const platforms=createPlatformSettings(platformSettingsFile||path.join(downloads?.dataDir||resolveDataDir(root).dir,'platform-settings.json'));
+  const collectSearch=createCollectSearch({open,civitaiKey:platforms.civitaiKey()});
+  const collectRunner=createCollectRunner({rules:collectRules,pending:collectPendingStore,guard:collectGuard,storage:libraryStorage,search:collectSearch.search,platformEnabled:id=>platforms.enabled(id),onWarn:message=>console.warn(`[AssetVault] ${message}`)});
   const collectScheduler=createCollectScheduler({rules:collectRules,runner:collectRunner,onWarn:message=>console.warn(`[AssetVault] ${message}`)});
-  const collectApi=createCollectApi({rules:collectRules,runner:collectRunner,pending:collectPendingStore,scheduler:collectScheduler,storage:libraryStorage});
+  const collectApi=createCollectApi({rules:collectRules,runner:collectRunner,pending:collectPendingStore,scheduler:collectScheduler,storage:libraryStorage,platformEnabled:id=>platforms.enabled(id)});
   // WebDAV 云同步：整库快照推到用户自己的网盘，多设备之间按 rev 收敛。
   // 定时器自己 unref，且「没配地址」时根本不起，不会给纯本地用户留后台空转。
   const webdavSync=createWebdavSync({storage:libraryStorage,dataDir:collectDir,onSynced:()=>libraryApi.events.emit({kind:'assets'}),onWarn:message=>console.warn(`[AssetVault] ${message}`)});
@@ -503,7 +514,6 @@ export function createLibraryServer({scan=scanPage,search=searchPage,open=openPu
   if(collect!==false)collectScheduler.start();
   const lan=lanSharing||createLanSharing({file:path.join(downloads?.dataDir||resolveDataDir(root).dir,'lan-sharing.json')});
   lan.attachMembers?.(libraryApi.members);
-  const platforms=createPlatformSettings(platformSettingsFile||path.join(downloads?.dataDir||resolveDataDir(root).dir,'platform-settings.json'));
   // 多目标「发送到…」：把已下载的成品交付给 Blender（桥接）或引擎 / DCC（复制到工程目录）。
   const exportsApi=createExports({downloads,dataDir:downloads?.dataDir||resolveDataDir(root).dir});
   return http.createServer(async(req,res)=>{
@@ -518,7 +528,7 @@ export function createLibraryServer({scan=scanPage,search=searchPage,open=openPu
       // 放在 exportsApi / 各平台分支之前，任何数据接口都不会漏过去。
       if(auth){
         if(await auth.handle(req,res,u))return;
-        if(auth.gate(req,res,u))return;
+        if(!isExportWorkerRequest(req,u,downloads?.transfers)&&auth.gate(req,res,u))return;
       }
       await fileOrganizer.ready;
       // 未恢复的日志期间禁止其它写入口绕过位置保护；整理面板仍可读状态并重试恢复。
@@ -617,10 +627,41 @@ export function createLibraryServer({scan=scanPage,search=searchPage,open=openPu
         const limit=Math.min(Math.max(Number(u.searchParams.get('limit'))||60,1),5000);
         try{
           // 平台设置里填的 Pixabay key 随每次解析下发；resolve 内部再回落到环境变量。
-          const collectWithKeys=(p,a,o)=>pictureCollect(p,a,{...o,apiKey:platforms.pixabayKey()});
-          return json(res,200,await pictureWindow(platform,url,limit,{collect:collectWithKeys,open}));
+          const refresh=platform==='xiaohongshu'&&u.searchParams.get('refresh')==='1';
+          if(refresh)forgetPictureIndex(platform,url);
+          const collectWithKeys=(p,a,o)=>pictureCollect(p,a,{...o,refresh,apiKey:platforms.pixabayKey()});
+          const controller=new AbortController();
+          const disconnect=()=>{if(!res.writableEnded)controller.abort();};
+          res.once('close',disconnect);
+          try {
+            const data=await pictureWindow(platform,url,limit,{collect:collectWithKeys,open,signal:controller.signal,progressive:pictureCollect===defaultPictureCollect&&PICTURE_PROGRESS_SITES.includes(platform)});
+            if(!res.destroyed)return json(res,200,data);
+            return;
+          } finally {res.off('close',disconnect);}
         }catch(e){return json(res,400,{error:e.message||'抓取失败'});}
       }
+      // 通用收藏夹能力探测：进入收藏页时前端调一次，拿真实可用的写操作位 + 接口签名。
+      // 只有注册过的平台才有；探测要开浏览器，别在普通搜索/首页调用。
+      if(req.method==='GET'&&u.pathname==='/api/platform-collections/caps'){
+        if(req.headers['x-sfx-local']!=='1')return json(res,403,{error:'缺少本地请求标识'});
+        const platform=u.searchParams.get('platform');
+        if(!platform||!isCollectionPlatform(platform))return json(res,200,{supported:false});
+        try{
+          const live=await probeCollectionOps(platform);
+          return json(res,200,{supported:true,...collectionCaps(platform),live});
+        }catch(e){return json(res,200,{supported:true,...collectionCaps(platform),live:{ops:collectionCaps(platform)?.collectionOps||[]}});}
+      }
+      // 通用收藏夹写操作：平台差异收敛在服务端契约层，前端只发这一个端点。
+      if(req.method==='POST'&&u.pathname==='/api/platform-collections'){
+        if(req.headers['x-sfx-local']!=='1')return json(res,403,{error:'缺少本地请求标识'});
+        try{
+          const input=await body(req);
+          const platform=String(input?.platform||'');
+          if(!platform)return json(res,400,{error:'缺少 platform'});
+          return json(res,200,await pictureCollectionCommand(platform,input||{}));
+        }catch(e){return json(res,400,{error:e.message||'收藏夹操作失败'});}
+      }
+      // 旧端点保留兼容（老前端 / 外部调用），内部转给统一入口。
       if(req.method==='POST'&&u.pathname==='/api/xhs/album'){
         if(req.headers['x-sfx-local']!=='1')return json(res,403,{error:'缺少本地请求标识'});
         try{
@@ -691,7 +732,10 @@ export function createLibraryServer({scan=scanPage,search=searchPage,open=openPu
         if(req.lanVisitor||req.headers['x-sfx-local']!=='1'||req.headers.origin&&req.headers.origin!==`http://${req.headers.host}`||req.headers['sec-fetch-site']==='cross-site')return json(res,403,{error:'仅主机同源页面可以同步画布'});
         if(req.method==='GET'){
           try{
-            return json(res,200,await canvasBoards.read());
+            const result=await canvasBoards.readVersioned(req.headers['if-none-match']);
+            res.setHeader('ETag',result.etag);res.setHeader('Cache-Control','no-cache');
+            if(result.unchanged){res.writeHead(304);return res.end();}
+            return json(res,200,result.document);
           }catch(error){
             return json(res,500,{error:error.message});
           }
@@ -798,12 +842,18 @@ export function createLibraryServer({scan=scanPage,search=searchPage,open=openPu
       }
       if(u.pathname.startsWith('/api/ai/')){
         if(req.headers['x-sfx-local']!=='1')return json(res,403,{error:'缺少本地请求标识'});
+        if(['/api/ai/hunt-plan','/api/ai/rank-sheet'].includes(u.pathname)){
+          if(req.lanVisitor)return json(res,403,{error:'仅主机可使用 AI 找资产'});
+          if(req.headers.origin&&new URL(req.headers.origin).host!==req.headers.host)return json(res,403,{error:'跨站请求被拒绝'});
+        }
         if(req.method==='GET'&&u.pathname==='/api/ai/settings')return json(res,200,await ai.settings());
         if(req.method==='POST'){
           // 图搜的请求体带 base64 图片，先走大上限的解析器，再进入常规 JSON 分支。
           if(u.pathname==='/api/ai/tags')return json(res,200,await ai.tagAssets(await bodyLarge(req)));
+          if(u.pathname==='/api/ai/rank-sheet')return json(res,200,await ai.rankSheet(await bodyLarge(req)));
           if(u.pathname==='/api/ai/vision-search')return json(res,200,await ai.visionSearch(await bodyLarge(req)));
           const input=await body(req);
+          if(u.pathname==='/api/ai/hunt-plan')return json(res,200,await ai.huntPlan(input,COLLECT_PLATFORMS.filter(p=>p.searchable&&platforms.enabled(p.id)).map(p=>p.id)));
           if(u.pathname==='/api/ai/key'){res.setHeader('Cache-Control','no-store');return json(res,200,await ai.key());}
           if(u.pathname==='/api/ai/settings')return json(res,200,await ai.configure(input));
           if(u.pathname==='/api/ai/models')return json(res,200,await ai.models(input,controller.signal));
@@ -1566,7 +1616,7 @@ export function createLibraryServer({scan=scanPage,search=searchPage,open=openPu
       }
       if(u.pathname.startsWith('/api/downloads')){
         if(!downloads)return json(res,503,{error:'后台下载服务未启动'});
-        const match=u.pathname.match(/^\/api\/downloads\/tasks\/([a-f0-9-]{36})\/(action|file|reveal|send-blender)$/);
+        const match=u.pathname.match(/^\/api\/downloads\/tasks\/([a-f0-9-]{36})\/(action|file|reveal|send-blender|convert-fbx)$/);
         if(match?.[2]==='file'&&req.method==='GET'){
           const {job,path:file}=downloads.file(match[1]);let target=file,temp;
           try{
@@ -1595,7 +1645,7 @@ export function createLibraryServer({scan=scanPage,search=searchPage,open=openPu
           const input=await body(req);
           if(u.pathname==='/api/downloads/tasks'){
             if(req.lanVisitor&&input.folder!==undefined)return json(res,403,{error:'访客不能指定主机下载目录'});
-            const ids=input.kind==='images'?(input.models||[]).map(m=>m.platform||'sketchfab'):[input.kind||'sketchfab'];
+            const ids=['images','media'].includes(input.kind)?(input.models||[]).map(m=>m.platform||'sketchfab'):[input.kind||'sketchfab'];
             // 图站与 3D 平台共用一份开关：关掉图站卡片后解析和整站下载都会被拒。
             if(ids.some(id=>!platforms.enabled(id)))return json(res,403,{error:'下载来源平台已关闭，请在设置中开启'});
             return json(res,200,await downloads.enqueueWithFolder(input));
@@ -1608,6 +1658,7 @@ export function createLibraryServer({scan=scanPage,search=searchPage,open=openPu
           if(u.pathname==='/api/downloads/reveal')return json(res,200,await downloads.reveal());
           if(match?.[2]==='action')return json(res,200,downloads.action(match[1],input.action));
           if(match?.[2]==='reveal')return json(res,200,await downloads.reveal(match[1]));
+          if(match?.[2]==='convert-fbx'){if(req.lanVisitor)return json(res,403,{error:'仅主机可以转换 FBX'});return json(res,200,downloads.convertFbx(match[1]));}
           if(match?.[2]==='send-blender')return json(res,200,await downloads.sendBlender(match[1]));
         }
         return json(res,404,{error:'下载接口不存在'});
@@ -1617,6 +1668,8 @@ export function createLibraryServer({scan=scanPage,search=searchPage,open=openPu
         if(req.method==='GET'&&u.pathname==='/api/artstation/filters')return json(res,200,await artfilters({signal:controller.signal}));
         // 艺术家资料卡：只在进入浏览时取一次，失败不阻塞作品列表（前端按 null 处理）。
         if(req.method==='GET'&&u.pathname==='/api/artstation/artist')return json(res,200,{artist:await artprofile(u.searchParams.get('username'),{signal:controller.signal})});
+        if(req.method==='GET'&&u.pathname==='/api/artstation/me')return json(res,200,{artist:await artstationAccount({signal:controller.signal})});
+        if(req.method==='GET'&&u.pathname==='/api/artstation/following')return json(res,200,await artstationFollowing(u.searchParams.get('username'),{signal:controller.signal}));
         if(u.pathname==='/api/artstation/search'){
           if(req.method!=='POST')return json(res,405,{error:'方法不允许'});
           if(req.headers['x-sfx-local']!=='1')return json(res,403,{error:'缺少本地请求标识'});
@@ -1769,6 +1822,22 @@ export function createLibraryServer({scan=scanPage,search=searchPage,open=openPu
         const input=await body(req);
         return cachedJson(res,`polyfork:${JSON.stringify(input)}`,SEARCH_CACHE_MS,()=>polyfork(input,{signal:controller.signal,open}));
       }
+      // Civitai 模型：关键词检索与链接解析共用平台设置里的 API key；key 只留在服务端。
+      if(u.pathname==='/api/civitai/search'){
+        if(req.method!=='POST')return json(res,405,{error:'方法不允许'});
+        if(req.headers['x-sfx-local']!=='1')return json(res,403,{error:'缺少本地请求标识'});
+        if(!platforms.enabled('civitai'))return json(res,403,{error:'Civitai 模型平台已关闭，请在设置中开启'});
+        const input=await body(req);
+        return cachedJson(res,`civitai:${JSON.stringify(input)}`,SEARCH_CACHE_MS,()=>civitaiSearch(input,{signal:controller.signal,open,apiKey:platforms.civitaiKey()}));
+      }
+      if(u.pathname==='/api/civitai/resolve'){
+        if(req.method!=='POST')return json(res,405,{error:'方法不允许'});
+        if(req.headers['x-sfx-local']!=='1')return json(res,403,{error:'缺少本地请求标识'});
+        if(!platforms.enabled('civitai'))return json(res,403,{error:'Civitai 模型平台已关闭，请在设置中开启'});
+        const input=await body(req);
+        try{return json(res,200,await civitaiResolve(input.url,{signal:controller.signal,apiKey:platforms.civitaiKey()}));}
+        catch(error){return json(res,400,{error:error.message||'链接解析失败'});}
+      }
       if(req.method==='GET'&&u.pathname==='/api/polyfork/categories'){
         if(req.headers['x-sfx-local']!=='1')return json(res,403,{error:'缺少本地请求标识'});
         return cachedCategories(res,'polyfork-cats:v1',()=>polyforkCats({signal:controller.signal}));
@@ -1869,6 +1938,29 @@ export function createLibraryServer({scan=scanPage,search=searchPage,open=openPu
         return json(res,200,await substance.status());
       }
         // ---- Fab / Epic OAuth 登录（授权码换 token，与 cookie 登录是不同的链路）----
+        if(u.pathname==='/api/fab/accept-eula'&&req.method==='POST'){
+          if(req.headers['x-sfx-local']!=='1')return json(res,403,{error:'缺少本地请求标识'});
+          const pending=pendingEula();
+          if(!pending)return json(res,400,{error:'当前没有待接受的 Epic 协议，请重新点一次登录'});
+          try{
+            // 走到这里说明用户已经在界面上点过「同意」，这里只负责提交 + 把 OAuth 接回去。
+            await fabAcceptEula(pending,{open});
+            const resumed=await resumeLoginAfterEula();
+            return json(res,200,{ok:true,...resumed});
+          }catch(e){return json(res,400,{error:e.message||'接受协议失败'});}
+        }
+        if(u.pathname==='/api/fab/claim'&&req.method==='POST'){
+          if(req.headers['x-sfx-local']!=='1')return json(res,403,{error:'缺少本地请求标识'});
+          const input=await body(req);
+          const ids=(Array.isArray(input?.ids)?input.ids:(input?.id?[input.id]:[])).map(x=>String(x||'').trim()).filter(Boolean);
+          if(!ids.length)return json(res,400,{error:'缺少要入库的资产 ID'});
+          try{
+            // 单条时把失败原因原样抛给界面；批量时逐条记账，不因为一条失败中断整批。
+            if(ids.length===1){const one=await fabClaim(ids[0],{open});return json(res,200,{total:1,added:1,failed:0,results:[{...one,ok:true}]});}
+            const out=await fabClaimMany(ids,{open});
+            return json(res,200,out);
+          }catch(e){return json(res,400,{error:e.message||'入库失败'});}
+        }
         if(u.pathname==='/api/fab/session'&&req.method==='GET'){
           const saved=await fabLoadSession(root);
           if(saved&&saved.refreshToken&&saved.expiresAt){
@@ -1943,6 +2035,11 @@ export function createLibraryServer({scan=scanPage,search=searchPage,open=openPu
         // 缩略图缓存（一张十几 MB，缓存目录会迅速膨胀），所以 full 请求既不读缓存也不写缓存。
         const full=image&&u.searchParams.get('full')==='1';
         const card=image&&!full&&u.searchParams.get('card')==='1';
+        // 卡片缩略图 CDN 直出（规则表在 picture-sites.mjs 的 CARD_THUMB_RULES）：
+        // 命中规则时让 CDN 直接出小图，省掉整张原图下载（小红书实测 171KB→33KB）。
+        // 只作用于回源 URL；缓存 key 仍用原始 wanted（已有缓存不失效），sharp 二次缩放和
+        // stale 兜底保留——某子域不支持参数退回原图时仍能缩到 384。
+        const cdnCardUrl=card?cardThumbUrl(target.href)||null:null;
         const imageKey=image&&!full?`${wanted}|${rendition}${card?'|card384-v1':''}`:'';
         // ETag：图片响应没有验证器时，浏览器 F5 会把它当成「不确定是否最新」整张重下；
         // 带上 ETag 后同一张图只换一次 304，刷新不再重复传输几 MB 的图片。
@@ -1971,7 +2068,7 @@ export function createLibraryServer({scan=scanPage,search=searchPage,open=openPu
         if(sourcePlatform&&sourcePlatform!=='picture'&&!platforms.enabled(sourcePlatform))return json(res,403,{error:'该平台已关闭，请在设置中开启'});
         let remote;
         try{
-          remote=await imageRequest(wanted,targetHost,{signal:controller.signal,useLadder:image});
+          remote=await imageRequest(cdnCardUrl||wanted,targetHost,{signal:controller.signal,useLadder:image,fallbackUrl:cdnCardUrl?wanted:null});
         }catch(error){
           // 全部候选都连不上（地址过期 / 下线 / 超时）：有旧缩略图就顶上，否则照常报错。
           if(await serveStale())return;
@@ -2010,12 +2107,19 @@ export function createLibraryServer({scan=scanPage,search=searchPage,open=openPu
       }
       // 图站视频（Civitai 的 mp4 投稿等）：<video> 标签发不了自定义头，所以和 /api/image 一样
       // 走同源代理、不校验 x-sfx-local；必须原样转发 Range，否则播放器既没有时长也没法拖进度。
-      if(u.pathname==='/api/video'&&req.method==='GET'){
-        const target=validateUrl(u.searchParams.get('url'));
-        if(!isPictureCdnHost(target.hostname))throw Error('只支持图站视频地址');
+      if(['/api/video','/api/audio'].includes(u.pathname)&&req.method==='GET'){
+        let mediaUrl=u.searchParams.get('url');
+        if(u.pathname==='/api/audio'&&!mediaUrl){
+          const platform=u.searchParams.get('platform'),source=u.searchParams.get('source');
+          if(!isMusicSite(platform)||!platforms.enabled(platform)||!/^https?:\/\//i.test(source||''))throw Error('需要已启用音乐平台的单曲链接');
+          const plan=await pictureWindow(platform,source,1,{collect:pictureCollect,open});
+          mediaUrl=plan.items?.find(item=>item.type==='audio')?.url;
+        }
+        const target=validateUrl(mediaUrl);
+        if(!isPictureCdnHost(target.hostname))throw Error('只支持已登记平台的媒体地址');
         const remote=await open(target.href,{signal:controller.signal,timeout:60000,headers:{Referer:pictureRefererForHost(target.hostname),...(req.headers.range?{Range:req.headers.range}:{})}});
         const ok=remote.status>=200&&remote.status<300;
-        const headers={'Content-Type':String(remote.headers['content-type']||'video/mp4').split(';')[0],'Accept-Ranges':remote.headers['accept-ranges']||'bytes','Cache-Control':ok?'private, max-age=86400':'no-store'};
+        const headers={'Content-Type':String(remote.headers['content-type']||(u.pathname==='/api/audio'?'audio/mpeg':'video/mp4')).split(';')[0],'Accept-Ranges':remote.headers['accept-ranges']||'bytes','Cache-Control':ok?'private, max-age=86400':'no-store'};
         for(const [key,label] of [['content-length','Content-Length'],['content-range','Content-Range'],['etag','ETag'],['last-modified','Last-Modified']]){
           if(remote.headers[key])headers[label]=remote.headers[key];
         }
@@ -2048,7 +2152,11 @@ export function createLibraryServer({scan=scanPage,search=searchPage,open=openPu
         }
       }
       if(req.method==='GET'&&assets.has(u.pathname)){
-        res.setHeader('Content-Security-Policy',CONTENT_SECURITY_POLICY);
+        // The canvas embeds this same-origin viewer; other library pages remain unframable.
+        const policy=u.pathname==='/model-preview.html'
+          ?CONTENT_SECURITY_POLICY.replace("frame-ancestors 'none'","frame-ancestors 'self'")
+          :CONTENT_SECURITY_POLICY;
+        res.setHeader('Content-Security-Policy',policy);
         const file=u.pathname==='/'?'/index.html':u.pathname;
         const bytes=await fs.readFile(path.join(staticRoot,file));
         // 代码文件一律「每次校验」：以前这里没写 Cache-Control，WebView2 会按 URL 做
@@ -2072,7 +2180,7 @@ if(process.argv[1]&&import.meta.url===pathToFileURL(path.resolve(process.argv[1]
   const {dataDir,downloadDir,archiveRoot,accountsDir}=resolveUserPaths();
   // 下载落到「归档根」= <库名>/图片/…，和分类树一一对应，用户改名磁盘跟着改。
   // 旧 downloads 目录只作为历史扫描根，保证之前下载的卡片不会因为换根而消失。
-  const downloads=await new DownloadManager({dataDir,defaultFolder:archiveRoot,legacyRoots:[downloadDir]}).init();
+  const downloads=await new DownloadManager({dataDir,defaultFolder:archiveRoot,legacyRoots:[downloadDir],civitaiKeyProvider:()=>{try{return JSON.parse(fs.readFileSync(path.join(dataDir,'platform-settings.json'),'utf8')).civitaiKey||'';}catch{return '';}}}).init();
   // 用户在「首次准备」里手动指过 blender.exe 的话，趁服务还没开始接活把它接回环境变量。
   applyBlenderOverride();
   const sharing=createLanSharing({file:path.join(downloads.dataDir,'lan-sharing.json')});

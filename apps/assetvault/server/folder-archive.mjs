@@ -1,3 +1,4 @@
+import {inspectMedia} from './media-file.mjs';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
@@ -109,7 +110,18 @@ export async function verifyFolder(dir, { uid, signal } = {}) {
   // bundles follow the same rule for their PBR maps under `textures/`. The same rule the ZIP
   // verifier applies, so folder and archive delivery accept exactly the same bundles.
   let images = null, textures = null;
-  if (info.kind === 'images') {
+  if(info.kind==='media'){
+    if(!Array.isArray(info.files)||!info.files.length||info.files.length>120)throw Error('媒体文件清单无效');
+    const declared=new Set();
+    for(const item of info.files){
+      if(!/^[^/\\]+\.(mp3|m4a|aac|flac|wav|ogg|mp4|webm|png|jpg|jpeg|webp|gif|avif)$/i.test(item.file)||declared.has(item.file))throw Error('媒体清单含不安全或重复文件名');
+      declared.add(item.file);
+      const present=files.find(file=>file.relative===item.file);
+      if(!present||present.size!==item.bytes)throw Error('媒体文件缺失或不完整：'+item.file);
+      inspectMedia(await readPrefix(present.full,Math.min(present.size,IMAGE_PREFIX_BYTES)),item.type,item.file,present.size);
+    }
+    if(files.some(file=>file.relative!=='info.json'&&!declared.has(file.relative)))throw Error('媒体目录含未登记文件');
+  } else if (info.kind === 'images') {
     const declared = declaredImages(info);
     const present = files.filter(f => /^images\/[^/]+$/.test(f.relative));
     for (const item of declared) if (!files.some(f => f.relative === item.file)) throw Error(`导出目录里缺少已登记的作品图片：${item.file}`);
@@ -147,6 +159,16 @@ export async function verifyFolder(dir, { uid, signal } = {}) {
   } else if (info.platform === 'simready') {
     if(!Array.isArray(info.files)||!info.files.length||!info.files.some(f=>/\.(usd|usdc|usda|usdz)$/i.test(f.file)))throw Error('SimReady 缺少 USD 文件清单');
     for(const item of info.files){const file=files.find(f=>f.relative===item.file);if(!file||file.size!==item.bytes)throw Error(`SimReady 文件缺失或不完整：${item.file}`);}
+  } else if (info.platform === 'civitai') {
+    // AI 模型没有 GLB：info.json 的文件清单就是唯一交付契约。
+    const declared = Array.isArray(info.files) ? info.files : [];
+    const weights = files.filter(f => /\.(safetensors|ckpt|gguf|pt|pth|bin|onnx|zip)$/i.test(f.relative));
+    if (!declared.length || !weights.length) throw Error('Civitai 模型目录里没有登记的模型文件');
+    for (const item of declared) {
+      const file = files.find(f => f.relative === item.file);
+      if (!file) throw Error(`Civitai 模型文件缺失：${item.file}`);
+      if (Number.isFinite(item.bytes) && item.bytes > 0 && file.size !== item.bytes) throw Error(`Civitai 模型文件不完整：${item.file}`);
+    }
   } else if (info.platform === 'polyhaven') {
     const mesh = files.filter(f => /\.(?:fbx|gltf|glb|blend|usdc|usd)$/i.test(f.relative));
     if (!mesh.length) throw Error('导出目录里没有 Poly Haven 的模型文件');

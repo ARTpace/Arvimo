@@ -1,0 +1,101 @@
+/* Two presentations share one form. Only the island slot participates in layout. */
+.search-island-slot{display:contents}
+.search-sticky.search-layout-morphing #search-panel{transition:none!important}
+/* Capture both presentations before layout changes; separate shape movement from content handoff. */
+html[data-search-layout-transition] #search-panel{view-transition-name:av-search-panel;transition:none!important}
+html[data-search-layout-transition] #content-kind-tabs{view-transition-name:av-search-tabs}
+html[data-search-layout-transition] #library-view{view-transition-name:av-search-results}
+html[data-search-layout-transition]::view-transition-group(*){animation-duration:.52s;animation-timing-function:cubic-bezier(.22,.8,.2,1)}
+html[data-search-layout-transition]::view-transition-old(root),html[data-search-layout-transition]::view-transition-new(root){animation:none}
+html[data-search-layout-transition]::view-transition-old(av-search-panel){animation:search-layout-out .16s ease-out both;mix-blend-mode:normal}
+html[data-search-layout-transition]::view-transition-new(av-search-panel){animation:search-layout-in .28s .08s ease-out both;mix-blend-mode:normal}
+html[data-search-layout-transition]::view-transition-old(av-search-tabs),html[data-search-layout-transition]::view-transition-old(av-search-results){display:none}
+html[data-search-layout-transition]::view-transition-new(av-search-tabs),html[data-search-layout-transition]::view-transition-new(av-search-results){animation:none}
+@keyframes search-layout-out{to{opacity:0}}
+@keyframes search-layout-in{from{opacity:0}to{opacity:1}}
+#search-panel #search-layout-toggle{display:flex;cursor:pointer}
+#search-panel #search-layout-toggle:focus-visible{outline:2px solid var(--primary-green);outline-offset:2px}
+#search-panel #search-layout-toggle[aria-pressed=true] .vault-bot-eye{height:8px;border-radius:5px}
+#search-panel .island-eyes,#search-panel .search-island-status{display:none}
+/* ponytail: reuse the existing sticky stack and its height observer for edge docking. */
+.content:has(.search-sticky[data-search-layout=island]){--av-sticky-top:0px}
+.search-sticky[data-search-layout=island]{display:flex;flex-direction:column;gap:8px;padding-top:0;top:0}
+.search-sticky[data-search-layout=island] .search-island-slot{display:block;position:relative;order:-1;height:48px;flex:0 0 48px;z-index:6;min-width:0}
+.search-sticky[data-search-layout=island] #content-kind-tabs{margin:0 auto;flex-shrink:0;justify-content:center}
+.search-sticky[data-search-layout=island] #search-panel{
+ position:absolute;top:0;left:50%;translate:-50% 0;box-sizing:border-box;
+ width:min(440px,100%);max-width:100%;min-height:48px;margin:0;padding:4px 8px;
+ border-radius:0 0 26px 26px;gap:0;box-shadow:0 6px 24px #0003;
+ transition:width .28s cubic-bezier(.32,.72,0,1),border-radius .28s cubic-bezier(.32,.72,0,1),border-color .2s,box-shadow .28s;
+}
+.search-sticky[data-search-layout=island] #search-panel:not(.island-open){width:min(300px,100%)}
+.search-sticky[data-search-layout=island] #search-panel:not(.island-open):is(.island-busy,.island-fail){width:min(460px,100%)}
+.search-sticky[data-search-layout=island] #search-panel.island-open,
+.search-sticky[data-search-layout=island] #search-panel:has(.search-image-query:not([hidden])){width:min(720px,100%);border-radius:0 0 24px 24px;box-shadow:0 10px 32px #0004;transition-duration:.42s,.42s,.2s,.3s}
+.search-sticky[data-search-layout=island] #search-panel.island-fail{box-shadow:0 0 0 1px #e85d4c,0 6px 24px #0003}
+.search-sticky[data-search-layout=island] #search-panel:not(.island-open) #asset-search-form>:not(.search-field,.island-rest-line){display:none!important}
+.search-sticky[data-search-layout=island] #search-panel:not(.island-open) .search-field{flex:1;width:100%;min-width:0;padding:0;border:0;background:transparent;box-shadow:none}
+.search-sticky[data-search-layout=island] #search-panel:not(.island-open) .global-search{flex:0 0 auto;width:auto;height:36px}
+.search-sticky[data-search-layout=island] #search-panel:not(.island-open) .global-search>:not(#search-layout-toggle){display:none!important}
+#search-panel .island-rest-line{display:none}
+.search-sticky:not([data-search-layout=island]) #asset-query::placeholder,
+.search-sticky[data-search-layout=island] #search-panel.island-open #asset-query::placeholder{opacity:0}
+.search-sticky[data-search-layout=island] #search-panel:not(.island-open) .island-rest-line{display:block;flex:1;min-width:0;height:36px;margin:0;padding:0 8px;border:0;background:transparent;color:var(--text-main);font:inherit;font-size:12px;text-align:left;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:text}
+.search-sticky[data-search-layout=island] #search-panel.island-busy .island-rest-line{color:var(--primary-green)}
+/* Native controls occupy the rightmost 118px; keep the expanding island clear of them. */
+body:has(#arvimo-window-chrome) .search-sticky[data-search-layout=island] .search-island-slot{margin-inline:96px}
+.search-sticky[data-search-layout=island] #search-panel::before{border-radius:inherit}
+.search-sticky[data-search-layout=island] #search-panel #asset-search-form{display:flex;flex-wrap:nowrap;gap:4px;width:100%;height:38px;box-sizing:border-box}
+.search-sticky[data-search-layout=island] #search-panel .search-field{height:36px;min-height:36px;padding:0 2px;border:0;background:transparent;box-shadow:none;border-radius:18px}
+.search-sticky[data-search-layout=island] #search-panel .global-search{height:36px;gap:6px;padding:0;background:transparent}
+.search-sticky[data-search-layout=island] #search-panel #asset-query{height:36px;font-size:13px}
+.search-sticky[data-search-layout=island] #search-panel :is(.vault-bot-header,.topic-strip,.global-search>i,.global-search kbd){display:none}
+.search-sticky[data-search-layout=island] #search-panel #search-layout-toggle{display:flex}
+.search-sticky[data-search-layout=island] #search-panel #search-layout-toggle{display:flex!important}
+.search-sticky[data-search-layout=island] #search-panel #search-layout-toggle .vault-bot-eye{width:5px;height:9px;border-radius:5px;animation:island-breathe 2.4s ease-in-out infinite}
+.search-sticky[data-search-layout=island] #search-panel.island-busy #search-layout-toggle .vault-bot-eye{animation-duration:1.2s}
+.search-sticky[data-search-layout=island] #search-panel #search-button{width:32px;height:32px;min-height:32px;padding:6px;border-radius:50%;display:none;align-items:center;justify-content:center;transform:none;box-shadow:none}
+.search-sticky[data-search-layout=island] #search-panel.island-open #search-button{display:flex}
+.search-sticky[data-search-layout=island] #search-panel #search-button i{width:16px;height:16px;margin:0}
+.search-sticky[data-search-layout=island] #search-panel #search-button .search-button-label{display:none}
+.search-sticky[data-search-layout=island] #search-panel #search-layout-toggle{flex:0 0 auto}
+.search-sticky[data-search-layout=island] #search-panel .platform-select{flex:0 0 76px;max-width:76px;margin:0 4px 0 0;padding:0 4px 0 0}
+.search-sticky[data-search-layout=island] #search-panel .platform-select .picker-trigger{min-width:0;width:100%;padding:4px;font-size:11px}
+.search-sticky[data-search-layout=island] #search-panel .platform-select .picker-caption{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.search-sticky[data-search-layout=island] #search-panel .hunt-trigger{width:26px;min-width:26px;padding:0;font-size:0;background:transparent;border:0}
+.search-sticky[data-search-layout=island] #search-panel .hunt-trigger::before{content:'✦';font-size:18px;color:var(--primary-green)}
+.search-sticky[data-search-layout=island] #search-panel .global-search>:is(#semantic-toggle,#theme-breakdown-btn){width:26px;min-width:26px;height:30px;min-height:30px;padding:4px;margin:0}
+.search-sticky[data-search-layout=island] #search-panel #filter-drawer-trigger{width:30px;height:30px;min-width:30px;padding:6px;flex:0 0 30px}
+.search-sticky[data-search-layout=island] #search-panel .search-image-query{position:absolute;top:calc(100% + 48px);left:0;right:0;margin:0;padding:8px;border:1px solid var(--border-panel);background:var(--bg-panel);border-radius:14px;box-shadow:0 8px 24px #0003}
+.search-sticky[data-search-layout=island] #search-panel #panel-filters{margin:0}
+.search-sticky[data-search-layout=island] #search-panel #theme-breakdown{position:absolute;top:calc(100% + 8px);left:50%;translate:-50% 0;width:max-content;max-width:min(720px,100vw);max-height:none;overflow:visible;padding:0;border:0;background:transparent}
+.search-sticky[data-search-layout=island] #search-panel #theme-results{display:flex;flex-wrap:wrap;justify-content:center;gap:6px}
+.search-sticky[data-search-layout=island] #search-panel #theme-results>span{display:none}
+.search-sticky[data-search-layout=island] #search-panel .search-island-status:not([hidden]){position:absolute;top:calc(100% + 48px);left:50%;translate:-50% 0;width:max-content;max-width:100%;box-sizing:border-box;display:block;padding:7px 12px;border:1px solid var(--border-panel);border-radius:12px;background:var(--bg-panel);font-size:11px;color:var(--text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;pointer-events:none}
+.search-sticky[data-search-layout=island] #search-panel:has(.search-image-query:not([hidden])) .search-island-status{display:none}
+.search-sticky[data-search-layout=island] #search-panel:not(:focus-within):not(.island-busy) .search-island-status{display:none}
+.search-sticky[data-search-layout=island] #search-panel :is(.search-layout-toggle,.hunt-trigger,#filter-drawer-trigger,#search-button){transition:background-color .16s,color .16s,box-shadow .2s,transform .16s}
+.search-sticky[data-search-layout=island] #search-panel .search-layout-toggle:hover{background:color-mix(in srgb,var(--primary-green) 10%,transparent);transform:translateY(-1px)}
+.search-sticky[data-search-layout=island] #search-panel :is(.search-layout-toggle,.hunt-trigger,#filter-drawer-trigger,#search-button):active{transform:scale(.96)}
+body:has(.search-sticky[data-search-layout=island]) #history-pop:not([hidden]){animation:island-pop .2s cubic-bezier(.32,.72,0,1)}
+body:has(.search-sticky[data-search-layout=island]) #history-pop[data-side=up]{--island-pop-y:4px}
+@keyframes island-pop{from{opacity:0;translate:0 var(--island-pop-y,-4px)}to{opacity:1;translate:0 0}}
+@keyframes island-breathe{50%{opacity:.35}}
+#search-panel #theme-breakdown-btn.is-on{background:color-mix(in srgb,var(--primary-green) 22%,transparent);box-shadow:0 0 0 1px var(--primary-green)}
+/* Compact controls stay in their real form: category, platform, search, layout. */
+.search-sticky[data-search-layout=island] #search-panel:not(.island-open){width:min(320px,100%);padding:5px 12px;border-color:color-mix(in srgb,var(--text-muted) 24%,transparent);background:var(--bg-panel)}
+.search-sticky[data-search-layout=island] #search-panel:not(.island-open).island-near{width:min(332px,100%);border-color:color-mix(in srgb,var(--primary-green) 38%,var(--border-panel));box-shadow:0 8px 28px #0004,0 1px 0 color-mix(in srgb,var(--primary-green) 12%,transparent) inset}
+.search-sticky[data-search-layout=island] #search-panel:not(.island-open) .search-field{gap:6px}
+.search-sticky[data-search-layout=island] #search-panel:not(.island-open) .platform-select{flex:0 0 28px;max-width:28px;margin:0;padding:0}
+.search-sticky[data-search-layout=island] #search-panel:not(.island-open) .platform-select .picker-trigger{height:32px;padding:0;font-size:12px;border:0;background:transparent;border-radius:10px}
+.search-sticky[data-search-layout=island] #search-panel:not(.island-open) .platform-select .picker-trigger>*{display:none}
+.search-sticky[data-search-layout=island] #search-panel:not(.island-open) .platform-select .picker-trigger::before{content:'◎';font-size:20px;color:var(--text-muted)}
+.search-sticky[data-search-layout=island] #search-panel:not(.island-open) .island-rest-line{height:32px;padding:0 4px;border:0;color:var(--text-muted);cursor:pointer;font-size:12px}
+.search-sticky[data-search-layout=island] #search-panel:not(.island-open) .island-rest-line:hover{color:var(--text-main)}
+.search-sticky[data-search-layout=island] #search-panel #filter-drawer-trigger{border-radius:10px;color:var(--text-muted);background:transparent;border:0}
+.search-sticky[data-search-layout=island] #search-panel #filter-drawer-trigger:is(:hover,[aria-expanded=true]){color:var(--primary-green);background:color-mix(in srgb,var(--primary-green) 10%,transparent)}
+.search-sticky[data-search-layout=island] #search-panel #search-layout-toggle{width:32px;min-width:32px;height:32px;border-radius:10px}
+.search-sticky[data-search-layout=island] #search-panel #search-layout-toggle .vault-bot-eye{animation:none;box-shadow:0 0 5px color-mix(in srgb,var(--primary-green) 35%,transparent);transition:height .24s,transform .32s}
+.search-sticky[data-search-layout=island] #search-panel.island-near #search-layout-toggle .vault-bot-eye{height:11px;transform:translateY(-1px)}
+.search-sticky[data-search-layout=island] #search-panel.island-busy #search-layout-toggle .vault-bot-eye{animation:island-breathe 1.2s ease-in-out infinite}
+@media(prefers-reduced-motion:reduce){.search-sticky[data-search-layout=island] #search-panel,.search-sticky[data-search-layout=island] #search-panel *{transition:none!important;animation:none!important}body:has(.search-sticky[data-search-layout=island]) #history-pop{animation:none!important}}

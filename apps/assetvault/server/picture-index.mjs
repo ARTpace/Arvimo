@@ -6,7 +6,8 @@
 // 「滑了半天只多出几十张」。
 //
 // 这里把它改成一份清单 + 多个窗口：
-//   · 第一次请求按当前 limit 先解析一屏（首屏耗时和以前一样）；
+//   · 支持进度的 HTTP 图站只抓一轮，每页并入缓存，首屏够用立即返回；
+//   · 其他站保留首屏 + 后台全量两段回退流程；
 //   · 这份清单在后台继续翻到底（独立 AbortSignal —— 请求返回后连接就断了，
 //     不能拿它当后台任务的生命周期，否则翻到一半被杀，清单永远长不大）；
 //   · 之后的每一屏都是对同一个数组切片，毫秒级返回，并且能给出真实总量（「共 1923 张」）。
@@ -26,12 +27,14 @@ const WAIT_MS = 20000;
 const FILL_TIMEOUT_MS = 5 * 60 * 1000;
 
 const entries = new Map();
+const personalList=(platform,url)=>platform==='xiaohongshu'&&/\/(?:user\/(?:likes|following)|explore)(?:[/?#]|$)/.test(url)&&! /\/explore\/[a-f0-9]{24}/i.test(url);
+const sizeOf=entry=>entry.mode==='boards'?entry.boards.length:entry.items.length;
 
 const keyOf = (platform, url) => `${platform}|${url}`;
 
 // 只搬运「这一批图共有的信息」，不搬 items / boards / truncated ——
 // 那三个跟着窗口走，把某一批的截断标记存进清单，翻到底之后还会残留成「还有更多」。
-const META_KEYS = ['title', 'author', 'cover', 'source', 'platform', 'client', 'label', 'rendition', 'tags', 'user', 'assetType', 'albums', 'boardId'];
+const META_KEYS = ['title', 'author', 'authorUrl', 'cover', 'source', 'platform', 'client', 'label', 'rendition', 'tags', 'user', 'assetType', 'albums', 'boardId', 'collectionPlatform', 'collectionLabel', 'collectionOps', 'collectionHomeUrl', 'collectionCollectUrl', 'collectionCollectDetect','personalPaging','order'];
 const metaOf = plan => {
   const meta = {};
   for (const key of META_KEYS) {
@@ -51,11 +54,15 @@ function touch(key, entry) {
 function evict() {
   const now = Date.now();
   for (const [key, entry] of entries) {
-    if (now - entry.usedAt > TTL_MS) entries.delete(key);
+    if (now - entry.usedAt > TTL_MS) {
+      entry.controller?.abort();
+      entries.delete(key);
+    }
   }
   while (entries.size > MAX_ENTRIES) {
     const oldest = entries.keys().next().value;
     if (oldest === undefined) break;
+    entries.get(oldest)?.controller?.abort();
     entries.delete(oldest);
   }
 }
@@ -68,17 +75,18 @@ function merge(entry, plan) {
     if (Array.isArray(plan.boards)) entry.boards = plan.boards;
   }
   const items = Array.isArray(plan.items) ? plan.items : [];
+  if(plan.order==='liked-desc'){
+    const ordered=new Map();
+    for(const item of [...items,...entry.items])if(item?.url&&!ordered.has(item.key||item.url))ordered.set(item.key||item.url,item);
+    entry.items=[...ordered.values()].slice(0,MAX_ITEMS);entry.seen=new Set(entry.items.map(item=>item.key||item.url));
+  }
   if (items.length) {
-    if (!entry.items.length) {
-      entry.items = items.slice(0, MAX_ITEMS);
-    } else {
-      const seen = new Set(entry.items.map(item => item.url));
-      for (const item of items) {
-        if (!item?.url || seen.has(item.url)) continue;
-        seen.add(item.url);
-        entry.items.push(item);
-        if (entry.items.length >= MAX_ITEMS) break;
-      }
+    for (const item of items) {
+      if (entry.items.length >= MAX_ITEMS) break;
+      const key=plan.personalPaging?item.key||item.url:item.url;
+      if (!item?.url || entry.seen.has(key)) continue;
+      entry.seen.add(key);
+      entry.items.push(item);
     }
   }
   entry.meta = { ...entry.meta, ...metaOf(plan) };
@@ -87,11 +95,24 @@ function merge(entry, plan) {
 }
 
 /** 后台把整块画板翻完。永不 reject：失败只记在 entry.error，调用方按「有没有货」决定报不报错。 */
-async function fill(entry, platform, url, limit, { collect, open }) {
-  const signal = AbortSignal.timeout(FILL_TIMEOUT_MS);
+async function fill(entry, platform, url, limit, { collect, open, progressive }) {
+  entry.error = null;
+  entry.controller = new AbortController();
+  const signal = AbortSignal.any([entry.controller.signal, AbortSignal.timeout(FILL_TIMEOUT_MS)]);
   try {
-    const first = await collect(platform, { url }, { open, signal, maxItems: Math.max(limit, FIRST_BATCH) });
+    if (progressive) {
+      const full = await collect(platform, {url}, {open, signal, maxItems: MAX_ITEMS, onProgress: plan => merge(entry, plan)});
+      merge(entry, full);
+      entry.complete = true;
+      return;
+    }
+    const first = await collect(platform, { url }, { open, signal, maxItems: Math.max(limit, platform === 'xiaohongshu' ? 24 : FIRST_BATCH) });
     merge(entry, first);
+    // Personal browser lists continue on demand; don't monopolize the shared login browser
+    // crawling thousands of users before the viewer requests the next window.
+    if(personalList(platform,url)){
+      entry.complete=first?.truncated!==true;entry.error=first?.warning||null;return;
+    }
     // 第一批就到底了（单页 HTML 站、小画板、关键词搜索翻不动）：不必再翻一遍。
     if (first?.truncated !== true) {
       entry.complete = true;
@@ -110,14 +131,16 @@ async function fill(entry, platform, url, limit, { collect, open }) {
 /** 等清单长到 limit 张（或后台翻完 / 超时）。轮询而不是 await promise：
  *  后台任务是「先给一屏、再慢慢翻到底」两段，await 整轮会连首屏一起等 ——
  *  首屏解析完就该返回，不能陪它把二十页 API 翻完。 */
-async function waitEnough(entry, limit) {
+async function waitEnough(entry, limit, signal) {
+  signal?.throwIfAborted();
   const startedAt = Date.now();
-  while (!entry.complete && entry.promise && entry.items.length < limit) {
+  while (!entry.complete && entry.promise && sizeOf(entry) < limit) {
     // 一张都没有时不能按 20 秒交卷：小红书笔记要等浏览器渲染完才一次性给图，
     // 提前返回空列表，前端会当成「这篇没有图片」并且预览打不开。
-    const cap = entry.items.length ? WAIT_MS : 90000;
+    const cap = sizeOf(entry) ? WAIT_MS : 90000;
     if (Date.now() - startedAt >= cap) break;
     await new Promise(resolve => setTimeout(resolve, 30));
+    signal?.throwIfAborted();
   }
 }
 
@@ -128,13 +151,14 @@ function viewOf(entry, limit) {
     ...entry.meta,
     mode: entry.mode,
     items,
-    boards: entry.mode === 'boards' ? entry.boards : [],
+    boards: entry.mode === 'boards' ? entry.meta.personalPaging?entry.boards.slice(0,limit):entry.boards : [],
     skipped: [],
     // total 只在清单翻完之后才给：中途把「已翻到的张数」当总数报出去，
     // 卡片上就会写着「共 96 张」，而实际有 1923 张 —— 宁可不写，也不写错。
-    total: complete ? entry.items.length : 0,
-    truncated: complete ? entry.items.length > limit : true,
+    total: complete ? sizeOf(entry) : 0,
+    truncated: complete ? sizeOf(entry) > limit : true,
     complete,
+    warning: entry.error || '',
   };
 }
 
@@ -142,23 +166,36 @@ function viewOf(entry, limit) {
  * 取第 limit 张之前的那一屏。
  * collect(platform, {url}, {open, signal, maxItems}) 由调用方注入（图站 / ArtStation 各一套）。
  */
-export async function pictureWindow(platform, url, limit, { collect, open } = {}) {
+export async function pictureWindow(platform, url, limit, { collect, open, progressive = false, signal } = {}) {
   const key = keyOf(platform, url);
   let entry = entries.get(key);
   if (entry && Date.now() - entry.usedAt > TTL_MS) {
+    entry.controller?.abort();
     entries.delete(key);
     entry = null;
   }
   if (!entry) {
-    entry = { items: [], boards: [], mode: 'images', meta: {}, skipped: 0, complete: false, error: null, promise: null, usedAt: Date.now() };
+    entry = { items: [], seen: new Set(), boards: [], mode: 'images', meta: {}, skipped: 0, complete: false, error: null, promise: null, usedAt: Date.now(), waiters: 0, served: false };
     entries.set(key, entry);
     evict();
   }
+  signal?.throwIfAborted();
   touch(key, entry);
-  if (!entry.promise && !entry.complete) {
-    entry.promise = fill(entry, platform, url, limit, { collect, open });
+  if (!entry.promise && !entry.complete && (!personalList(platform,url)||sizeOf(entry)<limit)) {
+    entry.promise = fill(entry, platform, url, limit, { collect, open, progressive });
   }
-  await waitEnough(entry, limit);
+  entry.waiters++;
+  try {
+    await waitEnough(entry, limit, signal);
+    entry.served = true;
+  } finally {
+    entry.waiters--;
+    // A disconnected first viewer must not leave an unobserved full crawl running.
+    if (signal?.aborted && !entry.waiters && !entry.served) {
+      entry.controller?.abort();
+      if (entries.get(key) === entry) entries.delete(key);
+    }
+  }
   // 一张都没翻到：这才是真失败（站点拦截 / 需要登录 / 链接不对）。已经翻到过内容的，
   // 后续某一轮失败不该把已有画面清空 —— 前端拿到的是完整的旧清单 + 少一屏新图。
   if (!entry.items.length && !entry.boards.length && entry.error) throw new Error(entry.error);
@@ -167,6 +204,7 @@ export async function pictureWindow(platform, url, limit, { collect, open } = {}
 
 /** 测试与「刷新」用：丢掉某块画板的清单。 */
 export function forgetPictureIndex(platform, url) {
+  entries.get(keyOf(platform, url))?.controller?.abort();
   entries.delete(keyOf(platform, url));
 }
 

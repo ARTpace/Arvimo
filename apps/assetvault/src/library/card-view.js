@@ -86,6 +86,12 @@ function materialResolutionSelect(m,downloadedRes=new Set()){
  if(!isMaterial(m)&&!isHdri(m)&&!isFsSkybox(m))return '';
  return `<select class="material-resolution" data-material-resolution="${m.uid}" aria-label="材质下载精度" title="材质贴图下载精度（已下载精度会标注）">${['1K','2K','4K','8K'].map(r=>`<option value="${r}"${(m.materialResolution||'2K')===r?' selected':''}>${r}${downloadedRes.has(r)?'（已下载）':''}</option>`).join('')}</select>`;
 }
+/** Civitai 同一版本常有多个文件（safetensors / 预览图 / 配置），下载前就地选，选择写回模型对象。 */
+function civitaiFileSelect(m){
+ if(m.platform!=='civitai'||!Array.isArray(m.civitaiFiles)||m.civitaiFiles.length<2)return '';
+ const current=m.fileId||m.civitaiFiles[0].id;
+ return `<select class="civitai-file" data-civitai-file="${esc(m.uid)}" aria-label="Civitai 下载文件" title="选择这个版本要下载的文件">${m.civitaiFiles.map(file=>`<option value="${esc(file.id)}"${String(file.id)===String(current)?' selected':''}>${esc(String(file.name||file.id).slice(0,60))}</option>`).join('')}</select>`;
+}
 function card(m,{gallery=false}={}){
  if(m.albumPackage&&albumCard)return albumCard(m);
  const pictureMode=state.route==='discover'&&m.platform==='artstation'&&!state.modelOnly;
@@ -127,7 +133,7 @@ function card(m,{gallery=false}={}){
  // 重渲染后原样回填；下载时队列从模型上读，整批取第一张的选择（服务端会再校验一次）。
  // 卡片底栏一律图标化（2026-10-28）：文案收进 <span> 由 CSS 隐藏，保留在 DOM 里给无障碍与测试读。
  // 标签键已移除：平台标签现在自动读取、AI 标签后台生成，卡片上不再需要「标签」入口。
-    const materialResolution=materialFormatSelect(m)+materialResolutionSelect(m,downloadedRes);
+    const materialResolution=materialFormatSelect(m)+materialResolutionSelect(m,downloadedRes)+civitaiFileSelect(m);
  // 访客的下载键永远是「下载到我这台电脑」：主机上已有副本只意味着这次可以直传、不用重新下载，
  // 不该把按钮变成「已下载」并禁用——那会让访客以为文件已经在自己的电脑里。
  const dlBusy=busy,dlDisabled=busy||(!isVisitor&&downloaded);
@@ -222,5 +228,5 @@ const downloadButton=(downloaded&&!isVisitor)||m.platform==='local'?'':`<button 
  actions:`${state.route!=='discover'?exportControl:''}${downloadButton}${state.route!=='discover'&&!isVisitor?trashActions:''}`,
 });
 }
- return {imageUrl,card,materialResolutionSelect,materialFormatSelect};
+ return {imageUrl,card,materialResolutionSelect,materialFormatSelect,civitaiFileSelect};
 }

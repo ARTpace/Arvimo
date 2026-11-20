@@ -55,11 +55,10 @@ export const MODE_PRESETS = Object.freeze([
     gallery: false, modelOnly: false, localOnly: false, localKind: 'videos',
   },
   {
-    // 音频单开一档（原来是「影音」母类下的子类）：音频没有公开聚合源，与文档同规格 ——
-    // 发现页只给「链接解析」，资产库页按本地文件类型筛（localKind:'audio'）。
+    // 音乐平台按单曲分享链接解析；资产库按本地音频类型筛选。
     id: 'audio', groupId: 'audio-assets', localKinds: Object.freeze(['audio']), label: '音频', icon: 'music', legacyMode: '',
-    platformKind: '', allLabel: '', defaultPlatform: '',
-    gallery: false, modelOnly: false, localOnly: true, linkOnly: true, localKind: 'audio',
+    platformKind: 'audio', allLabel: '', defaultPlatform: 'netease',
+    gallery: false, modelOnly: false, localOnly: false, localKind: 'audio',
   },
 ].map(Object.freeze));
 

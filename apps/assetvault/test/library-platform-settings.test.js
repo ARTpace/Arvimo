@@ -10,13 +10,18 @@ import {platformModules,platformForFeed,enabledPlatform} from '../src/library/pl
 test('平台默认全开，支持全部关闭、恢复和重启持久化',async t=>{
  const dir=await fs.mkdtemp(path.join(os.tmpdir(),'sfx-platforms-'));t.after(()=>fs.rm(dir,{recursive:true,force:true}));
  const file=path.join(dir,'settings.json'),store=createPlatformSettings(file);
- // get() 里除开关外还多一个 pixabayKeySet（是不是填过 Pixabay key），判断「默认全开」时把它排除。
- const switches=settings=>Object.fromEntries(Object.entries(settings).filter(([key,value])=>typeof value==='boolean'&&key!=='pixabayKeySet'));
+ // get() 里除开关外还有 pixabayKeySet / civitaiKeySet（是否填过 key），判断「默认全开」时把它们排除。
+ const switches=settings=>Object.fromEntries(Object.entries(settings).filter(([key,value])=>typeof value==='boolean'&&!['pixabayKeySet','civitaiKeySet'].includes(key)));
  assert.ok(Object.values(switches(store.get())).every(Boolean));
  assert.equal(store.get().pixabayKeySet,false,'没填过 key 时只说「未设置」，不回空串以外的东西');
+ assert.equal(store.get().civitaiKeySet,false);
  const off=Object.fromEntries(platformModules().map(p=>[p.id,false]));await store.save(off);
  for(const id of Object.keys(off))assert.equal(createPlatformSettings(file).get()[id],false,`${id} 的关闭状态要落盘`);
  assert.equal(createPlatformSettings(file).get().pixabayKeySet,false);
+ await store.save({civitaiKey:'local-only-key'});
+ assert.equal(createPlatformSettings(file).get().civitaiKeySet,true);
+ assert.equal(createPlatformSettings(file).civitaiKey(),'local-only-key');
+ assert.equal(Object.hasOwn(createPlatformSettings(file).get(),'civitaiKey'),false,'key 明文不进 HTTP 返回体');
  await store.save({sketchfab:true});assert.equal(createPlatformSettings(file).enabled('sketchfab'),true);
  assert.equal(store.enabled('artstation'),false);assert.throws(()=>store.save({unknown:false}));
  assert.equal(platformForFeed('web'),'sketchfab');assert.equal(enabledPlatform(off,platformForFeed('art')),false);

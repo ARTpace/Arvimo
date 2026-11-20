@@ -96,13 +96,13 @@ export class CdpPage {
   }
 
   /** 导航并等 load（loadEventFired 或超时，超时不算失败，很多站永远等不到干净 load）。 */
-  async goto(url, { timeout = 25000, waitForQuiet = 0 } = {}) {
+  async goto(url, { timeout = 25000, loadTimeout = timeout, waitForQuiet = 0 } = {}) {
     let loaded = false;
     const off = this.on('Page.loadEventFired', () => { loaded = true; });
     try {
       await this.send('Page.navigate', { url }, timeout);
       const t0 = Date.now();
-      while (!loaded && Date.now() - t0 < timeout) await sleep(120);
+      while (!loaded && Date.now() - t0 < loadTimeout) await sleep(120);
       if (waitForQuiet > 0) {
         // 等网络安静：一段时间内没有新的 responseReceived
         let last = Date.now();

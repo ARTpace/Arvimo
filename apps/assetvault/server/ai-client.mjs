@@ -24,6 +24,7 @@ export const SEARCH_ENDPOINTS = Object.freeze({
   freestylized: '/api/freestylized/search',
   polyfork: '/api/polyfork/search',
   ambientcg: '/api/ambientcg/search',
+  civitai: '/api/civitai/search',
 });
 
 /** 平台 -> 下载队列的 kind。搜索结果的 model 对象原样传给 /api/downloads/tasks 即可。 */
@@ -36,6 +37,7 @@ export const PLATFORM_KINDS = Object.freeze({
   freestylized: 'freestylized',
   polyfork: 'polyfork',
   ambientcg: 'ambientcg',
+  civitai: 'civitai',
 });
 
 export class AVClientError extends Error {

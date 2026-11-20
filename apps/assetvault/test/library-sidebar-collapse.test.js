@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {setupSidebarCollapse} from '../src/library/sidebar-collapse.js';
+import {setupSidebarCollapse,setupCanvasSidebarReveal} from '../src/library/sidebar-collapse.js';
 
 test('rapid toggles reverse the visible animation and reduced motion settles immediately',t=>{
  const saved=new Map(['document','window','localStorage'].map(key=>[key,Object.getOwnPropertyDescriptor(globalThis,key)]));
@@ -10,8 +10,8 @@ test('rapid toggles reverse the visible animation and reduced motion settles imm
  const root={classList:{contains:key=>classes.has(key),remove:key=>classes.delete(key),toggle(key,on){if(on)classes.add(key);else classes.delete(key);}}};
  const button={setAttribute:(key,value)=>attributes[key]=value,addEventListener:(_,fn)=>click=fn};
  const main={getBoundingClientRect:()=>({left:classes.has('side-collapsed')?65:208}),animate(frames){const animation={frames,cancelled:false,cancel(){this.cancelled=true;}};animations.push(animation);return animation;}};
- globalThis.document={documentElement:root,querySelectorAll:()=>[],getElementById:()=>button,querySelector:()=>main};
- globalThis.window={matchMedia:()=>({matches:reduced}),dispatchEvent:()=>resizes++};
+ globalThis.document={documentElement:root,querySelectorAll:()=>[],getElementById:()=>button,querySelector:()=>main,addEventListener(){}};
+ globalThis.window={matchMedia:()=>({matches:reduced}),dispatchEvent:()=>resizes++,addEventListener(){}};
  globalThis.localStorage={getItem:()=>null,setItem(){}};
  setupSidebarCollapse();
  click();
@@ -26,4 +26,28 @@ test('rapid toggles reverse the visible animation and reduced motion settles imm
  assert.equal(animations[1].cancelled,true);
  assert.equal(classes.has('side-animating'),false);
  assert.equal(resizes,1);
+});
+
+test('画布导航支持同源 iframe 靠近展开、离开缓冲和返回取消收起',t=>{
+ const saved=new Map(['document','window'].map(key=>[key,Object.getOwnPropertyDescriptor(globalThis,key)]));
+ t.after(()=>{for(const [key,descriptor] of saved)if(descriptor)Object.defineProperty(globalThis,key,descriptor);else delete globalThis[key];});
+ t.mock.timers.enable({apis:['setTimeout']});
+ const classes=new Set(),root={classList:{contains:key=>classes.has(key),add:key=>classes.add(key),remove:key=>classes.delete(key)}};
+ let pointer,framePointer;
+ const frame={getBoundingClientRect:()=>({left:0}),contentDocument:{addEventListener:(type,fn)=>{if(type==='pointermove')framePointer=fn;}}};
+ const sidebar={contains:()=>false,getBoundingClientRect:()=>({right:190})};
+ globalThis.document={body:{dataset:{route:'canvas'}},getElementById:()=>sidebar,querySelectorAll:()=>[frame],addEventListener(){}};
+ globalThis.window={addEventListener:(type,fn)=>{if(type==='pointermove')pointer=fn;}};
+ setupCanvasSidebarReveal(root);
+ framePointer({clientX:40,target:{closest:()=>true}});t.mock.timers.tick(100);
+ assert.equal(classes.has('canvas-nav-open'),false,'悬停帧率组件不唤出导航');
+ framePointer({clientX:40});t.mock.timers.tick(40);
+ framePointer({clientX:40,buttons:1});t.mock.timers.tick(100);
+ assert.equal(classes.has('canvas-nav-open'),false,'按住拖动取消待展开计时');
+ framePointer({clientX:60});t.mock.timers.tick(79);assert.equal(classes.has('canvas-nav-open'),false);
+ t.mock.timers.tick(1);assert.equal(classes.has('canvas-nav-open'),true);
+ pointer({clientX:400});t.mock.timers.tick(400);assert.equal(classes.has('canvas-nav-open'),true);
+ pointer({clientX:200});t.mock.timers.tick(300);assert.equal(classes.has('canvas-nav-open'),true);
+ framePointer({clientX:500});t.mock.timers.tick(550);assert.equal(classes.has('canvas-nav-open'),false);
+ document.body.dataset.route='library';pointer({clientX:20});t.mock.timers.tick(100);assert.equal(classes.has('canvas-nav-open'),false);
 });

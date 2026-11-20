@@ -1095,10 +1095,39 @@ html.side-collapsed #sidebar .nav:hover:not(.active) i{
   background:var(--accent);box-shadow:0 0 5px #c9f35399;
 }
 
-/* 助手提示独立在图标轨上方，避免长文案覆盖分类与展开按钮。 */
+/* 助手提示位于小猫右上方，避开头部与下方操作区。 */
 .search-sticky{padding-top:16px}
 #search-panel .bot-bubble,
-#search-panel .bot-bubble.update-bubble{position:absolute;left:0;bottom:calc(100% + 4px - var(--bubble-safe-offset,0px));margin:0;width:max-content;max-width:min(360px,calc(100vw - 180px));white-space:normal;overflow-wrap:anywhere;flex-wrap:wrap;line-height:1.5;transform:translateY(4px);border-radius:10px}
+#search-panel .bot-bubble.update-bubble{position:absolute;left:84px;bottom:calc(100% - 12px - var(--bubble-safe-offset,0px));margin:0;width:max-content;max-width:min(460px,calc(100vw - 220px));white-space:normal;overflow-wrap:anywhere;flex-wrap:wrap;line-height:1.5;transform:translateY(4px);border-radius:10px}
 #search-panel .bot-bubble.show{animation:none;transform:translateY(0);transition:opacity .18s ease,transform .22s cubic-bezier(.2,.7,.3,1)}
 #search-panel .update-bubble-text{white-space:normal}
-@media(max-width:780px){.search-sticky{padding-top:16px}#search-panel .bot-bubble,#search-panel .bot-bubble.update-bubble{max-width:min(320px,calc(100vw - 100px))}}
+@media(max-width:780px){.search-sticky{padding-top:16px}#search-panel .bot-bubble,#search-panel .bot-bubble.update-bubble{max-width:min(320px,calc(100vw - 150px))}}
+
+/* The mascot keeps its character; light surfaces use pigment, not neon light. */
+html[data-theme=light] #search-panel{
+ --bg-panel:#fafbfc;--bg-input:#fff;--bg-btn-dark:#eef1f4;
+ --border-input:#cdd5dd;--primary-green-hover:#385b15;
+ border-color:#dce2e7;box-shadow:0 3px 12px #26313c08;
+}
+html[data-theme=light] #search-panel:focus-within{border-color:#b6c6a7;box-shadow:0 3px 12px #26313c0a}
+html[data-theme=light] #search-panel .search-field:focus-within{background:#fff;border-color:#789953;box-shadow:0 0 0 3px #4e751f12}
+html[data-theme=light] #search-panel input::placeholder{color:#75808c;opacity:1}
+html[data-theme=light] #search-panel :is(.select-trigger,.search-field>i,#filter-drawer-trigger,#search-clear){color:#586575}
+html[data-theme=light] #search-panel :is(.select-trigger,#search-clear):hover{background:#e9edf0;color:#26313c}
+html[data-theme=light] #search-panel #search-button{background:#4e751f;border-color:#4e751f;color:#fff!important;box-shadow:none}
+html[data-theme=light] #search-panel #search-button:hover:not(:disabled){background:#3e6119;border-color:#3e6119;color:#fff!important;box-shadow:none;transform:translateY(-1px)}
+html[data-theme=light] #search-panel #theme-breakdown-btn:hover{color:#385b15;background:#e4ecd9;border-color:#b6c6a7;transform:translateY(-1px)}
+html[data-theme=light] #search-panel :is(.cat-head,.cat-rim,.cat-ear-inner){filter:none}
+html[data-theme=light] #search-panel .cat-svg{filter:drop-shadow(0 2px 2px #26313c18)}
+html[data-theme=light] #search-panel :is(.bot-eye,.vault-bot-eye){box-shadow:none}
+html[data-theme=light] #search-panel .bot-bubble{background:#fff;border-color:#d7dde3;box-shadow:0 4px 14px #26313c12}
+html[data-theme=light] :is([data-picker-menu="search-platform"],#history-pop),html[data-theme=light] #search-panel .select-options{background:#fff;border-color:#d7dde3;box-shadow:0 8px 28px #26313c18}
+html[data-theme=light] [data-picker-menu="search-platform"] .picker-option{color:#26313c;text-shadow:none}
+html[data-theme=light] [data-picker-menu="search-platform"] .picker-option small{color:#626e7b}
+html[data-theme=light] [data-picker-menu="search-platform"] :is(.picker-option:hover,.picker-option.highlight){color:#41651e;text-shadow:none}
+html[data-theme=light] #search-panel .platform-select .picker-trigger{color:#26313c;--search-green:#41651e}
+html[data-theme=light] #search-panel .global-search>#theme-breakdown-btn{color:#586575}
+/* Bubble copy stays compact; full details remain available in the text title. */
+#search-panel .bot-bubble,#search-panel .bot-bubble.update-bubble{max-width:min(320px,calc(100vw - 140px));flex-wrap:nowrap;align-items:center}
+#search-panel .update-bubble-text{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden;white-space:normal;overflow-wrap:anywhere;max-height:3em;line-height:1.5}
+#search-panel .update-bubble-close{flex:0 0 auto}

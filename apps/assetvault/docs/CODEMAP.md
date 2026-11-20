@@ -23,6 +23,7 @@
 - `card-context-menu.js` — 卡片右键菜单（菜单挂 body、条目沿用 `data-action`、`buildItems` 是纯函数可单测）。四类本地卡（远端资产 / 素材包 / 图片序列 / 零散文件）在「打开与获取」组里都有**「打开所在文件夹」**（run 型，`ctx.onReveal` 由 `app.js` 注入本地 root+rel）；没有本地路径的资产卡不塞这颗键，避免死按钮。回归见 `test/library-card-context-menu.test.js`。
 
 ## 平台 / 源
+- `server/civitai.mjs` — Civitai 模型适配器：模型页 / 版本链接解析、官方 API 搜索、按版本选文件（优先 safetensors）、Range 续传下载、`info.json` 元数据。API key 由调用方注入，不进任务与日志；出域只走 `public-http.mjs`。测试：`test/library-civitai-download.test.js`。
 - `polyfork-ui.js` — Polyfork 筛选 UI：类别下拉（固定 9 个官方 class，不编计数）+ 排序；`read()` 输出 `{q,assetClass,sort}`。
 - `polyfork-params.js` — Polyfork 参数面板（预览弹窗右侧）：渲染 `-params.json` 的旋钮、持有当前值、分派给 `gltfPreview`。
   **颜色走 `setPolyforkColors()`（本地改顶点色），几何走 `bakePolyfork()`（本地生成器优先，见下）**；
@@ -66,6 +67,7 @@
 - `content-modes.js` — 旧三态纯逻辑，仅保留给历史测试与兼容读取；前端不再用它推高亮或决定平台。
 
 ## 下载
+- `server/civitai.mjs` — `kind:'civitai'` 的 runner 实现；`downloads.mjs` 只负责队列分派 / 进度 / 校验 / 提交，不在这里重复造任务系统。
 - `download-ui.js` / `download-card.js` / `download-progress.js` — 下载列表与单条卡片 / 进度。
 - `image-download.js` — 图片下载器（作品图 / 封面，带校验）。
 

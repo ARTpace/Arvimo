@@ -18,6 +18,7 @@ import {polyforkSearch} from './polyfork.mjs';
 import {simreadySearch} from './simready.mjs';
 import {collectPictureAssets, PICTURE_SITES as SERVER_PICTURE_SITES} from './picture-sites.mjs';
 import {searchUiverse, resolveUiverse} from './uiverse.mjs';
+import {civitaiSearch} from './civitai.mjs';
 import {pickMeta} from './collect-meta.mjs';
 import {mergeAutoTags} from '../src/library/auto-tags.js';
 import {platformModules, PICTURE_SITES, UI_SITES} from '../src/library/platforms.js';
@@ -32,6 +33,7 @@ const MODEL_SEARCHERS = Object.freeze({
   freestylized: freestylizedSearch,
   polyfork: polyforkSearch,
   simready: simreadySearch,
+  civitai: (input, ctx) => civitaiSearch(input, ctx),
 });
 
 const SEARCHABLE_PICTURES = Object.freeze(Object.values(PICTURE_SITES)
@@ -57,7 +59,18 @@ export const COLLECT_PLATFORMS = Object.freeze([
 ]);
 
 export const COLLECT_PLATFORM_IDS = Object.freeze(COLLECT_PLATFORMS.map(platform => platform.id));
+/** Catalogue keyword searches often AND every word; relax only generic English descriptors. */
+export function collectQueryFallbacks(query){
+ const original=String(query||'').trim();
+ if(!/^[a-z0-9\s-]+$/i.test(original))return [];
+ const words=original.split(/\s+/).filter(word=>!/^(stylized|stylised|realistic|handpainted|seamless|pbr|texture[s]?|material[s]?|asset[s]?|model[s]?|wall|floor|3d|2d)$/i.test(word));
+ const core=words.join(' ');
+ if(!core||core.toLowerCase()===original.toLowerCase())return [];
+ return [...new Set([core,words.length>1?words.at(-1):core])].filter(q=>q!==original).slice(0,2);
+}
 const BY_ID = new Map(COLLECT_PLATFORMS.map(platform => [platform.id, platform]));
+// Only adapters that already expose a native type receive it. Post-filtering remains authoritative.
+const NATIVE_TYPES={freestylized:{models:'models',textures:'textures',hdris:'skybox',images:'alphas',packs:'packs'},polyhaven:{models:'models',textures:'textures',hdris:'hdris'},ambientcg:{models:'3d-model,terrain',textures:'material,substance',hdris:'hdri,hdri-element'}};
 
 /** 同一张图在不同页面的 URL 会带 utm / 排序参数，去掉它们才能稳定去重。 */
 export function canonicalKey(raw) {
@@ -187,8 +200,8 @@ function uiElementItem(item, platform) {
  * search(platform, {query, limit}) → {items, next, warnings}
  * 只取第一页足够 limit 的条数：采集规则的上限本来就小（默认 20），翻页留给「手动翻更多」。
  */
-export function createCollectSearch({open = openPublic, searchers = MODEL_SEARCHERS, pictureCollector = collectPictureAssets, uiSearcher = searchUiverse, uiResolver = resolveUiverse} = {}) {
-  async function search(platform, {query = '', limit = 20, cursor = null, signal} = {}) {
+export function createCollectSearch({open = openPublic, searchers = MODEL_SEARCHERS, pictureCollector = collectPictureAssets, uiSearcher = searchUiverse, uiResolver = resolveUiverse, civitaiKey = ''} = {}) {
+  async function search(platform, {query = '', limit = 20, cursor = null, signal,assetType=''} = {}) {
     const meta = BY_ID.get(text(platform));
     if (!meta) throw Error(`不支持的采集平台：${platform}`);
     if (!meta.searchable) throw Error(`${meta.label} 不支持关键词搜索，只能钉作者页或画板页`);
@@ -215,7 +228,8 @@ export function createCollectSearch({open = openPublic, searchers = MODEL_SEARCH
     }
     const fn = searchers[platform];
     if (typeof fn !== 'function') throw Error(`${meta.label} 的搜索模块未接入`);
-    const data = await fn({q, cursor: cursor || undefined}, {signal, open});
+    const type=NATIVE_TYPES[platform]?.[assetType];
+    const data = await fn({q, cursor: cursor || undefined,...(type?{type}:{})}, {signal, open,...(platform==='civitai'?{apiKey:civitaiKey}:{})});
     return {
       platform, label: meta.label, kind: 'model',
       items: (data.models || []).slice(0, take).map(model => modelItem(model, platform)),

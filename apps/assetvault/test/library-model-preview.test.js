@@ -26,3 +26,22 @@ test('built canvas page uses the exact library viewer markup and shared module',
  const entry=fs.readFileSync(new URL('../src/library/model-preview.js',import.meta.url),'utf8');
  assert.ok(entry.includes("from './gltf-preview.js'"));
 });
+
+
+test('HTTP shared preview allows same-origin canvas embedding while the home page stays protected',async()=>{
+ const {createLibraryServer}=await import('../server/library.mjs');
+ const {fileURLToPath}=await import('node:url');
+ const server=createLibraryServer({staticRoot:fileURLToPath(new URL('../dist/library',import.meta.url))});
+ await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+ const base=`http://127.0.0.1:${server.address().port}`;
+ try{
+  const page=await fetch(base+'/model-preview.html');
+  assert.equal(page.status,200);
+  assert.match(page.headers.get('content-security-policy'),/frame-ancestors 'self'/);
+  assert.ok((await page.text()).includes('id="viewer-canvas"'));
+  const entry=await fetch(base+'/model-preview.js');assert.equal(entry.status,200);
+  const module=await fetch(base+'/gltf-preview.js');assert.equal(module.status,200);
+  const home=await fetch(base+'/');
+  assert.match(home.headers.get('content-security-policy'),/frame-ancestors 'none'/);
+ }finally{server.closeAllConnections();await new Promise(resolve=>server.close(resolve));}
+});

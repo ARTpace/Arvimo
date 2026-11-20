@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
   ARTSTATION_ARTIST_TABS,ARTSTATION_ARTIST_MAX_PAGE,ARTSTATION_ARTIST_PER_PAGE,ARTSTATION_ARTIST_PER_PAGE_MAX,
   artistParams,artistTabUrl,validateArtistCursor,normalizeArtist,
-  artstationArtist,artstationArtistProfile,
+  artstationArtist,artstationArtistProfile,artstationAccount,artstationFollowing,
 } from '../server/artstation-artist.mjs';
 
 const cover='https://cdna.artstation.com/p/assets/covers/images/011/655/236/smaller_square/artvostok-stumb.jpg?1530700342';
@@ -138,4 +138,17 @@ test('artstation-artist: the profile card is best-effort',async()=>{
   // 资料取不到时返回 null，调用方照常列作品
   assert.equal(await artstationArtistProfile('wlop',{open:async()=>({status:403,headers:{},stream:(async function*(){})()})}),null);
   await assert.rejects(artstationArtistProfile('../bad',{open}),/用户名/);
+});
+
+test('artstation account and following',async()=>{
+  const me=jsonOpen({username:'me_user',full_name:'Me'});
+  const account=await artstationAccount({open:me.open});
+  assert.equal(account.username,'me_user');
+  assert.equal(me.calls[0].url,'https://www.artstation.com/api/v2/users/me.json');
+  await assert.rejects(artstationAccount({open:async()=>({status:401,headers:{},stream:(async function*(){})()})}),/请先登录 ArtStation/);
+  const followed=jsonOpen({total_count:1,data:[{username:'wlop',full_name:'WLOP'}]});
+  const list=await artstationFollowing('me_user',{open:followed.open});
+  assert.equal(followed.calls[0].url,'https://www.artstation.com/users/me_user/following.json?page=1');
+  assert.equal(list.users[0].name,'WLOP');
+  assert.equal(list.users[0].url,'https://www.artstation.com/wlop');
 });

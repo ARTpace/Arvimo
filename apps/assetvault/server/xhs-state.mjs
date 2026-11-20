@@ -114,6 +114,20 @@ export function normalizeXhsImage(raw) {
   return s;
 }
 
+/** Keep video path/query signatures intact; prefer broadly supported H.264. */
+export function xhsVideoSources(video){
+  const value=unwrap(video)||{},streams=unwrap(unwrap(value.media)?.stream)||{},urls=[];
+  for(const codec of ['h264','h265']){
+    const entries=unwrap(streams[codec]);
+    const sorted=(Array.isArray(entries)?entries:[]).map(unwrap).filter(Boolean)
+      .sort((a,b)=>(Number(b.avgBitrate||b.videoBitrate)||0)-(Number(a.avgBitrate||a.videoBitrate)||0));
+    for(const entry of sorted)urls.push(entry.masterUrl||entry.master_url,...(entry.backupUrls||entry.backup_urls||[]));
+  }
+  const origin=unwrap(value.consumer)?.originVideoKey;
+  if(origin)urls.push(/^https?:\/\//i.test(origin)?origin:'https://sns-video-bd.xhscdn.com/'+String(origin).replace(/^\//,''));
+  return [...new Set(urls.filter(Boolean).map(url=>String(url).trim().replace(/&amp;/g,'&').replace(/^\/\//,'https://').replace(/^http:\/\//i,'https://')).filter(url=>/^https:\/\//i.test(url)))];
+}
+
 /**
  * 从一个 image 节点取最佳地址。
  * 优先级：infoList 里带 CRD / WB_DFT 的（更清晰）→ infoList[0] → urlDefault → urlPre → url。
@@ -156,6 +170,10 @@ export function parseXhsUrl(raw) {
   if (!value) return { type: 'unknown' };
   const qIndex = value.indexOf('?');
   const query = qIndex >= 0 ? value.slice(qIndex) : '';
+  const personal = value.match(/xiaohongshu\.com\/user\/(likes|history|following)(?:\/?[?#]|\/?$)/i);
+  if (personal) return {type: personal[1].toLowerCase(), query};
+  const profileNote=value.match(/xiaohongshu\.com\/user\/profile\/[A-Za-z0-9]{8,32}\/([A-Za-z0-9]{16,32})(?:[/?#]|$)/i);
+  if(profileNote)return {type:'note',noteId:profileNote[1],query};
   const profile = value.match(/xiaohongshu\.com\/user\/profile\/([A-Za-z0-9]{8,32})/i)
     || value.match(/xiaohongshu\.com\/user\/(?!profile)([A-Za-z0-9]{8,32})/i);
   if (profile) return { type: 'profile', userId: profile[1], query };
@@ -198,17 +216,16 @@ export function parseXhsNote(state, expectedNoteId = '') {
     const url = pickXhsImage(image);
     if (!url || seen.has(url)) continue;
     seen.add(url);
-    images.push({ url, ...imageSize(image) });
+    const liveUrls=xhsVideoSources({media:{stream:unwrap(image.stream)}});
+    images.push({ url, ...imageSize(image),...(liveUrls.length?{liveVideoUrl:liveUrls[0],liveVideoAlternates:liveUrls.slice(1)}:{}) });
   }
   if (!images.length) {
     const cover = pickXhsImage(note.cover) || pickXhsImage(note.image);
     if (cover) images.push({ url: cover, width: 0, height: 0 });
   }
 
-  const h264 = unwrap(note?.video?.media?.stream?.h264);
-  const videoUrl = (Array.isArray(h264) ? h264 : [])
-    .map((item) => String(unwrap(item)?.masterUrl || ''))
-    .find(Boolean) || '';
+  const candidates=xhsVideoSources(note.video);
+  const videoUrl=candidates[0]||'';
 
   const tags = (unwrap(note.tagList) || [])
     .map((tag) => String(unwrap(tag)?.name || '').trim())
@@ -222,7 +239,8 @@ export function parseXhsNote(state, expectedNoteId = '') {
     authorId: String(unwrap(note.user)?.userId || '').trim(),
     tags,
     images,
-    videoUrl: videoUrl ? normalizeXhsImage(videoUrl) : '',
+    videoUrl,
+    videoAlternates:candidates.slice(1),
   };
 }
 
@@ -311,17 +329,19 @@ export function parseXhsFeed(state) {
  */
 export function parseXhsApiItems(payload) {
   const root = unwrap(payload);
-  const items = unwrap(root?.data)?.items || root?.items || [];
+  const data=unwrap(root?.data);
+  const items = data?.items || data?.notes || root?.items || root?.notes || [];
   const out = [];
   const seen = new Set();
   for (const item of Array.isArray(items) ? items : []) {
     const card = unwrap(item?.note_card) || unwrap(item?.noteCard) || unwrap(item) || {};
-    const noteId = String(unwrap(item?.id) || card.note_id || card.noteId || '');
+    const noteId = String(unwrap(item?.id) || card.note_id || card.noteId || card.id || '');
     if (!noteId || seen.has(noteId)) continue;
     const cover = pickXhsImage(card.cover) || pickXhsImage(card.image) || pickXhsImage(card.image_list?.[0]);
     if (!cover) continue;
     seen.add(noteId);
     const user = unwrap(card.user) || {};
+    const likedAt=Number(item?.liked_at || item?.like_time || item?.liked_time || card.liked_at || card.like_time || 0)||0;
     out.push({
       noteId,
       cover,
@@ -331,6 +351,8 @@ export function parseXhsApiItems(payload) {
       // 顶层优先：详情页 URL 认这个 token。
       xsecToken: String(unwrap(item?.xsec_token) || unwrap(card.xsec_token) || '').trim(),
       likedCount: String(unwrap(unwrap(card.interact_info)?.liked_count) || '').trim(),
+      type:String(unwrap(card.type)||''),
+      ...(likedAt>0?{likedAt:likedAt<1e11?likedAt*1000:likedAt}:{}),
     });
   }
   return out;
@@ -351,7 +373,8 @@ export function parseXhsDomCards(cards) {
       title: String(unwrap(card?.title) || '').trim(),
       author: String(unwrap(card?.author) || '').trim(),
       authorId: '',
-      xsecToken: '',
+      xsecToken: String(card.xsecToken||''),
+      type: String(card.type||''),
       likedCount: '',
     });
   }

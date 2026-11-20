@@ -1,3 +1,6 @@
+import {isMusicSite} from '../src/library/music-platforms.js';
+import {runMediaJob} from './media-job.mjs';
+import {isSocialMediaSite} from '../src/library/short-video-platforms.js';
 import {revealInFileManager} from './reveal-path.mjs';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
@@ -15,6 +18,7 @@ import {runPolyforkJob} from './polyfork.mjs';
 import {runAmbientcgJob} from './ambientcg.mjs';
 import {runFabJob} from './fab.mjs';
 import {runUiverseJob} from './uiverse-job.mjs';
+import {runCivitaiJob} from './civitai.mjs';
 import {runImageJob,markImageBundleIncomplete} from './image-bundle.mjs';
 import {isTransientNetworkError} from './net-errors.mjs';
 import {isPictureSite} from './picture-sites.mjs';
@@ -44,7 +48,7 @@ const exists=p=>isFile(p)||isDir(p);
 const uidPattern=/^[a-f0-9]{32}$/;
 /** Both platforms feed one queue; the kind only decides which runner converts the model.
  *  `images` is the picture-only counterpart: no mesh, no FBX, no Blender — just the asset's pictures. */
-export const JOB_KINDS=new Set(['sketchfab','artstation','images','polyhaven','ambientcg','polypizza','kenney','freestylized','polyfork','simready','uielement','fab']);
+export const JOB_KINDS=new Set(['sketchfab','artstation','media','images','polyhaven','ambientcg','polypizza','kenney','freestylized','polyfork','simready','uielement','fab','civitai']);
 export const ARTSTATION_BATCH=20;
 /** Pictures are small, so a picture batch may be as wide as a model batch; the ceiling is about
  *  keeping one request understandable, not about payload size. */
@@ -124,6 +128,10 @@ export function modelSnapshot(m,kind){
  // A picture job keeps the asset's platform *alongside* its kind: the queue reads `kind` to pick a
  // runner, and the runner then reads `platform` to decide where the pictures live. Persisting both
  // means a restored queue re-dispatches to exactly the same source it was created with.
+ if(kind==='media'){
+  if((!isSocialMediaSite(m.platform)&&!isMusicSite(m.platform))||!/^https?:\/\//i.test(String(m.url||'')))throw Error('媒体下载需要支持平台的作品链接');
+  return {...common,kind:'media',platform:m.platform,url:String(m.url).slice(0,4096),assetType:isMusicSite(m.platform)?'audio':m.assetType==='images'?'images':'video',downloadable:false};
+ }
  if(kind==='images'){
   // Poly Haven 没有公开的"图片 API"——官方渲染图由 renders 接口给出、存在自家 CDN，把它拐去
   // Sketchfab 拿图必 404。这里单独分出来，平台和资产 ID 一起持久化，恢复队列时也能正确重派。
@@ -198,6 +206,13 @@ export function modelSnapshot(m,kind){
   if(!m.assetId)throw Error('Fab 资产 ID 缺失');
   return {...common,kind:'fab',platform:'fab',downloadable:true,url:String(m.url||`https://www.fab.com/listings/${m.assetId}`),assetId:String(m.assetId).slice(0,120),engineVersion:String(m.engineVersion||'').slice(0,20)};
  }
+ // Civitai 模型：uid 由 md5(modelId:versionId) 派生（下载器只认 32 位），
+ // modelId / versionId / fileId 必须随任务落库，恢复队列时才能重派到同一个版本文件。
+ if(kind==='civitai'){
+  if(!m.modelId&&!m.versionId)throw Error('Civitai 模型 ID 或版本 ID 缺失');
+  const source=m.url||`https://civitai.com/models/${m.modelId}${m.versionId?`?modelVersionId=${m.versionId}`:''}`;
+  return {...common,kind:'civitai',platform:'civitai',downloadable:true,assetType:'models',url:String(source).slice(0,2048),modelId:String(m.modelId||'').slice(0,20),versionId:String(m.versionId||'').slice(0,20),fileId:String(m.fileId||'').slice(0,200)};
+ }
  return {...common,kind:'sketchfab',platform:'sketchfab',downloadable:m.downloadable===true,url:`https://sketchfab.com/models/${m.uid}`};
 }
 /** 命名规则搬到了 folder-name.mjs：远程收藏卡也用同一套，才能原地接管同一个目录。 */
@@ -209,8 +224,8 @@ function optionKey(value){
 }
 const sameFolder=(a,b)=>canonicalPath(a)===canonicalPath(b);
 export class DownloadManager{
- constructor({dataDir,defaultFolder,runner=runExportWorker,artRunner=runArtstationWorker,imageRunner=runImageJob,polyRunner=runPolyhavenJob,simreadyRunner=runSimreadyJob,pizzaRunner=runPolypizzaJob,kenneyRunner=runKenneyJob,freestyleRunner=runFreestylizedJob,polyforkRunner=runPolyforkJob,materialRunner=runAmbientcgJob,uiverseRunner=runUiverseJob,fabRunner=runFabJob,verify=verifyArchive,browser=browserPath,blender=blenderPath,fbxConverter=convertGlbToFbx,blenderImporter=launchBlenderImport,materialImporter=launchBlenderMaterialImport,hdriImporter=launchBlenderHdriImport,folderPicker=nativeFolderPicker,autoStart=true,legacyRoots=[]}={}){
-  this.instanceId=randomUUID();this.dataDir=path.resolve(dataDir);this.defaultFolder=path.resolve(defaultFolder);this.runner=runner;this.artRunner=artRunner;this.imageRunner=imageRunner;this.polyRunner=polyRunner;this.pizzaRunner=pizzaRunner;this.simreadyRunner=simreadyRunner;this.kenneyRunner=kenneyRunner;this.freestyleRunner=freestyleRunner;this.polyforkRunner=polyforkRunner;this.materialRunner=materialRunner;this.uiverseRunner=uiverseRunner;this.fabRunner=fabRunner;this.verify=verify;this.browser=browser;this.blender=blender;this.fbxConverter=fbxConverter;this.blenderImporter=blenderImporter;this.materialImporter=materialImporter;this.hdriImporter=hdriImporter;this.folderPicker=folderPicker;this.autoStart=autoStart;this.jobs=[];this.workers=new Map();this.transfers=new Map();this.closed=false;this.baseUrl=null;this.revision=0;this.timer=null;this.persistTimer=null;this.warning='';
+ constructor({dataDir,defaultFolder,runner=runExportWorker,artRunner=runArtstationWorker,imageRunner=runImageJob,mediaRunner=runMediaJob,polyRunner=runPolyhavenJob,simreadyRunner=runSimreadyJob,pizzaRunner=runPolypizzaJob,kenneyRunner=runKenneyJob,freestyleRunner=runFreestylizedJob,polyforkRunner=runPolyforkJob,materialRunner=runAmbientcgJob,uiverseRunner=runUiverseJob,fabRunner=runFabJob,civitaiRunner=runCivitaiJob,civitaiKeyProvider=()=>'',verify=verifyArchive,browser=browserPath,blender=blenderPath,fbxConverter=convertGlbToFbx,blenderImporter=launchBlenderImport,materialImporter=launchBlenderMaterialImport,hdriImporter=launchBlenderHdriImport,folderPicker=nativeFolderPicker,autoStart=true,legacyRoots=[]}={}){
+  this.instanceId=randomUUID();this.dataDir=path.resolve(dataDir);this.defaultFolder=path.resolve(defaultFolder);this.runner=runner;this.artRunner=artRunner;this.imageRunner=imageRunner;this.mediaRunner=mediaRunner;this.polyRunner=polyRunner;this.pizzaRunner=pizzaRunner;this.simreadyRunner=simreadyRunner;this.kenneyRunner=kenneyRunner;this.freestyleRunner=freestyleRunner;this.polyforkRunner=polyforkRunner;this.materialRunner=materialRunner;this.uiverseRunner=uiverseRunner;this.fabRunner=fabRunner;this.civitaiRunner=civitaiRunner;this.civitaiKeyProvider=civitaiKeyProvider;this.verify=verify;this.browser=browser;this.blender=blender;this.fbxConverter=fbxConverter;this.blenderImporter=blenderImporter;this.materialImporter=materialImporter;this.hdriImporter=hdriImporter;this.folderPicker=folderPicker;this.autoStart=autoStart;this.jobs=[];this.workers=new Map();this.transfers=new Map();this.closed=false;this.baseUrl=null;this.revision=0;this.timer=null;this.persistTimer=null;this.warning='';
   this.settings={folder:this.defaultFolder,concurrency:1,retryLimit:1,paused:false};
   // 历史扫描根：落点迁到库内后，旧 downloadDir 里还有大量老任务文件，重启恢复要继续认它们。
   this.legacyRoots=legacyRoots.map(folder=>path.resolve(folder));
@@ -269,7 +284,10 @@ export class DownloadManager{
    const recovered=await recoverDownloads(this.jobs,[...new Set([this.settings.folder,...this.jobs.map(storageRoot).filter(Boolean),...this.legacyRoots])],{dismissed:this.dismissedDownloads,onSkipped:(file,error)=>skipped.push(`${path.basename(file)}：${error}`)});
    if(recovered&&fs.existsSync(this.store))fs.copyFileSync(this.store,this.store+'.before-recovery-'+Date.now());
    if(skipped.length)this.warning=[this.warning,`${skipped.length} 个本地文件未通过恢复校验：${skipped.slice(0,3).join('；')}`].filter(Boolean).join('；');
-   await fsp.mkdir(path.join(this.dataDir,'staging'),{recursive:true});this.save();return this;
+   // workers 是后台转换器的 per-attempt 工作根（data/workers/<job>-<attempt>）。各 runner 会先
+   // mkdir 自己的 workRoot 再 mkdtemp，但父目录缺失时任何一步漏建都会以 ENOENT 炸在
+   // 「找不到文件或目录」上，所以这里直接兜住父目录。
+   await fsp.mkdir(path.join(this.dataDir,'staging'),{recursive:true});await fsp.mkdir(path.join(this.dataDir,'workers'),{recursive:true});this.save();return this;
   }catch(e){fs.unlinkSync(this.lockPath);throw e;}
  }
  start(baseUrl){this.baseUrl=baseUrl;if(this.autoStart)this.pump();}
@@ -368,12 +386,13 @@ export class DownloadManager{
   const polyHdri=kind==='polyhaven'&&Array.isArray(input.models)&&input.models.length>0&&input.models.every(m=>m?.assetType==='hdris');
   const polyMixed=kind==='polyhaven'&&Array.isArray(input.models)&&input.models.some(m=>m?.assetType==='textures'||m?.assetType==='hdris')&&!polyMaterial&&!polyHdri;
   if(polyMixed)throw Error('Poly Haven 的模型、材质和 HDRI 请分批下载');
-  const noun=kind==='artstation'?' ArtStation 作品':kind==='images'?'资产图片':kind==='uielement'?' UI 元素':polyHdri?' Poly Haven HDRI':polyMaterial?' Poly Haven 材质':kind==='polyhaven'?' Poly Haven 模型':kind==='ambientcg'?' ambientCG 材质':kind==='fab'?' Fab 资产':kind==='polypizza'?' Poly Pizza 模型':kind==='kenney'?' Kenney 资源包':kind==='polyfork'?' Polyfork 模型':kind==='freestylized'?' FreeStylized 资产':'模型';
+  const noun=kind==='artstation'?' ArtStation 作品':kind==='images'?'资产图片':kind==='uielement'?' UI 元素':polyHdri?' Poly Haven HDRI':polyMaterial?' Poly Haven 材质':kind==='polyhaven'?' Poly Haven 模型':kind==='ambientcg'?' ambientCG 材质':kind==='fab'?' Fab 资产':kind==='civitai'?' Civitai 模型':kind==='polypizza'?' Poly Pizza 模型':kind==='kenney'?' Kenney 资源包':kind==='polyfork'?' Polyfork 模型':kind==='freestylized'?' FreeStylized 资产':'模型';
   if(!Array.isArray(input.models)||!input.models.length||input.models.length>batch)throw Error(`每批最多添加 ${batch} 个${noun}`);
   if(kind==='ambientcg'&&new Set(input.models.map(m=>m.sourceType||'material')).size>1)throw Error('ambientCG 不同类型的资产请分批下载');
   if(this.storageError)throw Error(this.storageError);if(this.jobs.length>=500)throw Error('任务记录已达 500 条，请清理已结束记录');
+  if(kind==='media'&&openInBlender)throw Error('视频与图集不支持发送到 Blender');
   const requestedOptions=openInBlender?{...input.options,output:'folder',format:'fbx'}:input.options;
-  const options=kind==='simready'?{output:'folder',format:'usd'}:kind==='fab'?{output:'folder'}:kind==='images'?imageOptions(requestedOptions):kind==='uielement'?{output:'folder'}:kind==='ambientcg'||polyMaterial?materialOptions(requestedOptions):polyHdri?{output:'folder',resolution:MATERIAL_RESOLUTIONS.has(requestedOptions?.resolution)?requestedOptions.resolution:'2K',textureFormat:'HDR'}:kind==='polypizza'||kind==='kenney'?{output:'folder',format:'glb'}:kind==='polyfork'?{output:'folder',format:requestedOptions?.format==='fbx'?'fbx':'glb'}:kind==='freestylized'?{output:'folder',format:'glb',resolution:MATERIAL_RESOLUTIONS.has(requestedOptions?.resolution)?requestedOptions.resolution:'2K'}:exportOptions(kind==='artstation'?{...requestedOptions,packMode:'glb'}:requestedOptions);
+  const options=kind==='media'?{output:'folder'}:kind==='simready'?{output:'folder',format:'usd'}:kind==='fab'?{output:'folder'}:kind==='civitai'?{output:'folder'}:kind==='images'?imageOptions(requestedOptions):kind==='uielement'?{output:'folder'}:kind==='ambientcg'||polyMaterial?materialOptions(requestedOptions):polyHdri?{output:'folder',resolution:MATERIAL_RESOLUTIONS.has(requestedOptions?.resolution)?requestedOptions.resolution:'2K',textureFormat:'HDR'}:kind==='polypizza'||kind==='kenney'?{output:'folder',format:'glb'}:kind==='polyfork'?{output:'folder',format:requestedOptions?.format==='fbx'?'fbx':'glb'}:kind==='freestylized'?{output:'folder',format:'glb',resolution:MATERIAL_RESOLUTIONS.has(requestedOptions?.resolution)?requestedOptions.resolution:'2K'}:exportOptions(kind==='artstation'?{...requestedOptions,packMode:'glb'}:requestedOptions);
   if(kind==='ambientcg'&&input.models.every(m=>m.sourceType==='substance'))options.textureFormat='SBSAR';
   const models=input.models.map(m=>modelSnapshot(m,kind)),added=[],duplicates=[],opened=[];
   // 已下载的重复项要「顺手送进 Blender」时，导入可能要几十秒，不能在循环里串行等：
@@ -457,7 +476,7 @@ export class DownloadManager{
    const materialJob=j.kind==='ambientcg'&&(!j.assetType||j.assetType==='textures')||j.kind==='polyhaven'&&j.assetType==='textures'||j.kind==='freestylized'&&(j.assetType==='textures'||j.assetType==='smart');
    const hdriJob=['polyhaven','ambientcg'].includes(j.kind)&&j.assetType==='hdris'||j.kind==='freestylized'&&j.assetType==='skybox';
    const bundleJob=j.kind==='ambientcg'||materialJob||hdriJob||j.kind==='kenney'||j.kind==='freestylized';
-   const imageBundle=j.kind==='images'||j.kind==='artstation'&&j.hasMarmoset===false||bundleJob;
+   const imageBundle=j.kind==='media'||j.kind==='images'||j.kind==='artstation'&&j.hasMarmoset===false||bundleJob;
   const folderOutput=j.options.output==='folder',wantFbx=!imageBundle&&j.options.format==='fbx'&&j.kind!=='polyfork';
   // Both folder delivery and FBX conversion need the loose files, so the staging tree is a
   // directory whenever either is asked for; a ZIP is packed from it afterwards if that is what
@@ -482,7 +501,7 @@ export class DownloadManager{
    }
   const art=j.kind==='artstation';
    this.log(j,`第 ${j.attempts} 次尝试，独立后台执行`);
-   this.update(j,{state:'running',stage:'starting',message:materialJob?'正在启动材质下载器':j.kind==='images'?'正在启动图片下载器':art?(imageBundle?'正在启动作品图片下载器':'正在启动 Marmoset 转换器'):'正在启动后台转换器',startedAt:Date.now(),bytesWritten:0,totalBytes:null,network:null});
+   this.update(j,{state:'running',stage:'starting',message:j.kind==='media'?'正在启动媒体下载器':materialJob?'正在启动材质下载器':j.kind==='images'?'正在启动图片下载器':art?(imageBundle?'正在启动作品图片下载器':'正在启动 Marmoset 转换器'):'正在启动后台转换器',startedAt:Date.now(),bytesWritten:0,totalBytes:null,network:null});
    const onProgress=p=>{if(signal.aborted)return;const message=String(p.message||'');if(p.stage!=='transferring')this.log(j,message);if(/MISSING_BLIT\.txt:/.test(message))j.warning='部分 CDN 贴图未经视图捕获校验，请检查外观及 MISSING_BLIT.txt';this.update(j,{message,stage:p.stage,state:p.stage==='transferring'?'transferring':'running',...(p.bytesWritten!==undefined?{bytesWritten:p.bytesWritten,totalBytes:p.totalBytes,transferRate:p.transferRate}:{})},{lazy:true});};
    // `uid` is handed to both runners: the archive verifier checks provenance by matching
    // info.json.uid against the job's uid, so the writer must not re-derive it independently.
@@ -490,7 +509,9 @@ export class DownloadManager{
    const runnerOptions=looseStage&&!folderOutput?{...j.options,output:'folder'}:j.options;
    // `hasMarmoset` rides along so the forked worker can pick its pipeline without re-reading the
    // artwork page first; it is persisted on the job, so a restored queue dispatches exactly the same way.
-    const meta=j.kind==='images'
+    const meta=j.kind==='media'
+    ?await this.mediaRunner({uid:j.uid,platform:j.platform,name:j.name,author:j.author,url:j.url,output:staged,workRoot:profile},{signal,progress:onProgress})
+    :j.kind==='images'
     ?await this.imageRunner({uid:j.uid,platform:j.platform,name:j.name,author:j.author,url:j.url,assetId:j.assetId,tags:j.tags,deliver:looseStage?'folder':'zip',output:directFolder?liveDir:staged,workRoot:profile,...(isPictureSite(j.platform)?{limit:PICTURE_SITE_IMAGE_MAX,totalBytes:directFolder?PICTURE_SITE_FOLDER_BYTES:PICTURE_SITE_IMAGE_BYTES}:{})},{signal,progress:onProgress})
     :j.kind==='ambientcg'
      ?await this.materialRunner({uid:j.uid,assetId:j.assetId,options:j.options,deliver:looseStage?'folder':'zip',output:staged,workRoot:profile},{signal,progress:onProgress})
@@ -512,6 +533,8 @@ export class DownloadManager{
      ?await this.uiverseRunner({uid:j.uid,url:j.url,assetId:j.assetId,name:j.name,author:j.author,tags:j.tags,output:staged},{signal,progress:onProgress})
     :j.kind==='fab'
      ?await this.fabRunner({uid:j.uid,assetId:j.assetId,options:j.options,output:staged,deliver:looseStage?'folder':'zip',workRoot:profile},{signal,progress:onProgress})
+    :j.kind==='civitai'
+     ?await this.civitaiRunner({uid:j.uid,modelId:j.modelId,versionId:j.versionId,fileId:j.fileId,url:j.url,name:j.name,author:j.author,tags:j.tags,output:staged,apiKey:this.civitaiKeyProvider()},{signal,progress:onProgress})
     :await this.runner({networkToken,uid:j.uid,options:runnerOptions,baseUrl:this.baseUrl,output:staged,profile},{signal,progress:onProgress});
    signal.throwIfAborted();
 
@@ -530,7 +553,7 @@ export class DownloadManager{
     deliverable=packed;folderDelivery=false;
    }
    signal.throwIfAborted();
-   this.update(j,{state:'validating',stage:'validating',message:j.kind==='simready'?'校验 USD 文件清单、大小及内容指纹':folderDelivery?(materialJob?'校验材质贴图清单、贴图内容及内容指纹':imageBundle?'校验作品图片清单、图片内容及内容指纹':'校验 GLB 网格、来源信息及内容指纹'):(materialJob?'校验 ZIP CRC、材质贴图清单、贴图内容及 SHA-256':imageBundle?'校验 ZIP CRC、作品图片清单、图片内容及 SHA-256':'校验 ZIP CRC、GLB 网格、来源信息及 SHA-256')});
+   this.update(j,{state:'validating',stage:'validating',message:j.kind==='media'?'校验媒体清单、文件内容和来源':j.kind==='simready'?'校验 USD 文件清单、大小及内容指纹':folderDelivery?(materialJob?'校验材质贴图清单、贴图内容及内容指纹':imageBundle?'校验作品图片清单、图片内容及内容指纹':'校验 GLB 网格、来源信息及内容指纹'):(materialJob?'校验 ZIP CRC、材质贴图清单、贴图内容及 SHA-256':imageBundle?'校验 ZIP CRC、作品图片清单、图片内容及 SHA-256':'校验 ZIP CRC、GLB 网格、来源信息及 SHA-256')});
    const verification=folderDelivery?await verifyFolder(deliverable,{uid:j.uid,signal}):await this.verify(deliverable,{uid:j.uid,signal});
    signal.throwIfAborted();
    if(verification.warning)j.warning='部分 CDN 贴图需检查；文件结构校验不代表材质视觉一致';
@@ -556,8 +579,8 @@ export class DownloadManager{
    // 有图取不回来时如实说清楚：卡片上写「已保存」却少了几张，比报错更让人没法判断。
    if(meta.failedCount>0)j.warning=(j.warning?j.warning+'；':'')+`有 ${meta.failedCount} 张图片取不回来，已跳过（可在下载目录里核对）`;
    if(meta.truncatedCount>0)j.warning=(j.warning?j.warning+'；':'')+`已达本机体积上限，还有 ${meta.truncatedCount} 张未下载`;
-   this.log(j,(materialJob?'材质已保存并通过校验：':imageBundle?'图片已保存并通过校验：':'导出已保存并通过校验：')+filePath);
-   const savedMessage=j.openInBlender&&(!imageBundle||materialJob)?(blender?.ok?(materialJob?'已保存并已把材质导入 Blender':'已保存并已发送到 Blender'):(materialJob?'已保存到本机，但未能导入 Blender':'已保存到本机，但未能发送到 Blender')):(folderDelivery?(materialJob?'材质已保存到本机，内容校验通过':imageBundle?'图片已保存到本机，内容校验通过':'已保存到本机，内容校验通过'):'已保存到本机，文件完整性校验通过');
+   this.log(j,(j.kind==='media'?'媒体已保存并通过校验：':materialJob?'材质已保存并通过校验：':imageBundle?'图片已保存并通过校验：':'导出已保存并通过校验：')+filePath);
+   const savedMessage=j.openInBlender&&(!imageBundle||materialJob)?(blender?.ok?(materialJob?'已保存并已把材质导入 Blender':'已保存并已发送到 Blender'):(materialJob?'已保存到本机，但未能导入 Blender':'已保存到本机，但未能发送到 Blender')):(folderDelivery?(j.kind==='media'?'媒体已保存到本机，内容校验通过':materialJob?'材质已保存到本机，内容校验通过':imageBundle?'图片已保存到本机，内容校验通过':'已保存到本机，内容校验通过'):'已保存到本机，文件完整性校验通过');
    // 平台官方封面（材质球 / 模型场景图）先落进包，再宣布「已保存」：
    // 资产库是在 saved 之后读目录的，晚一步写就会被包内 Color 贴图抢了封面
    // （2026-11-16「库里的图和平台搜索不一样」就是这么来的）。失败静默跳过。

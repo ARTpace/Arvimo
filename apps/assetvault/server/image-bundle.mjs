@@ -233,6 +233,9 @@ export function imageManifest({job,plan,files,skipped,status,failedCount,truncat
     platform:plan.platform,
     title:plan.title||job.name||null,
     author:plan.author||job.author||null,
+    // 作者主页：花瓣这类站给的是 huaban.com/user/用户名，资产库点开卡片时能直接进作者画板。
+    // 多作者的搜索包没有单一主页（plan 层留空），逐张的地址仍在 images[].url 里。
+    authorUrl:plan.authorUrl||null,
     url:job.url||null,
     source_url:job.url||null,
     source:plan.source||null,
@@ -244,7 +247,7 @@ export function imageManifest({job,plan,files,skipped,status,failedCount,truncat
     tags:mergeTags(plan.tags,job.tags,files.flatMap(f=>f.tags||[])),
     imageCount:files.length,
     // The manifest *is* the provenance for an image bundle: see the note above.
-    images:files.map(f=>({file:f.file,title:f.title,width:f.width,height:f.height,bytes:f.bytes,format:f.format,url:f.sourceUrl,...(f.tags?.length?{tags:f.tags}:{})})),
+    images:files.map(f=>({file:f.file,title:f.title,width:f.width,height:f.height,bytes:f.bytes,format:f.format,url:f.sourceUrl,authorUrl:f.authorUrl||plan.authorUrl||null,...(f.tags?.length?{tags:f.tags}:{})})),
     note:'作者在原站公开的图片（已取最大可下载尺寸）。请遵守原作品许可，未经授权请勿商用。',
     exportedAt:new Date().toISOString(),
     tool:'Arvimo / asset images',

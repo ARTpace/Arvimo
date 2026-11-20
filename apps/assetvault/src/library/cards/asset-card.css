@@ -92,7 +92,7 @@
 .gallery .model-card:hover{transform:none;box-shadow:none;border-color:var(--av-line,#3b4a5c)}
 .gallery .card-media{aspect-ratio:auto;background:var(--av-panel-raised,#141c25)}
 .gallery .card-media:after{display:none}
-.gallery .thumbnail{display:block;width:100%;height:auto;max-height:min(480px,calc(var(--masonry-width,var(--lib-col-min,190px)) * 1.8));aspect-ratio:auto;object-fit:contain;background:var(--av-panel-raised,#141c25)}
+.gallery .thumbnail{display:block;width:100%;height:auto;max-height:min(480px,calc(var(--masonry-width,var(--lib-col-min,190px)) * 1.8));aspect-ratio:1;object-fit:contain;background:var(--av-panel-raised,#141c25)}
 .gallery .model-card:hover .thumbnail{transform:none}
 .gallery .image-placeholder{height:auto;aspect-ratio:1}
 .gallery .card-type,.gallery .card-stats,.gallery .card-license,.gallery .card-bottom{display:none}
@@ -363,9 +363,6 @@ html.native-drag .thumbnail{-webkit-user-drag:none}/* @endsection */
 /* @section part-251 */
 .model-card:hover .ui-element-open,.model-card:focus-within .ui-element-open{opacity:1;transform:translateX(-50%) translateY(0)}/* @endsection */
 /* 默认作用域 */
-/* @section part-252 */
-.model-card.is-picked{outline:2px solid var(--accent);outline-offset:-2px}/* @endsection */
-/* 默认作用域 */
 /* @section part-253 */
 .model-card/* 框选中（还没松手）：只画在卡片外面，不参与布局（outline / box-shadow 不占尺寸），
    否则每帧改一次尺寸会让瀑布流把整块重排。 */
@@ -464,3 +461,7 @@ body[data-selection-mode] #grid .model-card[data-uid] .card-select{display:inlin
 /* 默认作用域 */
 /* @section shared-removal */
 .removal-ghost .bd-card-tools,.removal-ghost .card-select{visibility:hidden}/* @endsection */
+/* Civitai 版本文件选择：与材质精度下拉同一视觉密度，长文件名交给 title。 */
+.civitai-file{height:24px;max-width:96px;font-size:9px;border:0;background:var(--av-panel-raised,#141c26);color:#c3d6af}
+.civitai-file:hover{border-color:#a5c88055;color:var(--accent)}
+.civitai-file:focus-visible{outline:1px solid var(--accent);outline-offset:1px}

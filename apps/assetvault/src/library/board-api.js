@@ -56,8 +56,8 @@ export function createBoardApi({fetchImpl = globalThis.fetch} = {}) {
     rules: (ruleId = '') => col(`/rules${query({ruleId, limit: 50})}`),
     saveRule: rule => col('/rules', {method: 'POST', body: rule}),
     deleteRule: id => col(`/rules${query({id})}`, {method: 'DELETE'}),
-    runRule: (id, dryRun = false) => col('/run', {method: 'POST', body: {id, dryRun}}),
-    runs: ruleId => col(`/runs${query({ruleId, limit: 20})}`),
+    runRule: (id, dryRun = false, requestId = '') => col('/run', {method: 'POST', body: {id, dryRun,...(requestId?{requestId}:{})}}),
+    runs: (ruleId,requestId='') => col(`/runs${query({ruleId,requestId, limit: 20})}`),
     pending: () => col('/pending'),
     ack: uids => col('/pending/ack', {method: 'POST', body: {uids}}),
   };

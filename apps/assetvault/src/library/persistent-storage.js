@@ -27,6 +27,7 @@ export async function createPersistentStorage(local,request=fetch,options={}){
  for(const key of keys)cache[key]=values[key]??local?.getItem(key)??null;
  let pending=Promise.resolve(),scheduled=false,mutationsEnabled=options.mutations!==false,collectionsEnabled=options.collections!==false,assetOpsEnabled=options.assetOps!==false;
  let lastParsed=parse(cache[MAIN_STATE_KEY]);
+ const saveErrors=new Map();
  const dirty=new Map();
  const fileMoves=new Map();
  const report=message=>{
@@ -235,9 +236,10 @@ export async function createPersistentStorage(local,request=fetch,options={}){
      await postState(values);
     }
     if(main!==undefined)lastParsed=parsedMain;
+    for(const key of Object.keys(values))saveErrors.delete(key);
     options.onCommit?.({incremental,applied,keys:Object.keys(values),domains});
    }catch(error){
-    if(error.noFallback){report(error.message);return;}
+    if(error.noFallback){for(const key of Object.keys(values))saveErrors.set(key,error);report(error.message);return;}
     if(useDomains||canDiff){
      // 任一细粒度通道失败一律整块重放；同时永久关掉通道，避免每次输入都白撞一次老接口。
      collectionsEnabled=false;
@@ -245,11 +247,12 @@ export async function createPersistentStorage(local,request=fetch,options={}){
      try{
       await postState(values);
       if(main!==undefined)lastParsed=parsedMain;
+      for(const key of Object.keys(values))saveErrors.delete(key);
       options.onCommit?.({incremental:false,fallback:true,keys:Object.keys(values)});
-     }catch(fallbackError){report(fallbackError.message);}
-    }else report(error.message);
+     }catch(fallbackError){for(const key of Object.keys(values))saveErrors.set(key,fallbackError);report(fallbackError.message);}
+    }else {for(const key of Object.keys(values))saveErrors.set(key,error);report(error.message);}
    }
-  }).catch(error=>report(error.message)).finally(()=>{
+  }).catch(error=>{saveErrors.set('*',error);report(error.message);}).finally(()=>{
    scheduled=false;if(dirty.size)scheduleSave();
   });
  }
@@ -259,6 +262,11 @@ export async function createPersistentStorage(local,request=fetch,options={}){
  },
  // ADR-09：app.js 在 state 建好后挂补页回调；全选等操作要等目录补齐完成。
  catalogModels,catalogReady,setCatalogPageHandler,
+ async flush({strict=false}={}){
+  if(dirty.size)scheduleSave();
+  while(scheduled||dirty.size){await pending;if(dirty.size)scheduleSave();}
+  if(strict&&saveErrors.size)throw saveErrors.values().next().value;
+ },
  applyFileMoves(result){
   for(const change of result.changes||[])fileMoves.set(change.uid,{root:result.root,change:{...change,from:fileMoves.get(change.uid)?.change.from??change.from}});
   const patch=data=>{if(!data)return;applyLocalFileMoves(data.models,result);applyLocalFileMoves(data.trashed,result);};

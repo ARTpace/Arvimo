@@ -10,6 +10,50 @@ import {pictureWindow, forgetPictureIndex, pictureIndexStats} from '../server/pi
 const BOARD = 'https://huaban.com/boards/1001';
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
+test('小红书推荐按需续页，首批短页不触发后台全量并保留重试提示',async()=>{
+ const url='https://www.xiaohongshu.com/explore?test=home-paging';forgetPictureIndex('xiaohongshu',url);
+ const calls=[];
+ const collect=async(_platform,_args,{maxItems})=>{
+  calls.push(maxItems);const count=calls.length===1?15:45;
+  return {items:Array.from({length:count},(_,id)=>({url:`home-${id}`})),truncated:calls.length===1,personalPaging:1,warning:calls.length===1?'暂未返回后续推荐，可重试':''};
+ };
+ const first=await pictureWindow('xiaohongshu',url,24,{collect});
+ assert.equal(first.truncated,true);assert.match(first.warning,/重试/);assert.deepEqual(calls,[24]);
+ const next=await pictureWindow('xiaohongshu',url,84,{collect});
+ assert.equal(next.items.length,45);assert.equal(next.truncated,false);assert.deepEqual(calls,[24,84]);
+ forgetPictureIndex('xiaohongshu',url);
+});
+
+test('小红书关注清单按用户计数、逐窗口扩展，不触发全关注后台长抓取',async()=>{
+ const url='https://www.xiaohongshu.com/user/following?test=windows';forgetPictureIndex('xiaohongshu',url);
+ const calls=[];
+ const collect=async(_platform,_args,{maxItems})=>{
+  calls.push(maxItems);const count=Math.min(maxItems,100);
+  return {mode:'boards',items:[],boards:Array.from({length:count},(_,id)=>({id:String(id),url:`user-${id}`})),truncated:count<100,personalPaging:1};
+ };
+ const first=await pictureWindow('xiaohongshu',url,24,{collect});
+ assert.equal(first.boards.length,24);assert.equal(first.truncated,true);assert.equal(first.personalPaging,1);
+ const more=await pictureWindow('xiaohongshu',url,84,{collect});
+ assert.equal(more.boards.length,84);assert.equal(more.truncated,true);
+ const end=await pictureWindow('xiaohongshu',url,144,{collect});
+ assert.equal(end.boards.length,100);assert.equal(end.total,100);assert.equal(end.truncated,false);
+ assert.deepEqual(calls,[24,84,144]);forgetPictureIndex('xiaohongshu',url);
+});
+
+test('小红书赞过不足首屏但明确还有更多时，缓存不谎报结束',async()=>{
+ const url='https://www.xiaohongshu.com/user/likes?test=partial';forgetPictureIndex('xiaohongshu',url);
+ const calls=[];
+ const collect=async(_platform,_args,{maxItems})=>{
+  calls.push(maxItems);const count=maxItems===24?15:40;
+  return {items:Array.from({length:count},(_,id)=>({key:String(id),url:`image-${id}`})),truncated:count===15,personalPaging:1,order:'liked-desc'};
+ };
+ const first=await pictureWindow('xiaohongshu',url,24,{collect});
+ assert.equal(first.items.length,15);assert.equal(first.truncated,true);assert.equal(first.order,'liked-desc');
+ const more=await pictureWindow('xiaohongshu',url,84,{collect});
+ assert.equal(more.items.length,40);assert.equal(more.truncated,false);assert.deepEqual(calls,[24,84]);
+ forgetPictureIndex('xiaohongshu',url);
+});
+
 /** 假解析器：按 maxItems 截断，truncated 的语义与 picture-sites.collectPictureAssets 一致。
  *  「全量那一轮」故意慢 20ms：真实站点翻二十页 API 也要几秒，测试里得给后台留出
  *  「首屏已经返回、清单还在长」的那个窗口，否则永远测不到「中途不报 total」这条。 */

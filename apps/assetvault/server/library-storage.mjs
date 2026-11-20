@@ -339,7 +339,11 @@ export function createLibraryStorage(dataDir, downloads, options = {}) {
       await ensureIndex();
       const conn = await openDb();
       if (!conn) return null;
-      try { return conn.readCatalogPage(Number(offset) || 0, Number(limit) || 200); }
+      try {
+        const page=conn.readCatalogPage(Number(offset) || 0, Number(limit) || 200);
+        const restored=await restoreLibraryCovers({[MAIN_STATE_KEY]:JSON.stringify({models:page.items})},[],path.join(dataDir,'http-cache','json'));
+        return {...page,items:parseMainState(restored.values[MAIN_STATE_KEY]).models||page.items};
+      }
       catch (error) { onWarn(`资产库目录分页读取失败：${error.message}`); return null; }
       finally { conn.close(); }
     },
@@ -357,7 +361,7 @@ export function createLibraryStorage(dataDir, downloads, options = {}) {
       const values = await authoritative(snapshot);
       // 用户域的权威在 DB：前端刷新后要拿回自己的评分 / 备注 / 标签 / 收藏。
       // 文件里的用户域只是首次入库的种子，读取时一律以 DB 为准。
-      let dbCatalog = null;
+      let dbCatalog = null, pagedTotal = null;
       const conn = await openDb();
       if (conn) {
         try {
@@ -376,10 +380,19 @@ export function createLibraryStorage(dataDir, downloads, options = {}) {
       if (catalogFromDb) {
         const readConn = await openDb();
         if (readConn) {
-          try { dbCatalog = readConn.readCatalog(); }
-          catch (error) { onWarn(`资产库目录读取失败，已沿用文件快照：${error.message}`); }
+          try {
+            if(catalogPaged){
+              pagedTotal=readConn.readCatalogPage(0,1).total;
+              dbCatalog=readConn.readCatalog({active:false});
+            }else dbCatalog=readConn.readCatalog();
+          }
+          catch (error) { pagedTotal=null;dbCatalog=null;onWarn(`资产库目录读取失败，已沿用文件快照：${error.message}`); }
           finally { readConn.close(); }
         }
+      }
+      if(pagedTotal!==null){
+        const base=parseMainState(values[MAIN_STATE_KEY]);
+        values[MAIN_STATE_KEY]=JSON.stringify({...base,models:[],trashed:dbCatalog.trashed});
       }
       /**
        * 给旧前端一份「看得全」的视图：把用户 / 探测 / 会话三个域合并回主 blob。
@@ -402,7 +415,7 @@ export function createLibraryStorage(dataDir, downloads, options = {}) {
        * 合法历史资产，必须让前端看见；顺序按服务端分配的 position 而不是 blob 数组下标。
        * 三道闸：DB 目录为空不接管、只有内容真变了才换字符串、读失败 / 回退开关走旧视图。
        */
-      if (dbCatalog && (dbCatalog.models.length || dbCatalog.trashed.length)) {
+      if (dbCatalog && (pagedTotal !== null || dbCatalog.models.length || dbCatalog.trashed.length)) {
         const base = parseMainState(values[MAIN_STATE_KEY]);
         const same = JSON.stringify(base.models) === JSON.stringify(dbCatalog.models)
           && JSON.stringify(base.trashed) === JSON.stringify(dbCatalog.trashed);
@@ -417,19 +430,12 @@ export function createLibraryStorage(dataDir, downloads, options = {}) {
        * 一起给；models 交给 GET /api/library/catalog/page 分批取。DB 没起来时不给瘦身视图，
        * 免得前端拿到空目录又拿不到分页接口，直接白屏。
        */
-      if (catalogPaged && catalogFromDb) {
-        const conn = await openDb();
-        if (conn) {
-          let total = 0;
-          try { total = conn.readCatalogPage(0, 1).total; }
-          catch (error) { onWarn(`资产库目录计数失败：${error.message}`); }
-          finally { conn.close(); }
+      if (pagedTotal !== null) {
           const paged = parseMainState(result.values[MAIN_STATE_KEY]);
           paged.models = [];
           result.values = {...result.values, [MAIN_STATE_KEY]: JSON.stringify(paged)};
           result.catalogPaged = true;
-          result.catalogTotal = total;
-        }
+          result.catalogTotal = pagedTotal;
       }
       return result;
     },

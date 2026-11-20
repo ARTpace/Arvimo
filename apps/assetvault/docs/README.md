@@ -10,6 +10,7 @@
 - [代码地图：改动前先读](CODEMAP.md)
 - [资产库开发文档：契约、阶段与后续路线](asset-library-development.md)
 - [画板体系与智能收集画板开发文档](board-development.md)
+- [AI 找资产：自然语言 → 画板（含拼图视觉筛选）](ai-asset-hunt.md)
 - [第三方代码与许可证声明](THIRD_PARTY.md)
 - [完整变更记录](CHANGELOG.md)
 - [发布流程](releases.md) / [逐版发布说明](release-notes/)
@@ -25,6 +26,7 @@
 
 ## 性能与界面
 
+- [资产库与画布性能、交互优化开发方案](library-canvas-performance-plan.md)
 - [资产加载优化](loading-optimization.md)
 - [系统资源优化](resource-optimization.md)
 - [交互流畅度](interaction-smoothness.md)

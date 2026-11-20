@@ -68,9 +68,13 @@ export function normalizeRule(input, now = Date.now()) {
     boardId: text(data.boardId).trim(),
     boardName: text(data.boardName).trim().slice(0, COLLECT_LIMITS.name),
     name: text(data.name).trim().slice(0, COLLECT_LIMITS.name) || '未命名收集规则',
-    platforms: strings(data.platforms, COLLECT_LIMITS.platforms),
+    platforms: [...new Set(strings(data.platforms, COLLECT_LIMITS.platforms))],
     query: text(data.query).trim().slice(0, COLLECT_LIMITS.query),
+    scope: ['local','both'].includes(data.scope)?data.scope:'platform',
+    queries: [...new Set(strings(data.queries,3).map(q=>q.slice(0,COLLECT_LIMITS.query)))].filter(q=>q!==text(data.query).trim().slice(0,COLLECT_LIMITS.query)).slice(0,2),
+    maxCalls: Math.max(1,Math.min(12,number(data.maxCalls,12))),
     expand: data.expand === true,
+    dedupe: data.dedupe === 'board' ? 'board' : 'global',
     filters: normalizeRuleFilters(data.filters),
     limit: Math.max(1, Math.min(COLLECT_LIMITS.perRun, number(data.limit, 20))),
     frequency,
@@ -102,6 +106,16 @@ export function normalizeRun(input) {
     failed: Math.max(0, number(data.failed)),
     platforms,
     warnings: strings(data.warnings, 20),
+    ...(data.requestId ? {
+      requestId: text(data.requestId).slice(0,100), fingerprint:text(data.fingerprint).slice(0,64),
+      status: ['running','completed','partial','failed','interrupted'].includes(data.status)?data.status:'failed',
+      candidates: (Array.isArray(data.candidates)?data.candidates:[]).slice(0,60).map(item=>({
+        uid:text(item.uid).slice(0,32),name:text(item.name).slice(0,200),platform:text(item.platform).slice(0,60),
+        thumbnail:text(item.thumbnail).slice(0,4000),url:text(item.url).slice(0,4000),assetType:text(item.assetType).slice(0,40),
+      })),
+      addedUids:strings(data.addedUids,60),
+      board:data.board&&typeof data.board==='object'?{ok:data.board.ok===true,reason:text(data.board.reason).slice(0,160),count:number(data.board.count)}:{ok:false,reason:'未执行'},
+    }:{}),
   };
 }
 
@@ -178,9 +192,10 @@ export function createCollectRules({file, now = Date.now, io = fs} = {}) {
       const current = await load();
       const existing = text(input?.id) ? current.rules.find(rule => rule.id === text(input.id)) : null;
       const rule = normalizeRule({...existing, ...input, updatedAt: now()}, now());
+      if(rule.scope!=='local'&&new Set((Array.isArray(input?.platforms)?input.platforms:[]).map(value=>text(value).trim()).filter(Boolean)).size>COLLECT_LIMITS.platforms)throw Error('每轮最多选择 12 个平台');
       if (!rule.name.trim()) throw Error('规则名称不能为空');
       if (!rule.boardId) throw Error('请先选择一个画板');
-      if (!rule.platforms.length) throw Error('至少选择一个平台');
+      if (rule.scope!=='local'&&!rule.platforms.length) throw Error('至少选择一个平台');
       if (!rule.query.trim()) throw Error('请填写要收集的关键词');
       // 只有新建、或频率/小时真的变了才重算下次触发，改个名字不该把今天的计划推走。
       if (!existing) rule.nextRunAt = rule.frequency === 'daily' ? nextDailyAt(rule.hour, now()) : 0;
@@ -204,6 +219,14 @@ export function createCollectRules({file, now = Date.now, io = fs} = {}) {
       });
       return removed;
     },
+    async beginRun(ruleId,result){
+      const run=normalizeRun({...result,ruleId,status:'running'});
+      await commit(store=>{
+        if(store.runs.some(item=>item.requestId===run.requestId))throw Error('运行标识已存在，请核对原任务');
+        return {...store,runs:[run,...store.runs.filter(item=>item.id!==run.id)].slice(0,COLLECT_LIMITS.runs)};
+      });
+      return run;
+    },
     /** 采集结束回写：运行记录 + 规则状态 + 去重索引一次原子落盘。 */
     async recordRun(ruleId, result, seenKeys = []) {
       const key = text(ruleId).trim();
@@ -226,7 +249,7 @@ export function createCollectRules({file, now = Date.now, io = fs} = {}) {
         rules[index] = next;
         const seen = {...store.seen};
         for (const item of seenKeys) if (item) seen[text(item).slice(0, 200)] = stamp;
-        return {...store, rules, runs: [run, ...store.runs].slice(0, COLLECT_LIMITS.runs), seen: pruneSeen(seen)};
+        return {...store, rules, runs: [run, ...store.runs.filter(item=>item.id!==run.id)].slice(0, COLLECT_LIMITS.runs), seen: pruneSeen(seen)};
       });
       return run;
     },

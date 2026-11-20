@@ -14,7 +14,7 @@ export const BOARD_ACTIVE_EVENT = 'assetvault:board-active';
 export function createBoardDeck({
   doc = globalThis.document, win = globalThis.window,
   esc = String, icon = () => '', toast, store, api,
-  onOpen, onCanvas, onAll, onNew, onSmart, onRule, onRename, onDelete,
+  onOpen, onCanvas, onAll, onNew, onSmart, onRule, onRename, onDelete, onCollect,
 } = {}) {
   const section = doc.querySelector('#board-deck');
   const host = doc.querySelector('#board-deck-grid');
@@ -167,6 +167,8 @@ export function createBoardDeck({
   // 所以按 id 从文档取，而不是从这个画板区里找。
   doc?.getElementById?.('board-deck-new')?.addEventListener('click', () => { closeQuick(); onNew?.(); });
   doc?.getElementById?.('board-deck-smart')?.addEventListener('click', () => { closeQuick(); onSmart?.(); });
+  // 收集规则：原来命令条上那颗 ⚡ 键，按 2026-11-18 反馈收进这份菜单，命令条只剩一颗「画板」。
+  doc?.getElementById?.('board-deck-collect')?.addEventListener('click', () => { closeQuick(); onCollect?.(); });
   // 命令条上的画板按钮：点开是一份两项的小菜单，点任意一项或点外面就收起。
   const quickBtn = doc?.getElementById?.('bd-quick-btn');
   const quickMenu = doc?.getElementById?.('bd-quick-menu');

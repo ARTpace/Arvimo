@@ -11,7 +11,7 @@
 // 所以两边都从这里取：服务端原样返回 SERVER_CAPABILITIES，启动器用 serverIsCurrent() 判定。
 // 加一个前端要用的新接口 = 在这里加一个能力位，两侧自动同步，没有第二处要记得改的地方。
 
-export const SERVER_VERSION = '3.32.4';
+export const SERVER_VERSION = '3.33.0';
 
 /**
  * 服务端当前具备的能力。新增能力位之后，旧进程会在下次启动时被自动换掉。
@@ -29,6 +29,9 @@ export const SERVER_CAPABILITIES = Object.freeze({
   // 视频源四站（Pexels / Coverr / Civitai / Pixabay）：老进程的 PICTURE_SITES 里没有这四个 id，
   // 视频模式一解析就是「该图站暂不支持抓取」—— 看着像网络问题，其实是进程没换。
   videoSites: true,
+  // Civitai 模型下载（/api/civitai/search、/api/civitai/resolve、kind='civitai'）。
+  // 老进程没有这些路由也没有对应 runner，前端列表里点了只会 404 / 退化成 Sketchfab。
+  civitaiModels: true,
   version: SERVER_VERSION,
   platformModules: true,
   simreadyAssets: true,

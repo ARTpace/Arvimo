@@ -1,3 +1,5 @@
+import {SHORT_VIDEO_SITES,extractShareUrl} from './short-video-platforms.js';
+import {MUSIC_SITES} from './music-platforms.js';
 // Platform registry for the unified discovery search.
 //
 // One search box serves every platform. Everything that differs per platform — the picker label,
@@ -9,9 +11,9 @@ export const ALL='all';
 // Result-feed registry. A platform only names feeds; anything that has to *do* something per feed
 // (which endpoint it hits, what it is called in the status line, that its skeleton exists in state)
 // is looked up here instead of being an if/else somewhere in app.js.
-export const FEEDS=['search','art','web','polyhaven','ambientcg','polypizza','kenney','freestylized','polyfork','simready','uiverse','fab'];
-export const FEED_LABELS={search:'Sketchfab',art:'ArtStation',web:'链接解析',polyhaven:'Poly Haven',ambientcg:'ambientCG',polypizza:'Poly Pizza',kenney:'Kenney',freestylized:'FreeStylized',polyfork:'Polyfork',simready:'NVIDIA SimReady',uiverse:'Uiverse',fab:'Fab'};
-export const FEED_ENDPOINTS={search:'/api/search',art:'/api/artstation/search',web:'/api/scan',polyhaven:'/api/polyhaven/search',ambientcg:'/api/ambientcg/search',polypizza:'/api/polypizza/search',kenney:'/api/kenney/search',freestylized:'/api/freestylized/search',polyfork:'/api/polyfork/search',simready:'/api/simready/search',uiverse:'/api/uiverse/search',fab:'/api/fab/search'};
+export const FEEDS=['search','art','web','polyhaven','ambientcg','polypizza','kenney','freestylized','polyfork','simready','uiverse','fab','civitai'];
+export const FEED_LABELS={search:'Sketchfab',art:'ArtStation',web:'链接解析',polyhaven:'Poly Haven',ambientcg:'ambientCG',polypizza:'Poly Pizza',kenney:'Kenney',freestylized:'FreeStylized',polyfork:'Polyfork',simready:'NVIDIA SimReady',uiverse:'Uiverse',fab:'Fab',civitai:'Civitai 模型'};
+export const FEED_ENDPOINTS={search:'/api/search',art:'/api/artstation/search',web:'/api/scan',polyhaven:'/api/polyhaven/search',ambientcg:'/api/ambientcg/search',polypizza:'/api/polypizza/search',kenney:'/api/kenney/search',freestylized:'/api/freestylized/search',polyfork:'/api/polyfork/search',simready:'/api/simready/search',uiverse:'/api/uiverse/search',fab:'/api/fab/search',civitai:'/api/civitai/search'};
 export const feedEndpoint=mode=>FEED_ENDPOINTS[mode]||FEED_ENDPOINTS.web;
 export const feedLabel=mode=>FEED_LABELS[mode]||mode;
 
@@ -19,6 +21,8 @@ export const feedLabel=mode=>FEED_LABELS[mode]||mode;
 // 在这里加一条 + 在 server/picture-sites.mjs 的 PICTURE_SITES 加同 id 的 resolve 实现即可，
 // 前端不再出现 if/else 长链。URL 解析、下载队列、本地图片库全部复用既有链路。
 export const PICTURE_SITES=Object.freeze({
+ ...MUSIC_SITES,
+ ...SHORT_VIDEO_SITES,
   pixiv:{id:'pixiv',summary:'插画与漫画创作社区，寻找角色和二次元参考',label:'Pixiv',tag:'二次元插画',group:'插画 · 动漫',hosts:['pixiv.net','www.pixiv.net'],example:'https://www.pixiv.net/artworks/151233234',hint:'作品页或画师主页（users/xxx），整站作品全抓'},
   safebooru:{id:'safebooru',summary:'动漫插画图库，按标签寻找角色与场景参考',label:'Safebooru',tag:'动漫图库',group:'插画 · 动漫',hosts:['safebooru.org','www.safebooru.org','cdn.safebooru.org'],example:'https://safebooru.org/index.php?page=post&s=list&tags=landscape',search:true,home:'https://safebooru.org/',hint:'输入标签搜索（空格分隔多个标签），或粘标签列表页；单次最多 1000 张'},
   yandere:{id:'yandere',summary:'高清动漫插画，适合角色立绘与画风参考',label:'Yande.re',tag:'动漫壁纸',group:'插画 · 动漫',hosts:['yande.re','www.yande.re','files.yande.re','assets.yande.re'],example:'https://yande.re/post?tags=touhou',search:true,hint:'输入标签搜索，或粘标签页；本机网络封了 yande.re 时自动用 Konachan 同源标签出图，结果标题会标明来源'},
@@ -70,7 +74,7 @@ export const uiSiteFromUrl=url=>{
 };
 export const isUiSite=id=>Boolean(UI_SITES[id]);
 /** 图站分组顺序与一句话简介；组名写在每条 PICTURE_SITES 的 group 上，这里只定展示次序，避免两处清单打架。 */
-export const PICTURE_GROUP_ORDER=['插画 · 动漫','壁纸','摄影图库','AI 图库','设计灵感','视频素材','其他'];
+export const PICTURE_GROUP_ORDER=['插画 · 动漫','壁纸','摄影图库','AI 图库','设计灵感','视频素材','音频素材','其他'];
 const PICTURE_GROUP_NOTES={
  '插画 · 动漫':'二次元插画、角色图集与同人作品',
  '壁纸':'高清 / 4K 壁纸与摄影背景',
@@ -78,6 +82,7 @@ const PICTURE_GROUP_NOTES={
  'AI 图库':'AI 生图作品与模型出图，可直接当参考',
  '设计灵感':'平面、UI 与作品集类灵感采集',
  '视频素材':'免版权视频与 AI 短片，卡片可直接播放',
+ '音频素材':'音乐分享链接解析、试听与原始音频下载',
 };
 /** 按 group 派生分组清单（空组自动丢弃），设置页与任何列表都读它，不再手写第二份。 */
 export const PICTURE_SITE_GROUPS=PICTURE_GROUP_ORDER
@@ -128,6 +133,7 @@ export const ORIGIN_COPY={
  simready:'NVIDIA SimReady 的 CC BY 4.0 USD 模型',
  uiverse:'Uiverse 的社区 UI 动效组件',
  fab:'Fab 的 3D 资产与引擎素材',
+ civitai:'Civitai 的 AI 模型版本',
 };
 
 export const PLATFORMS=[
@@ -135,7 +141,7 @@ export const PLATFORMS=[
   id:ALL,
   label:'全部平台',
   hint:'按统一题材同时检索各站能对上的资产',
-  feeds:['search','art','polyhaven','ambientcg','polypizza','kenney','freestylized','polyfork','simready','fab'],
+  feeds:['search','art','polyhaven','ambientcg','polypizza','kenney','freestylized','polyfork','simready','fab','civitai'],
   placeholder:'搜索关键词或粘贴链接，例如 character、robot、props',
   suggestions:[['character','角色'],['robot','机器人'],['props','道具'],['weapon','武器'],['architecture','建筑']],
   // 全部平台只有一棵统一树：两平台共用一套分类 / 排序 / 范围，组头一键筛整组、叶子标注覆盖面。
@@ -193,6 +199,17 @@ export const PLATFORMS=[
   suggestions:[['character','角色'],['environment','环境'],['props','道具'],['vehicle','载具'],['weapon','武器']],
   filters:'filters-fab',
   note:'下载需先登录 Epic 账号，且只能下载你已拥有 / 已领取的资产。',
+ },
+ {
+  id:'civitai',
+  description:'AI 绘图社区的模型库：Checkpoint、LoRA、Embedding 等可按版本下载原文件，保留触发词与来源信息。',
+  label:'Civitai 模型',
+  hint:'AI 模型 · 按版本选择文件 · 需填 API key',
+  feeds:['civitai'],
+  placeholder:'搜索 Civitai 模型，例如 anima、flux lora',
+  suggestions:[['checkpoint','大模型'],['lora','LoRA'],['embedding','Embedding'],['style','风格模型']],
+  filters:null,
+  note:'下载原文件需要在设置 → 平台模块填写 Civitai API key；关键词检索可用公开接口。',
  },
  {
   id:'polypizza',
@@ -279,6 +296,7 @@ export const PLATFORM_TAG={
  simready:'USD 仿真模型',
  uiverse:'UI 动效组件',
  fab:'3D 资产商城',
+ civitai:'AI 模型 · LoRA / 大模型',
 };
 /**
  * 每个平台能给出的内容：model = 可下载 / 转 3D 的资产，image = 图片，video = 视频，ui = 界面代码。
@@ -298,13 +316,14 @@ export const PLATFORM_KINDS={
  freestylized:['model'],
  polyfork:['model'],
  fab:['model'],
+ civitai:['model'],
  uiverse:['ui'],
  'pexels-video':['video'],
  coverr:['video'],
  'civitai-video':['video'],
  'pixabay-video':['video'],
 };
-export const platformKinds=id=>PLATFORM_KINDS[id]||(PICTURE_SITES[id]?.kind==='video'?['video']:['model']);
+export const platformKinds=id=>PLATFORM_KINDS[id]||(['video','audio'].includes(PICTURE_SITES[id]?.kind)?[PICTURE_SITES[id].kind]:['model']);
 /** 视频站：卡片是 <video>，落盘是 mp4，与图片站共用解析链路但归另一个模式。 */
 export const isVideoSite=id=>platformKinds(id).includes('video');
 /** 平台官网：设置页每张卡片的「官网」跳转目标，与 PLATFORMS 的 id 一一对应。 */
@@ -320,14 +339,15 @@ export const PLATFORM_HOME={
  fab:'https://www.fab.com',
  simready:'https://hf-mirror.com/datasets/nvidia/simready-assets',
  uiverse:'https://uiverse.io',
+ civitai:'https://civitai.com',
 };
 /**
  * 「既能出 3D 又能出图」的平台：3D 分组里已经有一张卡，图站区再列一张镜像卡（tag 换成图片视角），
  * 让找参考图的人不用先判断「这个平台算不算图站」。两处共用同一个 platform id，切换任意一边立即同步。
- * Civitai 暂不反向列进 3D 分组 —— AV 目前只有它的图片通道、没有模型下载，列进去会是个点不动的卡。
+ * Civitai 现在同时有模型与图库两条通道，模型卡下面用一张镜像卡指回图片视角。
  */
 export const PLATFORM_IMAGE_CAPS=[
- {id:'artstation',tag:'作品图 · 参考图'},
+ {id:'civitai',tag:'模型出图 · 参考图'}, {id:'artstation',tag:'作品图 · 参考图'},
  {id:'polyhaven',tag:'PBR 材质 · HDRI'},
  {id:'ambientcg',tag:'PBR 材质'},
  {id:'kenney',tag:'2D 素材 · 精灵图'},
@@ -339,7 +359,7 @@ export const DEFAULT_PLATFORM=ALL;
 export const pictureSiteSearchable=id=>Boolean(PICTURE_SITES[id]?.search);
 /** 需要登录态（或过一次人机验证）才放行的站点：这些站显示「登录」按钮。
  *  登录窗口里登录 / 验证完，cookie 自动入库；之后解析走纯 HTTP，不再每次开浏览器。 */
-export const PICTURE_LOGIN_SITES=new Set(['zcool','huaban','pinterest','pixiv','civitai','flickr','500px','pexels','designspiration','artstation','xiaohongshu','fab']);
+export const PICTURE_LOGIN_SITES=new Set(['douyin','kuaishou','bilibili','weibo','netease','kuwo','qishui','zcool','huaban','pinterest','pixiv','civitai','flickr','500px','pexels','designspiration','artstation','xiaohongshu','fab']);
 export const pictureSiteLoginable=id=>PICTURE_LOGIN_SITES.has(String(id||''));
 /** 图站的「首页推荐」入口：切到这个平台时先自动解析这一屏，别让结果区只剩一段说明文字。
  *  返回空串 = 这个站没有可靠的推荐入口（例如 Pixiv 的首页作品要登录态），保持原来的说明卡。 */
@@ -358,20 +378,21 @@ export const picturePlatformById=id=>{
    // loginFor 是站点自己的说法（小红书＝「关键词搜索和博主主页」），展示层不再替它编理由。
    login:pictureSiteLoginable(site.id),
    loginFor:site.loginFor||'',
+   keywordNotice:site.keywordNotice||'',searchAlternative:site.searchAlternative||'',
   note:site.search
    ?'搜索：直接输入关键词回车；也可以粘作品页 / 作者主页 / 画板页地址。'
    :'按链接解析：把作品页 / 标签页地址粘到搜索框，回车即可。',
-  placeholder:site.search
+  placeholder:site.placeholder||(site.search
    ?`输入关键词搜索 ${site.label}${site.example?`，或粘贴链接，例如 ${site.example}`:''}`
-   :`粘贴 ${site.label} 的作品页 / 标签页链接${site.example?`，例如 ${site.example}`:''}`,
+   :`粘贴 ${site.label} 的作品页 / 标签页链接${site.example?`，例如 ${site.example}`:''}`),
  };
 };
 /** 图片 / 视频模式逐站浏览，不提供跨站整合的「全部平台」选项。 */
 export const platformsForMode=mode=>{
  // 「全部平台」只属于跨站检索：无模式 / 模型。图片与视频都逐站浏览，UI 只有 Uiverse 一站。
  const list=PLATFORMS.filter(item=>item.id===ALL?(!mode||mode==='model'):(!mode||platformKinds(item.id).includes(mode)));
- if(mode==='image')for(const site of Object.values(PICTURE_SITES))if(site.kind!=='video')list.push(picturePlatformById(site.id));
- if(mode==='video')for(const site of Object.values(PICTURE_SITES))if(site.kind==='video')list.push(picturePlatformById(site.id));
+ if(mode==='image')for(const site of Object.values(PICTURE_SITES))if(!['video','audio'].includes(site.kind))list.push(picturePlatformById(site.id));
+ if(['video','audio'].includes(mode))for(const site of Object.values(PICTURE_SITES))if(site.kind===mode)list.push(picturePlatformById(site.id));
  return list;
 };
 export const platformById=id=>id==='link'?LINK_PLATFORM:(PLATFORMS.find(platform=>platform.id===id)||picturePlatformById(id)||PLATFORMS[0]);
@@ -405,6 +426,7 @@ export const jobKindOf=models=>{
   if(set.has('polyfork')&&set.size===1)return 'polyfork';
   if(set.has('ambientcg')&&set.size===1)return 'ambientcg';
  if(set.has('fab')&&set.size===1)return 'fab';
+ if(set.has('civitai')&&set.size===1)return 'civitai';
   // UI 元素：落的是代码（index.html + style.css），不是图片也不是模型。
   if(set.has('uiverse')&&set.size===1)return 'uielement';
   if(set.has('artstation')&&set.size===1)return 'artstation';
@@ -437,7 +459,7 @@ export const LINK_ROUTES=[
 ];
 
 export function routeLink(raw){
- const value=String(raw??'').trim();
+ const value=extractShareUrl(raw);
  if(!value)return {id:'empty',platform:'web',label:'',url:value,error:'请先粘贴一个链接'};
  let parsed;
  try{parsed=new URL(value);}catch{return {id:'invalid',platform:'web',label:'无法识别',url:value,error:'这不是完整网址，请粘贴含 https:// 的链接'};}

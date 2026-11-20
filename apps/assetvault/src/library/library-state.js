@@ -27,10 +27,10 @@ export function collectModels(current,incoming,limit=LIBRARY_LIMIT){
  return {models:[...map.values()],added,refused};
 }
 /**
- * Export defaults. UI-hidden choices are deliberately fixed: direct folder output, GLB + FBX,
+ * Export defaults. UI-hidden choices are deliberately fixed: direct folder output, GLB,
  * texture download, PNG texture conversion and fast local writing are always on.
  */
-const OPTION_DEFAULTS={packMode:'model',maxTextureEdge:0,output:'folder',format:'fbx',downloadTextures:true,pngOnly:true,fastZip:true,scanLimit:120,optionsVersion:3};
+const OPTION_DEFAULTS={packMode:'model',maxTextureEdge:0,output:'folder',format:'glb',downloadTextures:true,pngOnly:true,fastZip:true,scanLimit:120,optionsVersion:3};
 /**
  * Move a pre-v2 profile onto the new defaults, but never overwrite a choice the user made: only
  * the *old default values* (packMode "full", maxTextureEdge 2048) are remapped, so an explicit
@@ -45,7 +45,7 @@ function normalizeOptions(stored){
   maxTextureEdge:[0,4096].includes(saved.maxTextureEdge)?saved.maxTextureEdge:OPTION_DEFAULTS.maxTextureEdge,
   scanLimit:[120,300,500].includes(saved.scanLimit)?saved.scanLimit:OPTION_DEFAULTS.scanLimit,
  };
- return {...base,output:'folder',format:'fbx',downloadTextures:true,pngOnly:true,fastZip:true,optionsVersion:OPTION_DEFAULTS.optionsVersion};
+ return {...base,output:'folder',format:'glb',downloadTextures:true,pngOnly:true,fastZip:true,optionsVersion:OPTION_DEFAULTS.optionsVersion};
 }
 /** 回收站上限：移除的模型连评分/备注/我的标签一起暂存，超过上限挤掉最旧的。 */
 export const TRASH_LIMIT=200;

@@ -672,8 +672,16 @@ export const Model3DCanvasCard: React.FC<Model3DCanvasCardProps> = React.memo(pr
         frame.current?.contentWindow?.postMessage({type:'assetvault:model-preview',url:new URL(fileUrl, location.href).href,name:filename}, location.origin);
     }, [ready, props.element.fileUrl, props.element.name, props.element.fileExtension]);
     if (!embedded) return <StandaloneModel3DCanvasCard {...props} />;
-    return <div className="w-full h-full flex flex-col overflow-hidden rounded-xl bg-[#0c1118]" style={{minWidth:260,minHeight:200}}>
-        <div className="flex items-center gap-2 px-3 py-2 text-xs text-white/80 cursor-move shrink-0" title="拖动标题栏移动卡片"><Box size={14}/><span className="truncate">{props.element.name}</span></div>
-        <iframe ref={frame} src={new URL('../model-preview.html',location.href).href} title={props.element.name + ' · 3D 预览'} allow="fullscreen" className="w-full flex-1 min-h-0 border-0" style={{pointerEvents:props.isSelected?'auto':'none'}} />
+    // ponytail: retain the shared interactive viewer and canvas selection/resize bindings;
+    // only the card shell changes to the external-title media-card layout.
+    return <div data-model3d-card="embedded" className="relative w-full h-full select-none" style={{minWidth:260,minHeight:200}}>
+        <div className="absolute bottom-full left-0 right-0 mb-2 flex h-7 items-center gap-2 pr-10 text-sm text-[var(--ui-text-muted,#aaa99f)] cursor-move" title="拖动标题栏移动卡片">
+            <Box size={17} className="shrink-0"/><span className="truncate" title={props.element.name}>{props.element.name}</span>
+        </div>
+        <div className="w-full h-full rounded-[22px] border border-white/25 bg-[#1c1c1a] p-2 shadow-sm">
+            <div className="w-full h-full overflow-hidden rounded-[16px]">
+                <iframe ref={frame} src={new URL('../model-preview.html',location.href).href} title={props.element.name + ' · 3D 预览'} allow="fullscreen" className="block w-full h-full border-0" style={{pointerEvents:props.isSelected?'auto':'none'}} />
+            </div>
+        </div>
     </div>;
 });

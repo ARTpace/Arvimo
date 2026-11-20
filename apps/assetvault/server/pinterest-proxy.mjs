@@ -10,8 +10,11 @@ import { ensurePinGrabber, PIN_GRABBER_URL } from './pinterest-launcher.mjs';
 import { tagList } from './tag-list.mjs';
 
 const COLLECT_TIMEOUT = 90_000;
-const STATUS_POLL_INTERVAL = 800;
+const STATUS_POLL_INTERVAL = 250;
 const COLLECT_RPC_TIMEOUT = 12_000;
+// pin-grabber 单次上限。关键词一页就能拿满；链接预览按调用方要的张数截断，下载再要全量。
+const KEYWORD_CAP = 80;
+const LINK_CAP = 250;
 
 let chain = Promise.resolve();
 function enqueue(task) {
@@ -39,14 +42,21 @@ async function postCollect(body) {
   if (!data.ok) throw new Error(data.error || '启动 Pinterest 采集失败');
 }
 
-async function waitForDone(signal) {
+async function waitForDone(signal, onPartial) {
   const deadline = Date.now() + COLLECT_TIMEOUT;
+  let seen = 0;
   while (Date.now() < deadline) {
     signal?.throwIfAborted();
     const st = await getStatus();
     if (!st) throw new Error('无法连接到 Pinterest 抓取服务（pin-grabber 未运行）');
     if (st.state === 'err') throw new Error(st.error || 'Pinterest 采集出错');
-    if (st.state === 'preview' || st.state === 'ok' || st.state === 'idle') return st;
+    const got = Array.isArray(st.images) ? st.images.length : 0;
+    // 采集还在跑时，每多一页就交出去。调用方可以先把首屏返回，不必等后面几页。
+    if (onPartial && got > seen) {
+      seen = got;
+      onPartial(st);
+    }
+    if (st.state === 'preview' || st.state === 'ok') return st;
     await new Promise((r) => setTimeout(r, STATUS_POLL_INTERVAL));
   }
   throw new Error('Pinterest 采集超时（可能触发反爬，稍后重试）');
@@ -70,6 +80,8 @@ function toItems(images) {
       // 整句标题 / 描述不按词拆开（避免把一句话拆成几十个噪声标签），只取显式 #话题。
       const hashtags = `${title} ${desc}`.match(/(?:^|\s)#([^\s#@]+)/g) || [];
       const tags = tagList([board, ...hashtags.map((t) => t.trim().replace(/^#/, ''))].filter(Boolean));
+      const username = String(im.username || '');
+      const author = String(im.author || username);
       return {
         url: im.orig || im.preview,
         title: title || board || '',
@@ -77,6 +89,9 @@ function toItems(images) {
         height: Number(im.h) || 0,
         pid: im.pid || null,
         tags,
+        author,
+        // 作者主页走现成的画板列表：点卡片上的名字会打开这个人的公开画板。
+        authorUrl: /^[\w.-]+$/.test(username) ? `https://www.pinterest.com/${username}/` : '',
       };
     })
     .filter((i) => i.url);
@@ -87,7 +102,7 @@ function toItems(images) {
  * - 以 http(s):// 开头 → mode=link（pin-grabber 自动识别画板 / 作者 / 搜索页 / 直链）
  * - 否则 → mode=keyword（Pinterest 关键词搜索）
  */
-export async function resolvePinterest({ url }, { signal, maxItems = Infinity } = {}) {
+export async function resolvePinterest({ url }, { signal, maxItems = Infinity, onProgress } = {}) {
   const text = String(url || '').trim();
   if (!text) throw new Error('请输入 Pinterest 关键词或粘贴链接');
   const isUrl = /^https?:\/\//i.test(text);
@@ -112,14 +127,29 @@ export async function resolvePinterest({ url }, { signal, maxItems = Infinity } 
       author: data.author || segments[0], source: text, cover: data.boards[0]?.cover || null, rendition: 'original' };
   }
   const key = pinCacheKey(mode, text);
+  const cap = mode === 'keyword' ? KEYWORD_CAP : LINK_CAP;
+  const preview = Number.isFinite(maxItems) && maxItems > 0;
   // 下载全量（maxItems=Infinity）优先复用已采集结果，避免重复触发 90s 采集。
-  if (maxItems === Infinity && pinCache.has(key)) return pinCache.get(key);
-  const count = isUrl ? 250 : 80;
+  // 预览缓存张数不够时不能拿来当全量，否则下载会被截成首屏。
+  const cached = pinCache.get(key);
+  if (maxItems === Infinity && cached && cached.items.length >= cap) return cached;
+  // 首屏窗口要 72 张，和关键词上限 80 差一页。直接要满 80，一次请求就够，索引不会再补抓一轮。
+  let count = preview ? Math.max(1, Math.min(cap, maxItems)) : cap;
+  if (mode === 'keyword' && preview && cap - count <= 30) count = cap;
   await ensurePinGrabber();
   const state = await enqueue(async () => {
     signal?.throwIfAborted();
     await postCollect({ mode, text, count });
-    return waitForDone(signal);
+    return waitForDone(signal, onProgress && ((st) => {
+      const items = toItems(st.images);
+      if (!items.length) return;
+      onProgress({
+        items,
+        title: isUrl ? 'Pinterest 图站' : `Pinterest · ${text}`,
+        author: 'Pinterest',
+        cover: items[0].url,
+      });
+    }));
   });
   const items = toItems(state.images);
   if (!items.length) throw new Error('Pinterest 没有返回任何图片（链接无效或触发反爬，见 pin-grabber 日志）');
@@ -135,8 +165,10 @@ export async function resolvePinterest({ url }, { signal, maxItems = Infinity } 
     client: 'pinterest',
     label: 'Pinterest',
     total: items.length,
+    // 只对关键词标记截断。画板采集不看 count，标了截断会把整块画板再爬一遍。
+    truncated: mode === 'keyword' && preview && items.length >= count && count < cap,
   };
-  pinCache.set(key, result);
+  if (!preview || items.length >= cap) pinCache.set(key, result);
   return result;
 }
 

@@ -174,11 +174,14 @@ export function mountArtflow(host,{resolve,onCount,onStatus,onSynced,onOpenLibra
    * 现在：网络层失败先退避重试两次；仍失败才回落到本地副本，并给一句可执行的提示，
    * 不再把画布留白。
    */
+  let savedEtag='',savedDocument=null;
   const fetchSaved=async()=>{
     try{
-      const res=await fetch('/api/library/artflow-board',{headers:LOCAL_HEADERS,cache:'no-store'});
+      const res=await fetch('/api/library/artflow-board',{headers:{...LOCAL_HEADERS,...(savedEtag&&savedDocument?{'If-None-Match':savedEtag}:{})},cache:'no-store'});
+      if(res.status===304&&savedDocument)return {saved:savedDocument};
       if(res.ok){
         const saved=await res.json();
+        savedEtag=res.headers.get('ETag')||'';savedDocument=saved||null;
         return {saved:saved||null};
       }
       if(res.status===404)return {saved:null};
@@ -218,12 +221,12 @@ export function mountArtflow(host,{resolve,onCount,onStatus,onSynced,onOpenLibra
     busy=true;
     try{
       const saved=await readSaved();
-      if(!dirty&&saved&&JSON.stringify(saved)!==JSON.stringify(baseDocument)){
+      if(!dirty&&saved&&saved!==baseDocument&&JSON.stringify(saved)!==JSON.stringify(baseDocument)){
         baseDocument=saved;canvasBaseline=saved;
         showBoards(saved.boards);
         post({type:'assetvault:command',command:'restore-document',document:saved});
         onSynced?.();
-      }
+      }else if(!dirty&&saved)baseDocument=saved;
       if(pendingBoard){post({type:'assetvault:command',command:'select-board',boardId:pendingBoard});pendingBoard='';}
     }catch{}finally{busy=false;if(dirty)scheduleSave();}
   };
@@ -292,6 +295,9 @@ export function mountArtflow(host,{resolve,onCount,onStatus,onSynced,onOpenLibra
       // Only the workspace default follows the host; personal board backgrounds win.
       const color=palette.getPropertyValue('--av-bg-color').trim()||'#0d1117';
       style.textContent=`[data-bp-board-background="theme"]{--bp-canvas-bg:${color}!important;--bp-canvas-bg-image:${palette.getPropertyValue('--av-bg-image')||'none'}!important;background-color:${color}!important}`;
+      const light=document.documentElement.dataset.theme==='light';
+      if(light)style.textContent+=`:root{color-scheme:light;--ui-bg-color:#f7f8fa!important;--ui-text:#26313c!important;--ui-border:#d7dde3!important;--ui-hover:#e4e9ee!important;--button-bg-color:#eef1f4!important;--bp-ui-surface:#f7f8fa!important;--bp-ui-surface-strong:#ffffff!important;--bp-ui-raised:#ffffff!important;--bp-ui-subdued:#edf0f3!important;--bp-ui-text:#26313c!important;--bp-ui-muted:#626e7b!important;--bp-ui-border:#d7dde3!important;--bp-ui-hover:#e4e9ee!important;--bp-accent:#4e751f!important;--bp-accent-soft:#e4ecd9!important}`;
+
     }catch{/* The frame may still be navigating. */}
   }
   window.addEventListener('assetvault:appearance-changed',syncAppearance);

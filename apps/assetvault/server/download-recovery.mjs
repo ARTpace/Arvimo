@@ -29,8 +29,8 @@ export async function recoverDownloads(jobs,roots,{onSkipped=()=>{},dismissed=ne
    try{
     const verification=await (folder?verifyFolder(file):verifyArchive(file));
     const info=verification.info;if(!/^[a-f0-9]{32}$/.test(info?.uid))continue;
-    const kind=info.kind==='images'?'images':info.platform||'sketchfab';
-    if(!['images','sketchfab','artstation','polyhaven','ambientcg','polypizza','kenney','freestylized'].includes(kind))continue;
+    const kind=['images','media'].includes(info.kind)?info.kind:info.platform||'sketchfab';
+    if(!['media','images','sketchfab','artstation','polyhaven','ambientcg','polypizza','kenney','freestylized'].includes(kind))continue;
     const resolution=info.resolution||info.files?.map(f=>f.url?.match(/(?:\/|_)([1248])k(?:\/|_|\.)/i)?.[1]).filter(Boolean)?.[0];
     const options={output:folder?'folder':'zip'};
     if(resolution)options.resolution=/^\d$/.test(resolution)?resolution+'K':resolution.toUpperCase();

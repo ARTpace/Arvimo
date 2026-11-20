@@ -53,8 +53,8 @@ export function createAdvancedQuery({$, state, renderGrid, toast, esc, icon, res
   // library-paging.js 的「加载更多」按钮通过这个缝转发，不必反向 import 面板。
   state.onRemoteMore = () => paged.more();
   // 协作接入缝：别人改了资产库（服务端广播过来）时重新取当前页。
-  // 只重取这一页，不整库刷新 —— 50 万资产下整库刷新是不可接受的。
-  state.onRemoteRefresh = () => paged.first(payload());
+  // 只重取用户已浏览的范围，避免切回资产库时分页缩回首页；不整库刷新。
+  state.onRemoteRefresh = () => paged.refresh(payload());
   // 格式状态由 app.js 装配（面板与本地网格共用同一个实例）；单独测试时可退化成内存态。
   const fmt = formatFilter || createFormatFilterState({storage: null});
   // 格式 UI 由「文件」图标面板渲染（同一份 fmt 实例）；advanced-query 不再维护 dialog 副本。

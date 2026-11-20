@@ -26,6 +26,57 @@ async function fixture(t,legacy){
  return {service,storage,dataDir,localImporter,dropImporter};
 }
 
+test('条件读取空闲不返回全文，库侧改名和同毫秒画布保存均失效版本',async t=>{
+ const f=await fixture(t);
+ await f.service.readVersioned();
+ const first=await f.service.readVersioned();
+ assert.ok(first.document);assert.ok(first.etag);
+ const idle=await f.service.readVersioned(first.etag);
+ assert.equal(idle.unchanged,true);assert.equal(idle.document,undefined);
+ await f.storage.withDbWrite(conn=>{const item=listCollections(conn)[0];saveCollection(conn,{...item,name:'库侧新名'});});
+ const changed=await f.service.readVersioned(first.etag);
+ assert.equal(changed.document.boards[0].name,'库侧新名');assert.notEqual(changed.etag,first.etag);
+ const settled=await f.service.readVersioned(changed.etag);
+ const base=settled.document||changed.document;
+ const edited=structuredClone(base);edited.boards[0].zoom=2;
+ await f.service.save({document:edited,base});
+ const saved=await f.service.readVersioned(settled.etag);
+ assert.equal(saved.document.boards[0].zoom,2);
+ const restarted=createCanvasBoards({storage:f.storage,dataDir:f.dataDir,dropImporter:f.dropImporter,localImporter:f.localImporter});
+ const current=await restarted.readVersioned();
+ assert.equal((await restarted.readVersioned(current.etag)).unchanged,true);
+});
+
+test('千节点画布双客户端过期保存合并不同节点修改，条件读最终一致',async t=>{
+ const f=await fixture(t),initial=await f.service.read();
+ const document=structuredClone(initial);
+ document.nodes=Array.from({length:1000},(_,i)=>({id:`text-${i}`,boardId:document.boards[0].id,nodeType:'text',x:i%20*200,y:Math.floor(i/20)*100,width:180,height:80,properties:{text:`节点 ${i}`}}));
+ await f.service.save({document,base:initial});
+ const second=createCanvasBoards({storage:f.storage,dataDir:f.dataDir,dropImporter:f.dropImporter,localImporter:f.localImporter});
+ const base=await f.service.read(),a=structuredClone(base),b=structuredClone(base);
+ a.nodes[0].x+=77;b.nodes[999].y+=88;
+ await f.service.save({document:a,base});await second.save({document:b,base});
+ const result=await f.service.readVersioned();
+ assert.equal(result.document.nodes.length,1000);
+ assert.equal(result.document.nodes[0].x,a.nodes[0].x);
+ assert.equal(result.document.nodes[999].y,b.nodes[999].y);
+ const settled=await f.service.readVersioned();
+ assert.equal((await second.readVersioned(settled.etag)).unchanged,true);
+});
+
+test('运行中恢复无版本表的旧库后自动重建版本，不复用旧验证器',async t=>{
+ const f=await fixture(t);
+ await f.service.readVersioned();
+ const before=await f.service.readVersioned();
+ await f.storage.withDbWrite(conn=>{
+  for(const row of conn.all("SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'canvas_sync_%'",[]))conn.run(`DROP TRIGGER ${row.name}`,[]);
+  conn.run('DROP TABLE canvas_sync_version',[]);
+ });
+ const restored=await f.service.readVersioned(before.etag);
+ assert.ok(restored.document);assert.notEqual(restored.etag,before.etag);
+ assert.equal((await f.service.readVersioned(restored.etag)).unchanged,true);
+});
+
 test('画布导入按画板集中收纳，重复保存不回收已拆分成员，整理后引用跟随 UID',async t=>{
  const f=await fixture(t),base=await f.service.read();
  const doc=project();doc.boards.push(board('other-board','参考图'));
@@ -147,6 +198,9 @@ test('真实HTTP：画布入库、资产库移除与改名、原文件可读、�
  const origin=`http://127.0.0.1:${server.address().port}`,headers={'X-SFX-Local':'1','Content-Type':'application/json'};
  const call=(route,method='GET',input,extra={})=>fetch(origin+route,{method,headers:{...headers,...extra},body:input===undefined?undefined:JSON.stringify(input)});
  const base=await (await call('/api/library/artflow-board')).json();
+ const validation=await call('/api/library/artflow-board');await validation.json();
+ const unchanged=await call('/api/library/artflow-board','GET',undefined,{'If-None-Match':validation.headers.get('etag')});
+ assert.equal(unchanged.status,304);assert.equal(await unchanged.text(),'');
  const upload=await fetch(origin+'/api/library/drop-import',{method:'POST',headers:{'X-SFX-Local':'1','X-AV-Drop-Name':'reference.png'},body:Buffer.from(pixel.split(',')[1],'base64')});
  assert.equal(upload.status,200);const uploaded=(await upload.json()).asset;assert.ok(uploaded.uid);
  const incoming=project();incoming.assets[0].metadata.libraryUid=uploaded.uid;incoming.assets[0].locator.previewRef=uploaded.url;

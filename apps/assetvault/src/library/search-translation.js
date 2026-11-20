@@ -46,7 +46,8 @@ export function bindLocalSearch({$,state,renderGrid,parse,delay=450,inputSelecto
    onState({busy:false,ok:true});
   },delay);
  }
- $(inputSelector).oninput=event=>{if(enabled())search(event);};
+ // Typing edits the draft only; submit invokes search explicitly.
+ $(inputSelector).oninput=()=>{clearTimeout(timer);version++;};
  return {reset,search:()=>search({target:$(inputSelector)})};
 }
 

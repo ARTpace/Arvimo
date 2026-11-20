@@ -99,10 +99,10 @@ test('a superseded translation cannot launch a stale platform search',async t=>{
 });
 
 test('clearing local search prevents a late parse from changing results',async()=>{
- const nodes={'#model-search':{},'#local-translation':{}};
+ const nodes={'#model-search':{value:'木椅'},'#local-translation':{}};
  const state={selected:new Set(),search:''};let release;
  const local=bindLocalSearch({$:id=>nodes[id],state,renderGrid:()=>{},delay:0,parse:()=>new Promise(resolve=>{release=resolve;})});
- nodes['#model-search'].oninput({target:{value:'木椅'}});
+ local.search();
  await new Promise(resolve=>setTimeout(resolve,5));local.reset();state.search='';
  release({search:'wooden chair',english:['wooden chair'],kind:'',parsed:true});await new Promise(resolve=>setTimeout(resolve,0));
  assert.equal(state.searchEnglish,'');assert.equal(nodes['#local-translation'].hidden,true);
@@ -114,7 +114,11 @@ test('shared search input filters locally only in library mode and ignores late 
  const local=bindLocalSearch({$:id=>nodes[id],state,renderGrid:()=>{},inputSelector:'#asset-query',enabled:()=>library,delay:0,parse:()=>{calls++;return new Promise(resolve=>{release=resolve;});}});
  nodes['#asset-query'].oninput({target:nodes['#asset-query']});
  assert.equal(state.search,'');assert.equal(calls,0);
- library=true;local.search();assert.equal(state.search,'木椅');
+ library=true;
+ nodes['#asset-query'].oninput({target:nodes['#asset-query']});
+ await new Promise(resolve=>setTimeout(resolve,5));
+ assert.equal(state.search,'');assert.equal(calls,0);
+ local.search();assert.equal(state.search,'木椅');
  await new Promise(resolve=>setTimeout(resolve,5));assert.equal(calls,1);
  library=false;release({search:'chair',english:['wooden chair'],kind:'models'});
  await new Promise(resolve=>setTimeout(resolve,0));assert.equal(state.search,'木椅');assert.equal(state.searchEnglish,'');assert.equal(nodes['#local-kind'].value,'');

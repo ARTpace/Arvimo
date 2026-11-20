@@ -4,6 +4,12 @@ import path from 'node:path';
 import {spawn,execFile,fork} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {isWorkerEntry} from './worker-entry.mjs';
+// The isolated browser has no account cookie. Its per-job token only reads conversion resources.
+export function isExportWorkerRequest(req,url,transfers){
+ return req.method==='GET'&&['127.0.0.1','::1','::ffff:127.0.0.1'].includes(req.socket?.remoteAddress)&&
+  ['/worker.html','/engine.js','/api/proxy'].includes(url.pathname)&&
+  !!transfers?.has(req.headers['x-sfx-transfer']);
+}
 export function browserPath(){return [process.env.SFX_BROWSER,process.env.SELF_TEST_BROWSER,'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe','C:/Program Files/Microsoft/Edge/Application/msedge.exe','C:/Program Files/Google/Chrome/Application/chrome.exe',process.env.LOCALAPPDATA&&path.join(process.env.LOCALAPPDATA,'Google/Chrome/Application/chrome.exe'),'/usr/bin/chromium','/usr/bin/google-chrome'].find(p=>p&&fs.existsSync(p));}
 const pause=ms=>new Promise(r=>setTimeout(r,ms));
 /** Folder output writes page-supplied entry names to disk, so refuse anything that could escape it. */
